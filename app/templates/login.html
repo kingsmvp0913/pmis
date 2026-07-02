@@ -5,11 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登入 · PMIS 營造廠商報表系統</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script>
+    (function () {
+      var t = localStorage.getItem('pmis-theme');
+      if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
 </head>
 <body>
   <div class="login-wrap">
+    <button type="button" class="theme-toggle" title="切換深色模式"
+            onclick="var h=document.documentElement,t=h.getAttribute('data-theme')==='dark'?'light':'dark';h.setAttribute('data-theme',t);localStorage.setItem('pmis-theme',t);">
+      <span class="theme-icon-light">🌙</span><span class="theme-icon-dark">☀️</span>
+    </button>
     <div class="login-card">
-      <div class="brand" style="color:#1f3a5f;text-align:center;font-size:22px;margin-bottom:6px">
+      <div class="brand" style="text-align:center;font-size:22px;margin-bottom:6px">
         🏗️ PMIS 營造廠商報表系統
       </div>
       <p class="muted" style="text-align:center">請登入以繼續</p>

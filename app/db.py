@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS vendor_signatures (
     FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS vendor_contacts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    vendor_id   INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    phone       TEXT,
+    email       TEXT,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS reports (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT NOT NULL,
@@ -82,6 +91,17 @@ CREATE TABLE IF NOT EXISTS submissions (
     updated_at TEXT NOT NULL,
     FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
     FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
+);
+
+-- 交件行事曆期限(報表 × 期別 的到期日,使用者手動建立)
+CREATE TABLE IF NOT EXISTS report_deadlines (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id   INTEGER NOT NULL,
+    period      TEXT NOT NULL,
+    due_date    TEXT NOT NULL,        -- "YYYY-MM-DD"
+    note        TEXT,
+    created_at  TEXT NOT NULL,
+    FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
 );
 
 -- 使用者帳號
@@ -224,6 +244,16 @@ def list_vendors() -> list[dict[str, Any]]:
         return _rows_to_dicts(conn.execute("SELECT * FROM vendors ORDER BY id").fetchall())
 
 
+def search_vendors(q: str) -> list[dict[str, Any]]:
+    with connect() as conn:
+        like = f"%{q}%"
+        rows = conn.execute(
+            "SELECT * FROM vendors WHERE name LIKE ? OR tax_id LIKE ? ORDER BY id",
+            (like, like),
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
 def get_vendor(vendor_id: int) -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute("SELECT * FROM vendors WHERE id = ?", (vendor_id,)).fetchone()
@@ -261,6 +291,30 @@ def list_signatures(vendor_id: int | None = None) -> list[dict[str, Any]]:
 def delete_signature(signature_id: int) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM vendor_signatures WHERE id = ?", (signature_id,))
+
+
+# --- vendor_contacts -------------------------------------------------------
+
+def add_contact(vendor_id: int, name: str, phone: str = "", email: str = "") -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO vendor_contacts (vendor_id, name, phone, email) VALUES (?, ?, ?, ?)",
+            (vendor_id, name, phone, email),
+        )
+        return int(cur.lastrowid)
+
+
+def list_contacts(vendor_id: int) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vendor_contacts WHERE vendor_id = ? ORDER BY id", (vendor_id,)
+        ).fetchall()
+        return _rows_to_dicts(rows)
+
+
+def delete_contact(contact_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM vendor_contacts WHERE id = ?", (contact_id,))
 
 
 # --- reports -------------------------------------------------------------
@@ -570,6 +624,66 @@ def list_submissions(report_id: int, period: str) -> list[dict[str, Any]]:
                 (report_id, period),
             ).fetchall()
         )
+
+
+# --- report_deadlines(交件行事曆期限)------------------------------------
+
+def create_deadline(report_id: int, period: str, due_date: str, note: str = "") -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO report_deadlines (report_id, period, due_date, note, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (report_id, period, due_date, note, now()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_deadlines_in_range(start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """回傳 [start_date, end_date] 區間內的期限,附帶報表名稱,依到期日排序。"""
+    with connect() as conn:
+        return _rows_to_dicts(
+            conn.execute(
+                "SELECT d.*, r.name AS report_name FROM report_deadlines d "
+                "JOIN reports r ON r.id = d.report_id "
+                "WHERE d.due_date >= ? AND d.due_date <= ? ORDER BY d.due_date",
+                (start_date, end_date),
+            ).fetchall()
+        )
+
+
+def get_deadline(deadline_id: int) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM report_deadlines WHERE id = ?", (deadline_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_deadline(deadline_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM report_deadlines WHERE id = ?", (deadline_id,))
+
+
+def deadline_status(
+    report_id: int, period: str, due_date: str, today: str | None = None
+) -> dict[str, Any]:
+    """回傳 {missing_count, total_count, state}。
+
+    state: upcoming(未到期) / ok(已過期且全交) / missing(已過期且有缺件)。
+    與 /tracking 頁面共用同一套「應交-已交」判斷,避免邏輯寫兩份。
+    """
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    expected = set(list_report_vendors(report_id))
+    submitted = {s["vendor_id"] for s in list_submissions(report_id, period)}
+    missing_count = len(expected - submitted)
+    total_count = len(expected)
+    if due_date > today:
+        state = "upcoming"
+    elif missing_count > 0:
+        state = "missing"
+    else:
+        state = "ok"
+    return {"missing_count": missing_count, "total_count": total_count, "state": state}
 
 
 # --- users & permissions -------------------------------------------------

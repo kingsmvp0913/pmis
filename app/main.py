@@ -8,10 +8,12 @@
 """
 from __future__ import annotations
 
+import calendar as pycalendar
 import json
 import shutil
 import threading
 import webbrowser
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -162,12 +164,13 @@ def home(request: Request) -> HTMLResponse:
 # --- 廠商管理 ------------------------------------------------------------
 
 @app.get("/vendors", response_class=HTMLResponse)
-def vendors_page(request: Request) -> HTMLResponse:
+def vendors_page(request: Request, q: str = "") -> HTMLResponse:
     _ensure_cap(request, "manage_vendors")
-    vendors = db.list_vendors()
+    vendors = db.search_vendors(q.strip()) if q.strip() else db.list_vendors()
     for v in vendors:
-        v["signatures"] = db.list_signatures(v["id"])
-    return _render(request, "vendors.html", vendors=vendors)
+        v["contacts"] = db.list_contacts(v["id"])
+        v["signature_count"] = len(db.list_signatures(v["id"]))
+    return _render(request, "vendors.html", vendors=vendors, q=q)
 
 
 @app.post("/vendors")
@@ -176,6 +179,17 @@ def create_vendor(request: Request, name: str = Form(...), tax_id: str = Form(""
     if name.strip():
         db.create_vendor(name.strip(), tax_id.strip(), note.strip())
     return RedirectResponse("/vendors", status_code=303)
+
+
+@app.get("/vendors/{vendor_id}", response_class=HTMLResponse)
+def vendor_detail(request: Request, vendor_id: int) -> HTMLResponse:
+    _ensure_cap(request, "manage_vendors")
+    vendor = db.get_vendor(vendor_id)
+    if not vendor:
+        raise HTTPException(status_code=404, detail="廠商不存在")
+    vendor["signatures"] = db.list_signatures(vendor_id)
+    vendor["contacts"] = db.list_contacts(vendor_id)
+    return _render(request, "vendor_detail.html", vendor=vendor)
 
 
 @app.post("/vendors/{vendor_id}/delete")
@@ -190,14 +204,29 @@ def add_signature(request: Request, vendor_id: int, rule_type: str = Form(...), 
     _ensure_cap(request, "manage_vendors")
     if rule_value.strip():
         db.add_signature(vendor_id, rule_type, rule_value.strip())
-    return RedirectResponse("/vendors", status_code=303)
+    return RedirectResponse(f"/vendors/{vendor_id}", status_code=303)
 
 
 @app.post("/signatures/{signature_id}/delete")
-def delete_signature(request: Request, signature_id: int):
+def delete_signature(request: Request, signature_id: int, vendor_id: int = Form(...)):
     _ensure_cap(request, "manage_vendors")
     db.delete_signature(signature_id)
-    return RedirectResponse("/vendors", status_code=303)
+    return RedirectResponse(f"/vendors/{vendor_id}", status_code=303)
+
+
+@app.post("/vendors/{vendor_id}/contacts")
+def add_contact(request: Request, vendor_id: int, name: str = Form(...), phone: str = Form(""), email: str = Form("")):
+    _ensure_cap(request, "manage_vendors")
+    if name.strip():
+        db.add_contact(vendor_id, name.strip(), phone.strip(), email.strip())
+    return RedirectResponse(f"/vendors/{vendor_id}", status_code=303)
+
+
+@app.post("/contacts/{contact_id}/delete")
+def delete_contact(request: Request, contact_id: int, vendor_id: int = Form(...)):
+    _ensure_cap(request, "manage_vendors")
+    db.delete_contact(contact_id)
+    return RedirectResponse(f"/vendors/{vendor_id}", status_code=303)
 
 
 # --- 報表管理(範本上傳/改版、欄位角色、應交廠商)---------------------
@@ -633,6 +662,66 @@ def tracking_page(request: Request, report_id: int = 0, period: str = "") -> HTM
         request, "tracking.html",
         reports=reports, report_id=report_id, period=period, rows=rows, report_name=report_name,
     )
+
+
+# --- 交件行事曆 ------------------------------------------------------------
+
+@app.get("/calendar", response_class=HTMLResponse)
+def calendar_page(request: Request, year: int = 0, month: int = 0) -> HTMLResponse:
+    _ensure_cap(request, "manage_tracking")
+    today = date.today()
+    year = year or today.year
+    month = month or today.month
+    cal = pycalendar.Calendar(firstweekday=6)  # 週日開頭,對齊「日一二三四五六」表頭
+    weeks = cal.monthdatescalendar(year, month)
+    start = weeks[0][0].isoformat()
+    end = weeks[-1][-1].isoformat()
+
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for d in db.list_deadlines_in_range(start, end):
+        status = db.deadline_status(d["report_id"], d["period"], d["due_date"])
+        d.update(status)
+        by_day.setdefault(d["due_date"], []).append(d)
+
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    return _render(
+        request, "calendar.html",
+        weeks=weeks, by_day=by_day, year=year, month=month, today=today.isoformat(),
+        prev_year=prev_year, prev_month=prev_month, next_year=next_year, next_month=next_month,
+        reports=db.list_reports(),
+    )
+
+
+@app.post("/calendar/deadline")
+def create_deadline_route(
+    request: Request,
+    report_id: int = Form(...),
+    period: str = Form(...),
+    due_date: str = Form(...),
+    note: str = Form(""),
+    year: int = Form(0),
+    month: int = Form(0),
+):
+    _ensure_cap(request, "manage_tracking")
+    db.create_deadline(report_id, period, due_date, note)
+    y = year or int(due_date[:4])
+    m = month or int(due_date[5:7])
+    return RedirectResponse(f"/calendar?year={y}&month={m}", status_code=303)
+
+
+@app.post("/calendar/deadline/{deadline_id}/delete")
+def delete_deadline_route(
+    request: Request, deadline_id: int, year: int = Form(0), month: int = Form(0)
+):
+    _ensure_cap(request, "manage_tracking")
+    d = db.get_deadline(deadline_id)
+    db.delete_deadline(deadline_id)
+    today = date.today()
+    y = year or (int(d["due_date"][:4]) if d else today.year)
+    m = month or (int(d["due_date"][5:7]) if d else today.month)
+    return RedirectResponse(f"/calendar?year={y}&month={m}", status_code=303)
 
 
 # --- 產出記錄與下載 ------------------------------------------------------

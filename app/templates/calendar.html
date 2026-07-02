@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>行事曆 / 交件期限</h1>
+<p class="hint">在日曆上手動標出「哪個報表、哪一期,幾號到期」,過期後系統會自動標示還有哪些廠商未交件。點期限項目可查看完整交件明細。</p>
+
+<div class="card">
+  <div class="row-actions" style="justify-content: space-between; align-items: center;">
+    <a class="btn btn-sm btn-ghost" href="/calendar?year={{ prev_year }}&month={{ prev_month }}">← 上一月</a>
+    <h2 style="margin:0">{{ year }} 年 {{ month }} 月</h2>
+    <a class="btn btn-sm btn-ghost" href="/calendar?year={{ next_year }}&month={{ next_month }}">下一月 →</a>
+  </div>
+
+  {% if not reports %}
+    <div class="alert alert-info">還沒有任何報表,請先到「報表」頁建立報表,才能在行事曆上新增期限。</div>
+  {% endif %}
+
+  <table class="cal-table">
+    <tr>
+      {% for wd in ['日','一','二','三','四','五','六'] %}<th>{{ wd }}</th>{% endfor %}
+    </tr>
+    {% for week in weeks %}
+    <tr>
+      {% for day in week %}
+      {% set iso = day.isoformat() %}
+      <td class="cal-day {{ 'cal-day-out' if day.month != month else '' }} {{ 'cal-day-today' if iso == today else '' }}">
+        <div class="cal-day-head">
+          <span>{{ day.day }}</span>
+          {% if reports %}
+          <details class="cal-add">
+            <summary title="新增期限">＋</summary>
+            <form action="/calendar/deadline" method="post">
+              <input type="hidden" name="due_date" value="{{ iso }}">
+              <input type="hidden" name="year" value="{{ year }}">
+              <input type="hidden" name="month" value="{{ month }}">
+              <select name="report_id" required>
+                <option value="">— 報表 —</option>
+                {% for r in reports %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+              </select>
+              <input type="text" name="period" placeholder="期別,如 2026-07" required>
+              <input type="text" name="note" placeholder="備註(可空)">
+              <button class="btn btn-sm" type="submit">新增</button>
+            </form>
+          </details>
+          {% endif %}
+        </div>
+        {% for item in by_day.get(iso, []) %}
+        <div class="cal-chip-row">
+          <a class="cal-chip cal-chip-{{ item.state }}"
+             href="/tracking?report_id={{ item.report_id }}&period={{ item.period }}"
+             title="{{ item.report_name }} · {{ item.period }}{{ ' · ' + item.note if item.note else '' }}">
+            {% if item.state == 'missing' %}🔴{% elif item.state == 'ok' %}🟢{% else %}⚪{% endif %}
+            {{ item.report_name }}{% if item.state == 'missing' %}(缺{{ item.missing_count }}家){% endif %}
+          </a>
+          <form class="inline-form" action="/calendar/deadline/{{ item.id }}/delete" method="post"
+                onsubmit="return confirm('確定刪除這筆期限?');">
+            <input type="hidden" name="year" value="{{ year }}">
+            <input type="hidden" name="month" value="{{ month }}">
+            <button class="cal-chip-del" type="submit" title="刪除">×</button>
+          </form>
+        </div>
+        {% endfor %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
