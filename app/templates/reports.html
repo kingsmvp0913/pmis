@@ -29,14 +29,42 @@
       <button class="btn btn-sm btn-danger" type="submit">刪除</button>
     </form>
   </h2>
-  <p class="muted">已抽出 {{ r.fields|length }} 個欄位</p>
+  <p class="muted">目前版本 v{{ r.version }} · 已抽出 {{ r.fields|length }} 個欄位</p>
+
   {% if r.fields %}
-  <table>
-    <tr><th>#</th><th>欄位名</th><th>位置</th></tr>
-    {% for f in r.fields %}
-    <tr><td>{{ loop.index }}</td><td>{{ f.field_name }}</td><td class="muted">{{ f.location }}</td></tr>
-    {% endfor %}
-  </table>
+  <form action="/reports/{{ r.id }}/roles" method="post">
+    <table>
+      <tr><th>#</th><th>欄位名</th><th>位置</th><th>是金額欄?(供驗算與彙總計算)</th></tr>
+      {% for f in r.fields %}
+      <tr>
+        <td>{{ loop.index }}</td><td>{{ f.field_name }}</td><td class="muted">{{ f.location }}</td>
+        <td><label class="cap-item"><input type="checkbox" name="amount_field" value="{{ f.field_name }}" {{ 'checked' if f.field_role == 'amount' else '' }}> 金額</label></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button class="btn btn-sm" type="submit">儲存金額欄設定</button>
+  </form>
+  {% endif %}
+
+  <h3 style="margin-top:16px">應交廠商(交件追蹤用)</h3>
+  <form action="/reports/{{ r.id }}/expected-vendors" method="post">
+    <div class="cap-grid">
+      {% for v in all_vendors %}
+        <label class="cap-item"><input type="checkbox" name="vendor_id" value="{{ v.id }}" {{ 'checked' if v.id in r.expected_vendor_ids else '' }}> {{ v.name }}</label>
+      {% endfor %}
+    </div>
+    <button class="btn btn-sm btn-ghost" type="submit">儲存應交廠商</button>
+  </form>
+
+  <h3 style="margin-top:16px">範本改版</h3>
+  <form action="/reports/{{ r.id }}/update-template" method="post" enctype="multipart/form-data">
+    <input type="file" name="template" required accept=".xlsx,.xlsm,.docx">
+    <button class="btn btn-sm btn-ghost" type="submit">上傳新範本(版本 +1,保留舊版)</button>
+  </form>
+  {% if r.versions %}
+    <p class="muted" style="margin-top:8px">版本歷史:
+      {% for ver in r.versions %}v{{ ver.version }}（{{ ver.created_at }}）{% if not loop.last %}、{% endif %}{% endfor %}
+    </p>
   {% endif %}
 </div>
 {% endfor %}

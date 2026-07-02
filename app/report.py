@@ -120,63 +120,98 @@ def generate(
     mappings: list[dict[str, Any]],
     source_rows: list[dict[str, Any]],
     output_filename: str,
+    carry_over: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """依對應把來源資料填入範本產出檔案。
 
     mappings:[{report_field, source_field}] —— source_field 為空代表沒對到。
     source_rows:來源解析出的資料列。
-    回傳:{output_path, warnings:[...], status}
+    carry_over:上期同報表同廠商的欄位值;當本次某欄留空時,以此帶入(功能 5)。
+    回傳:{output_path, warnings:[...], status, values}
+      values:第一列填入的 {報表欄位: 值},供「上期帶入」儲存與稽核。
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / output_filename
 
-    # report_field → source_field 查表
     rf_to_sf = {m["report_field"]: (m.get("source_field") or "") for m in mappings}
-
     warnings: list[str] = []
 
+    # 先算出每列的 {報表欄位: 值}(含上期帶入),再寫入範本 —— 邏輯與寫檔分離
+    rows_values = _compute_rows_values(
+        report_fields, rf_to_sf, source_rows, carry_over, warnings
+    )
+
     if template_type == "excel":
-        _fill_excel(template_path, out_path, report_fields, rf_to_sf, source_rows, warnings)
+        _fill_excel(template_path, out_path, report_fields, rows_values, warnings)
     elif template_type == "word":
-        _fill_word(template_path, out_path, report_fields, rf_to_sf, source_rows, warnings)
+        _fill_word(template_path, out_path, report_fields, rows_values, warnings)
     else:
         raise ParseError(f"不支援的報表範本類型:{template_type}")
 
     status = "warning" if warnings else "ok"
-    return {"output_path": str(out_path), "warnings": warnings, "status": status}
+    return {
+        "output_path": str(out_path),
+        "warnings": warnings,
+        "status": status,
+        "values": rows_values[0] if rows_values else {},
+    }
 
 
-def _value_for(
-    report_field: str,
+def _compute_rows_values(
+    report_fields: list[dict[str, Any]],
     rf_to_sf: dict[str, str],
-    row: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    carry_over: dict[str, Any] | None,
     warnings: list[str],
-) -> Any:
-    src = rf_to_sf.get(report_field, "")
-    if not src:
-        warnings.append(f"報表欄位「{report_field}」沒有設定對應來源,已留空。")
-        return ""
-    if src not in row:
-        warnings.append(f"來源資料中找不到欄位「{src}」(對應報表欄位「{report_field}」),已留空。")
-        return ""
-    return row.get(src, "")
+) -> list[dict[str, Any]]:
+    """把每一列來源資料換算成 {報表欄位: 值};空值時嘗試以上期帶入。"""
+    carry_over = carry_over or {}
+    rows = source_rows if source_rows else [{}]
+    result: list[dict[str, Any]] = []
+    warned_missing: set[str] = set()
+
+    for idx, row in enumerate(rows):
+        values: dict[str, Any] = {}
+        for f in report_fields:
+            fn = f["field_name"]
+            src = rf_to_sf.get(fn, "")
+            val: Any = ""
+            if not src:
+                if fn not in warned_missing:
+                    warnings.append(f"報表欄位「{fn}」沒有設定對應來源。")
+                    warned_missing.add(fn)
+            elif src not in row:
+                if fn not in warned_missing:
+                    warnings.append(
+                        f"來源資料中找不到欄位「{src}」(對應報表欄位「{fn}」)。"
+                    )
+                    warned_missing.add(fn)
+            else:
+                val = row.get(src, "")
+
+            # 上期帶入:僅第一列、且本次留空時
+            if (val is None or val == "") and idx == 0 and carry_over.get(fn):
+                val = carry_over[fn]
+                warnings.append(f"報表欄位「{fn}」本次無資料,已帶入上期值。")
+            values[fn] = val
+        result.append(values)
+    return result
 
 
 def _fill_excel(
     template_path: str | Path,
     out_path: Path,
     report_fields: list[dict[str, Any]],
-    rf_to_sf: dict[str, str],
-    source_rows: list[dict[str, Any]],
+    rows_values: list[dict[str, Any]],
     warnings: list[str],
 ) -> None:
     from openpyxl import load_workbook
-    from openpyxl.utils import coordinate_to_tuple, get_column_letter
+    from openpyxl.utils import coordinate_to_tuple
 
     wb = load_workbook(template_path)
     ws = wb.active
 
-    # 判斷是 placeholder 模式還是表頭模式:location 是儲存格座標且該格含 {{}}
+    # 判斷是 placeholder 模式還是表頭模式
     is_placeholder = False
     for f in report_fields:
         loc = f.get("location", "")
@@ -189,10 +224,9 @@ def _fill_excel(
                 is_placeholder = True
                 break
 
-    row0 = source_rows[0] if source_rows else {}
+    row0 = rows_values[0] if rows_values else {}
 
     if is_placeholder:
-        # 逐一取代每個 {{欄位}} 佔位(取第一列資料)
         for f in report_fields:
             loc = f["location"]
             field_name = f["field_name"]
@@ -201,7 +235,7 @@ def _fill_excel(
             except Exception:
                 warnings.append(f"報表欄位「{field_name}」的位置 {loc} 無效,略過。")
                 continue
-            value = _value_for(field_name, rf_to_sf, row0, warnings)
+            value = row0.get(field_name, "")
             if isinstance(cell.value, str):
                 cell.value = _PLACEHOLDER.sub(
                     lambda m, fn=field_name, v=value: str(v) if m.group(1).strip() == fn else m.group(0),
@@ -209,25 +243,23 @@ def _fill_excel(
                 )
             else:
                 cell.value = value
-        if len(source_rows) > 1:
+        if len(rows_values) > 1:
             warnings.append(
-                f"來源有 {len(source_rows)} 列資料,placeholder 範本僅填入第一列。"
+                f"來源有 {len(rows_values)} 列資料,placeholder 範本僅填入第一列。"
             )
     else:
-        # 表頭模式:欄位在第一列,資料由第二列起逐列填入
         col_of: dict[str, int] = {}
         for f in report_fields:
             loc = f.get("location", "")
             try:
-                r, c = coordinate_to_tuple(loc)
+                _, c = coordinate_to_tuple(loc)
                 col_of[f["field_name"]] = c
             except Exception:
                 warnings.append(f"報表欄位「{f['field_name']}」位置 {loc} 無效,略過。")
         start_row = 2
-        for i, row in enumerate(source_rows):
+        for i, values in enumerate(rows_values):
             for field_name, col in col_of.items():
-                value = _value_for(field_name, rf_to_sf, row, warnings)
-                ws.cell(row=start_row + i, column=col, value=value)
+                ws.cell(row=start_row + i, column=col, value=values.get(field_name, ""))
 
     wb.save(out_path)
 
@@ -236,20 +268,14 @@ def _fill_word(
     template_path: str | Path,
     out_path: Path,
     report_fields: list[dict[str, Any]],
-    rf_to_sf: dict[str, str],
-    source_rows: list[dict[str, Any]],
+    rows_values: list[dict[str, Any]],
     warnings: list[str],
 ) -> None:
     from docxtpl import DocxTemplate
 
-    row0 = source_rows[0] if source_rows else {}
-    context: dict[str, Any] = {}
-    for f in report_fields:
-        field_name = f["field_name"]
-        context[field_name] = _value_for(field_name, rf_to_sf, row0, warnings)
-
-    if len(source_rows) > 1:
-        warnings.append(f"來源有 {len(source_rows)} 列資料,Word 範本僅填入第一列。")
+    context = dict(rows_values[0]) if rows_values else {}
+    if len(rows_values) > 1:
+        warnings.append(f"來源有 {len(rows_values)} 列資料,Word 範本僅填入第一列。")
 
     tpl = DocxTemplate(str(template_path))
     tpl.render(context)

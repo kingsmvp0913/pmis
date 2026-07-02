@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>多廠商彙總總表</h1>
+<p class="hint">一次上傳多家廠商的檔案,系統各自辨識、套用對應,合併成一張總表,並自動加上總計與稅額。</p>
+
+{% if not reports %}
+  <div class="alert alert-info">還沒有報表,請先到「報表」建立表頭式 Excel 範本(第一列為欄位名)。</div>
+{% else %}
+<div class="card">
+  <form action="/summary/process" method="post" enctype="multipart/form-data">
+    <label>1. 選擇報表(建議用表頭式 Excel 總表範本)</label>
+    <select name="report_id" required>
+      {% for r in reports %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}
+    </select>
+
+    <label>2. 期別(選填,例:2026-07)—— 填了會一併登記交件</label>
+    <input type="text" name="period" placeholder="2026-07">
+
+    <label>3. 一次選擇多個廠商檔案(可按住 Ctrl / Shift 多選)</label>
+    <input type="file" name="sources" multiple required accept=".xlsx,.xls,.csv,.ods,.docx,.pdf">
+    <p class="muted">未能自動辨識廠商的檔案會被略過並列出,請先為該廠商設定識別方式。</p>
+
+    <label class="cap-item"><input type="checkbox" name="make_pdf" value="1"> 同時輸出 PDF</label>
+
+    <button class="btn" type="submit">📊 產出彙總總表</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

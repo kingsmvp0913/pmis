@@ -10,6 +10,9 @@
   <form action="/process/confirmed" method="post">
     <input type="hidden" name="report_id" value="{{ report_id }}">
     <input type="hidden" name="source_name" value="{{ source_name }}">
+    <input type="hidden" name="period" value="{{ opts.period }}">
+    <input type="hidden" name="carry_over" value="{{ '1' if opts.carry_over else '' }}">
+    <input type="hidden" name="make_pdf" value="{{ '1' if opts.make_pdf else '' }}">
     <label>選擇正確的廠商</label>
     <select name="vendor_id" required>
       {% for c in candidates %}

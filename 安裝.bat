@@ -49,8 +49,8 @@ if errorlevel 1 (
 echo     套件安裝完成。
 echo.
 
-echo [4/5] 初始化資料庫...
-python -c "from app.db import init_db; from app.base_paths import ensure_dirs; ensure_dirs(); init_db(); print('     資料庫已建立於 data\\pmis.db')"
+echo [4/5] 初始化資料庫與管理者帳號...
+python -c "from app.base_paths import ensure_dirs; from app.db import init_db; from app.auth import ensure_default_admin; ensure_dirs(); init_db(); r=ensure_default_admin(); print('     資料庫已建立於 data\\pmis.db'); print('     預設管理者帳號 admin / admin(登入後請盡快改密碼)') if r else print('     已存在帳號,略過建立管理者')"
 if errorlevel 1 (
     echo [錯誤] 資料庫初始化失敗。
     pause

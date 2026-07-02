@@ -18,7 +18,9 @@
   <div class="card">
     <h2>{{ report_name }} — {{ vendor_name }}</h2>
     <p class="muted">產出檔:{{ output_path }}</p>
+    {% if pdf_note %}<div class="alert alert-info">{{ pdf_note }}</div>{% endif %}
     <a class="btn" href="/download/{{ output_id }}">⬇️ 下載報表</a>
+    <a class="btn btn-ghost" href="/download-pdf/{{ output_id }}">下載 PDF(若有)</a>
     <a class="btn btn-ghost" href="/">再產出一份</a>
   </div>
 {% endif %}

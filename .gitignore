@@ -6,10 +6,14 @@ venv/
 
 # 執行期資料(使用者自己的資料,不進版控)
 data/pmis.db
+data/.session_secret
 data/uploads/
 data/output/
 data/report_templates/
 !data/**/.gitkeep
+
+# 測試樣本暫存
+tests/samples/
 
 # 測試暫存
 .pytest_cache/

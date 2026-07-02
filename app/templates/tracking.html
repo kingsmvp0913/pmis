@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>交件追蹤 / 缺件提醒</h1>
+<p class="hint">選報表與期別,查看哪些應交廠商「已交 / 未交」。應交廠商清單在「報表」頁設定。</p>
+
+<div class="card">
+  <form action="/tracking" method="get">
+    <div class="grid2">
+      <div>
+        <label>報表</label>
+        <select name="report_id" required>
+          <option value="">— 請選擇 —</option>
+          {% for r in reports %}<option value="{{ r.id }}" {{ 'selected' if r.id == report_id else '' }}>{{ r.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>期別(例:2026-07)</label>
+        <input type="text" name="period" value="{{ period }}" placeholder="2026-07" required>
+      </div>
+    </div>
+    <button class="btn" type="submit">查詢</button>
+  </form>
+</div>
+
+{% if rows is not none %}
+<div class="card">
+  <h2>{{ report_name }} · {{ period }}</h2>
+  {% if rows %}
+  {% set submitted = rows | selectattr('submitted') | list | length %}
+  <p class="hint">應交 {{ rows|length }} 家,已交 <b>{{ submitted }}</b> 家,未交 <b class="unmapped">{{ rows|length - submitted }}</b> 家。</p>
+  <table>
+    <tr><th>廠商</th><th>狀態</th><th>交件時間</th></tr>
+    {% for row in rows %}
+    <tr class="{{ '' if row.submitted else 'unmapped-row' }}">
+      <td>{{ row.vendor_name }}</td>
+      <td>{% if row.submitted %}<span class="tag tag-ok">已交</span>{% else %}<span class="unmapped">未交</span>{% endif %}</td>
+      <td class="muted">{{ row.updated_at or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <div class="alert alert-info">這個報表還沒有設定「應交廠商」。請到「報表」頁為它勾選應交的廠商。</div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
