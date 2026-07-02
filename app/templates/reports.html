@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block body %}
+<h1><span class="step-badge">2</span>建立報表</h1>
+<p class="hint">上傳固定報表範本(輸出的長相),系統會自動抽出「這個報表需要哪些欄位」。</p>
+
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <h2>新增報表</h2>
+  <form action="/reports" method="post" enctype="multipart/form-data">
+    <label>報表名稱 *</label>
+    <input type="text" name="name" required placeholder="例:營造報表A">
+    <label>固定報表範本 *(Excel .xlsx 或 Word .docx)</label>
+    <input type="file" name="template" required accept=".xlsx,.xlsm,.docx">
+    <p class="muted">
+      範本中以 <code>{{ '{{欄位名}}' }}</code> 標記要填值的位置(例:<code>{{ '{{廠商名稱}}' }}</code>);
+      Excel 也可用第一列作為欄位表頭。
+    </p>
+    <button class="btn" type="submit">上傳並抽取欄位</button>
+  </form>
+</div>
+
+{% for r in reports %}
+<div class="card">
+  <h2>{{ r.name }}
+    <span class="tag {{ 'tag-ok' }}">{{ '範本:Excel' if r.template_type == 'excel' else '範本:Word' }}</span>
+    <form class="inline-form" action="/reports/{{ r.id }}/delete" method="post"
+          onsubmit="return confirm('確定刪除報表「{{ r.name }}」?');">
+      <button class="btn btn-sm btn-danger" type="submit">刪除</button>
+    </form>
+  </h2>
+  <p class="muted">已抽出 {{ r.fields|length }} 個欄位</p>
+  {% if r.fields %}
+  <table>
+    <tr><th>#</th><th>欄位名</th><th>位置</th></tr>
+    {% for f in r.fields %}
+    <tr><td>{{ loop.index }}</td><td>{{ f.field_name }}</td><td class="muted">{{ f.location }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if not reports %}
+  <div class="alert alert-info">還沒有任何報表,請用上方表單建立第一個。</div>
+{% endif %}
+{% endblock %}

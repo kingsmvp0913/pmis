@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>產出報表(日常操作)</h1>
+<p class="hint">把廠商檔案丟進要產出的報表區塊,系統會自動辨識廠商、填入範本、產出報表。</p>
+
+{% if not reports %}
+  <div class="alert alert-info">
+    還沒有任何報表。請先到 <a href="/reports">📄 報表</a> 建立報表範本,
+    再到 <a href="/mapping">🔗 對應設定</a> 設定廠商對應。
+  </div>
+{% else %}
+  <div class="card">
+    <h2>上傳廠商檔案 → 自動產出</h2>
+    <form action="/process" method="post" enctype="multipart/form-data">
+      <label>1. 選擇要產出的報表</label>
+      <select name="report_id" required>
+        {% for r in reports %}
+          <option value="{{ r.id }}">{{ r.name }}</option>
+        {% endfor %}
+      </select>
+
+      <label>2. 選擇廠商繳交的來源檔案</label>
+      <input type="file" name="source" required
+             accept=".xlsx,.xls,.csv,.ods,.docx,.pdf">
+      <p class="muted">支援 Excel / CSV / ODS / Word / 文字型 PDF。</p>
+
+      <button class="btn" type="submit">🚀 自動產出報表</button>
+    </form>
+  </div>
+{% endif %}
+
+<div class="card">
+  <h2>最近產出</h2>
+  {% if outputs %}
+  <table>
+    <tr><th>時間</th><th>報表</th><th>狀態</th><th>下載</th></tr>
+    {% for o in outputs %}
+    <tr>
+      <td>{{ o.created_at }}</td>
+      <td>{{ o.source_file }}</td>
+      <td>
+        {% if o.status == 'ok' %}<span class="tag tag-ok">成功</span>
+        {% elif o.status == 'warning' %}<span class="tag tag-warn">有警告</span>
+        {% else %}<span class="tag tag-error">失敗</span>{% endif %}
+      </td>
+      <td>
+        {% if o.output_path %}<a class="btn btn-sm btn-ghost" href="/download/{{ o.id }}">下載</a>{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint"><a href="/outputs">查看全部產出記錄 →</a></p>
+  {% else %}
+    <p class="muted">尚無產出記錄。</p>
+  {% endif %}
+</div>
+{% endblock %}

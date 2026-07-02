@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}PMIS 營造廠商報表系統{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🏗️ PMIS 營造廠商報表系統</div>
+    <nav>
+      <a href="/">🏠 首頁(產報表)</a>
+      <a href="/vendors">🏢 廠商</a>
+      <a href="/reports">📄 報表</a>
+      <a href="/mapping">🔗 對應設定</a>
+      <a href="/outputs">📤 產出記錄</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="footer">PMIS · 本機運作 · 資料存於 data\pmis.db</footer>
+</body>
+</html>

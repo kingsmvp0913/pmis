@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block body %}
+<h1><span class="step-badge">3</span>設定廠商 × 報表對應</h1>
+<p class="hint">針對「某廠商 × 某報表」設定一次:系統自動建議對應,沒對到的欄位會<span class="unmapped">標紅字</span>,請手動指定。</p>
+
+<div class="card">
+  <form action="/mapping" method="get">
+    <label>選擇廠商</label>
+    <select name="vendor_id" required>
+      <option value="">— 請選擇 —</option>
+      {% for v in vendors %}
+        <option value="{{ v.id }}" {{ 'selected' if v.id == vendor_id else '' }}>{{ v.name }}</option>
+      {% endfor %}
+    </select>
+    <label>選擇報表</label>
+    <select name="report_id" required>
+      <option value="">— 請選擇 —</option>
+      {% for r in reports %}
+        <option value="{{ r.id }}" {{ 'selected' if r.id == report_id else '' }}>{{ r.name }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" type="submit">開啟對應設定</button>
+  </form>
+</div>
+
+{% if request.query_params.get('saved') %}
+  <div class="alert alert-ok">✅ 對應設定已儲存。</div>
+{% endif %}
+{% if request.query_params.get('error') %}
+  <div class="alert alert-error">{{ request.query_params.get('error') }}</div>
+{% endif %}
+
+{% if vendor_id and report_id %}
+<div class="card">
+  <h2>上傳「{{ vendor_name }}」的來源範本</h2>
+  <p class="hint">上傳此廠商為「{{ report_name }}」繳交的來源檔,系統會自動判別格式並抽出欄位。</p>
+  <form action="/mapping/upload-source" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="vendor_id" value="{{ vendor_id }}">
+    <input type="hidden" name="report_id" value="{{ report_id }}">
+    <input type="file" name="source" required accept=".xlsx,.xls,.csv,.ods,.docx,.pdf">
+    <button class="btn" type="submit">上傳並自動建議對應</button>
+  </form>
+</div>
+
+{% if rows is not none %}
+<div class="card">
+  <h2>欄位對應:{{ vendor_name }} × {{ report_name }}</h2>
+  {% if not has_source %}
+    <div class="alert alert-warn">尚未上傳此廠商的來源範本,下方來源欄位選項為空,請先上傳。</div>
+  {% endif %}
+  <form action="/mapping/save" method="post">
+    <input type="hidden" name="vendor_id" value="{{ vendor_id }}">
+    <input type="hidden" name="report_id" value="{{ report_id }}">
+    <table>
+      <tr><th>報表欄位</th><th>對應到的來源欄位</th><th>狀態</th></tr>
+      {% for row in rows %}
+      <tr class="{{ '' if row.source_field else 'unmapped-row' }}">
+        <td>{{ row.report_field }}</td>
+        <td>
+          <select name="map__{{ row.report_field }}">
+            <option value="">(不對應 / 留空)</option>
+            {% for sf in source_fields %}
+              <option value="{{ sf }}" {{ 'selected' if sf == row.source_field else '' }}>{{ sf }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          {% if row.source_field %}
+            <span class="tag tag-ok">已對應</span>
+          {% else %}
+            <span class="unmapped">未對應,請手動指定</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button class="btn" type="submit">💾 儲存對應設定</button>
+  </form>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

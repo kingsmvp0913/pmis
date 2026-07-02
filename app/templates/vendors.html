@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block body %}
+<h1><span class="step-badge">1</span>建立廠商</h1>
+<p class="hint">先建立廠商基本資料,並設定「識別方式」讓系統日後能自動認出這家廠商。</p>
+
+<div class="card">
+  <h2>新增廠商</h2>
+  <form action="/vendors" method="post">
+    <label>廠商名稱 *</label>
+    <input type="text" name="name" required placeholder="例:大同營造">
+    <label>統一編號</label>
+    <input type="text" name="tax_id" placeholder="例:12345678">
+    <label>備註</label>
+    <textarea name="note" placeholder="其他基本資料(選填)"></textarea>
+    <button class="btn" type="submit">新增廠商</button>
+  </form>
+</div>
+
+{% for v in vendors %}
+<div class="card">
+  <h2>{{ v.name }}
+    <form class="inline-form" action="/vendors/{{ v.id }}/delete" method="post"
+          onsubmit="return confirm('確定刪除廠商「{{ v.name }}」及其所有設定?');">
+      <button class="btn btn-sm btn-danger" type="submit">刪除廠商</button>
+    </form>
+  </h2>
+  <p class="muted">統一編號:{{ v.tax_id or '—' }}　{{ v.note }}</p>
+
+  <h3>識別方式(可設定多條)</h3>
+  {% if v.signatures %}
+  <table>
+    <tr><th>類型</th><th>值</th><th></th></tr>
+    {% for s in v.signatures %}
+    <tr>
+      <td>
+        {% if s.rule_type == 'tax_id' %}統一編號
+        {% elif s.rule_type == 'name_in_cell' %}名稱出現在檔案中
+        {% else %}檔名關鍵字{% endif %}
+      </td>
+      <td>{{ s.rule_value }}</td>
+      <td>
+        <form class="inline-form" action="/signatures/{{ s.id }}/delete" method="post">
+          <button class="btn btn-sm btn-ghost" type="submit">移除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p class="unmapped">尚未設定識別方式!未設定將無法自動辨識這家廠商。</p>
+  {% endif %}
+
+  <form action="/vendors/{{ v.id }}/signatures" method="post" style="margin-top:12px">
+    <label>新增識別規則</label>
+    <select name="rule_type">
+      <option value="tax_id">統一編號(檔案中出現此統編)</option>
+      <option value="name_in_cell">名稱出現在檔案某處</option>
+      <option value="filename_keyword">檔名包含關鍵字</option>
+    </select>
+    <input type="text" name="rule_value" placeholder="輸入對應的值,例:12345678 或 大同" style="margin-top:8px">
+    <button class="btn btn-sm" type="submit">新增規則</button>
+  </form>
+</div>
+{% endfor %}
+
+{% if not vendors %}
+  <div class="alert alert-info">還沒有任何廠商,請用上方表單新增第一家。</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+{% if error %}
+  <h1>產出失敗</h1>
+  <div class="alert alert-error">{{ error }}</div>
+  <a class="btn btn-ghost" href="/">← 回首頁重試</a>
+{% else %}
+  <h1>產出完成</h1>
+  {% if warnings %}
+    <div class="alert alert-warn">
+      <strong>⚠️ 有警告(仍已產出):</strong>
+      <ul>{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </div>
+  {% else %}
+    <div class="alert alert-ok">✅ 報表已成功產出,沒有任何問題。</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>{{ report_name }} — {{ vendor_name }}</h2>
+    <p class="muted">產出檔:{{ output_path }}</p>
+    <a class="btn" href="/download/{{ output_id }}">⬇️ 下載報表</a>
+    <a class="btn btn-ghost" href="/">再產出一份</a>
+  </div>
+{% endif %}
+{% endblock %}

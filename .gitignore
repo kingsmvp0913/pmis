@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 執行期資料(使用者自己的資料,不進版控)
+data/pmis.db
+data/uploads/
+data/output/
+data/report_templates/
+!data/**/.gitkeep
+
+# 測試暫存
+.pytest_cache/
+tests/_tmp/
