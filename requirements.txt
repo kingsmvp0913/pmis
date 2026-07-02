@@ -1,0 +1,18 @@
+# PMIS 營造廠商報表系統 — Python 套件需求
+# 介面
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+jinja2==3.1.4
+python-multipart==0.0.9
+itsdangerous==2.2.0    # SessionMiddleware 簽章(登入狀態)
+
+# 試算表解析
+openpyxl==3.1.2
+pandas==2.2.2
+odfpy==1.4.1
+xlrd==2.0.1            # 讀取舊版 .xls
+
+# 文件解析
+python-docx==1.1.2
+docxtpl==0.17.0       # Word 範本填值
+pdfplumber==0.11.1    # 文字型 PDF

@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>使用者與權限管理</h1>
+<p class="hint">建立同事的帳號,並逐項勾選要開放給他/她的功能。管理者自動擁有全部功能。</p>
+
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+{% if info %}<div class="alert alert-ok">{{ info }}</div>{% endif %}
+
+<div class="card">
+  <h2>新增使用者</h2>
+  <form action="/users" method="post">
+    <div class="grid2">
+      <div><label>登入帳號 *</label><input type="text" name="username" required placeholder="例:mary"></div>
+      <div><label>顯示名稱</label><input type="text" name="display_name" placeholder="例:王小美"></div>
+    </div>
+    <div class="grid2">
+      <div><label>初始密碼 *</label><input type="text" name="password" required placeholder="登入後可請對方自行沿用或由您重設"></div>
+      <div>
+        <label>角色</label>
+        <select name="role">
+          <option value="staff">一般同事(依下方勾選開放功能)</option>
+          <option value="admin">管理者(全功能)</option>
+        </select>
+      </div>
+    </div>
+    <label>開放的功能</label>
+    <div class="cap-grid">
+      {% for key, label in capabilities %}
+        <label class="cap-item"><input type="checkbox" name="capability" value="{{ key }}"> {{ label }}</label>
+      {% endfor %}
+    </div>
+    <button class="btn" type="submit">建立使用者</button>
+  </form>
+</div>
+
+{% for u in users %}
+<div class="card">
+  <h2>{{ u.display_name or u.username }}
+    <span class="muted">（帳號:{{ u.username }}）</span>
+    {% if u.role == 'admin' %}<span class="tag tag-ok">管理者</span>{% endif %}
+    {% if not u.active %}<span class="tag tag-error">已停用</span>{% endif %}
+  </h2>
+
+  {% if u.role != 'admin' %}
+  <form action="/users/{{ u.id }}/permissions" method="post">
+    <label>開放的功能(勾選後儲存)</label>
+    <div class="cap-grid">
+      {% for key, label in capabilities %}
+        <label class="cap-item">
+          <input type="checkbox" name="capability" value="{{ key }}" {{ 'checked' if key in u.perms else '' }}> {{ label }}
+        </label>
+      {% endfor %}
+    </div>
+    <button class="btn btn-sm" type="submit">儲存權限</button>
+  </form>
+  {% else %}
+    <p class="muted">管理者擁有全部功能,無需個別設定。</p>
+  {% endif %}
+
+  <div class="row-actions" style="margin-top:12px">
+    <form class="inline-form" action="/users/{{ u.id }}/reset-password" method="post">
+      <input type="text" name="password" placeholder="新密碼" style="width:160px;display:inline-block">
+      <button class="btn btn-sm btn-ghost" type="submit">重設密碼</button>
+    </form>
+    <form class="inline-form" action="/users/{{ u.id }}/toggle" method="post">
+      <button class="btn btn-sm btn-ghost" type="submit">{{ '停用' if u.active else '啟用' }}</button>
+    </form>
+    <form class="inline-form" action="/users/{{ u.id }}/delete" method="post"
+          onsubmit="return confirm('確定刪除此使用者?');">
+      <button class="btn btn-sm btn-danger" type="submit">刪除</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

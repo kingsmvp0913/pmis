@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>請確認廠商</h1>
+<div class="alert alert-warn">{{ reason }}</div>
+<p class="hint">系統不會硬猜,請您從下方點選這份檔案是哪一家廠商。</p>
+
+<div class="card">
+  <h2>來源檔:{{ source_name }}</h2>
+  {% if candidates %}
+  <form action="/process/confirmed" method="post">
+    <input type="hidden" name="report_id" value="{{ report_id }}">
+    <input type="hidden" name="source_name" value="{{ source_name }}">
+    <input type="hidden" name="period" value="{{ opts.period }}">
+    <input type="hidden" name="carry_over" value="{{ '1' if opts.carry_over else '' }}">
+    <input type="hidden" name="make_pdf" value="{{ '1' if opts.make_pdf else '' }}">
+    <label>選擇正確的廠商</label>
+    <select name="vendor_id" required>
+      {% for c in candidates %}
+        <option value="{{ c.id }}">{{ c.name }}{% if c.tax_id %}(統編 {{ c.tax_id }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" type="submit">確認並產出報表</button>
+  </form>
+  {% else %}
+    <div class="alert alert-error">目前沒有任何廠商可選,請先到「廠商」建立廠商。</div>
+  {% endif %}
+</div>
+{% endblock %}

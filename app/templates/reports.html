@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block body %}
+<h1><span class="step-badge">2</span>建立報表</h1>
+<p class="hint">上傳固定報表範本(輸出的長相),系統會自動抽出「這個報表需要哪些欄位」。</p>
+
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <h2>新增報表</h2>
+  <form action="/reports" method="post" enctype="multipart/form-data">
+    <label>報表名稱 *</label>
+    <input type="text" name="name" required placeholder="例:營造報表A">
+    <label>固定報表範本 *(Excel .xlsx 或 Word .docx)</label>
+    <input type="file" name="template" required accept=".xlsx,.xlsm,.docx">
+    <p class="muted">
+      範本中以 <code>{{ '{{欄位名}}' }}</code> 標記要填值的位置(例:<code>{{ '{{廠商名稱}}' }}</code>);
+      Excel 也可用第一列作為欄位表頭。
+    </p>
+    <button class="btn" type="submit">上傳並抽取欄位</button>
+  </form>
+</div>
+
+{% for r in reports %}
+<div class="card">
+  <h2>{{ r.name }}
+    <span class="tag {{ 'tag-ok' }}">{{ '範本:Excel' if r.template_type == 'excel' else '範本:Word' }}</span>
+    <form class="inline-form" action="/reports/{{ r.id }}/delete" method="post"
+          onsubmit="return confirm('確定刪除報表「{{ r.name }}」?');">
+      <button class="btn btn-sm btn-danger" type="submit">刪除</button>
+    </form>
+  </h2>
+  <p class="muted">目前版本 v{{ r.version }} · 已抽出 {{ r.fields|length }} 個欄位</p>
+
+  {% if r.fields %}
+  <form action="/reports/{{ r.id }}/roles" method="post">
+    <table>
+      <tr><th>#</th><th>欄位名</th><th>位置</th><th>是金額欄?(供驗算與彙總計算)</th></tr>
+      {% for f in r.fields %}
+      <tr>
+        <td>{{ loop.index }}</td><td>{{ f.field_name }}</td><td class="muted">{{ f.location }}</td>
+        <td><label class="cap-item"><input type="checkbox" name="amount_field" value="{{ f.field_name }}" {{ 'checked' if f.field_role == 'amount' else '' }}> 金額</label></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button class="btn btn-sm" type="submit">儲存金額欄設定</button>
+  </form>
+  {% endif %}
+
+  <h3 style="margin-top:16px">應交廠商(交件追蹤用)</h3>
+  <form action="/reports/{{ r.id }}/expected-vendors" method="post">
+    <div class="cap-grid">
+      {% for v in all_vendors %}
+        <label class="cap-item"><input type="checkbox" name="vendor_id" value="{{ v.id }}" {{ 'checked' if v.id in r.expected_vendor_ids else '' }}> {{ v.name }}</label>
+      {% endfor %}
+    </div>
+    <button class="btn btn-sm btn-ghost" type="submit">儲存應交廠商</button>
+  </form>
+
+  <h3 style="margin-top:16px">範本改版</h3>
+  <form action="/reports/{{ r.id }}/update-template" method="post" enctype="multipart/form-data">
+    <input type="file" name="template" required accept=".xlsx,.xlsm,.docx">
+    <button class="btn btn-sm btn-ghost" type="submit">上傳新範本(版本 +1,保留舊版)</button>
+  </form>
+  {% if r.versions %}
+    <p class="muted" style="margin-top:8px">版本歷史:
+      {% for ver in r.versions %}v{{ ver.version }}（{{ ver.created_at }}）{% if not loop.last %}、{% endif %}{% endfor %}
+    </p>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if not reports %}
+  <div class="alert alert-info">還沒有任何報表,請用上方表單建立第一個。</div>
+{% endif %}
+{% endblock %}

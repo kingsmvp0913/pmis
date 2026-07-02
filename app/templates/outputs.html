@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>產出記錄</h1>
+<p class="hint">所有產出的報表都記錄在此,含警告與狀態。</p>
+
+<div class="card">
+  {% if outputs %}
+  <table>
+    <tr><th>時間</th><th>期別</th><th>報表</th><th>廠商</th><th>狀態</th><th>警告</th><th>下載</th></tr>
+    {% for o in outputs %}
+    <tr>
+      <td>{{ o.created_at }}</td>
+      <td>{{ o.period or '—' }}</td>
+      <td>{{ o.report_name }}{% if o.kind == 'summary' %} <span class="tag tag-ok">彙總</span>{% endif %}
+          {% if o.template_version %}<span class="muted">v{{ o.template_version }}</span>{% endif %}</td>
+      <td>{{ o.vendor_name }}</td>
+      <td>
+        {% if o.status == 'ok' %}<span class="tag tag-ok">成功</span>
+        {% elif o.status == 'warning' %}<span class="tag tag-warn">有警告</span>
+        {% elif o.status == 'need_confirm' %}<span class="tag tag-warn">待確認</span>
+        {% else %}<span class="tag tag-error">失敗</span>{% endif %}
+      </td>
+      <td class="muted" style="max-width:260px">{{ o.warnings|replace('\n', ';') }}</td>
+      <td class="row-actions">
+        {% if o.output_path %}
+          <a class="btn btn-sm btn-ghost" href="/download/{{ o.id }}">下載</a>
+          {% if o.pdf_path %}
+            <a class="btn btn-sm btn-ghost" href="/download-pdf/{{ o.id }}">PDF</a>
+          {% else %}
+            <form class="inline-form" action="/outputs/{{ o.id }}/pdf" method="post">
+              <button class="btn btn-sm btn-ghost" type="submit">轉PDF</button>
+            </form>
+          {% endif %}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p class="muted">尚無產出記錄。</p>
+  {% endif %}
+</div>
+{% endblock %}

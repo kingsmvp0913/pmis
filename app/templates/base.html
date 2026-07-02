@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}PMIS 營造廠商報表系統{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🏗️ PMIS 營造廠商報表系統</div>
+    <nav>
+      <a href="/">🏠 首頁</a>
+      {% if 'produce_reports' in caps %}<a href="/summary">📊 彙總總表</a>{% endif %}
+      {% if 'manage_vendors' in caps %}<a href="/vendors">🏢 廠商</a>{% endif %}
+      {% if 'manage_reports' in caps %}<a href="/reports">📄 報表</a>{% endif %}
+      {% if 'manage_mappings' in caps %}<a href="/mapping">🔗 對應設定</a>{% endif %}
+      {% if 'manage_tracking' in caps %}<a href="/tracking">📋 交件追蹤</a>{% endif %}
+      {% if 'view_outputs' in caps %}<a href="/outputs">📤 產出記錄</a>{% endif %}
+      {% if 'manage_users' in caps %}<a href="/users">👥 使用者</a>{% endif %}
+    </nav>
+    {% if current_user %}
+    <div class="userbar">
+      <span>👤 {{ current_user.display_name or current_user.username }}
+        {% if current_user.role == 'admin' %}<span class="tag tag-ok">管理者</span>{% endif %}
+      </span>
+      <a href="/logout" class="logout">登出</a>
+    </div>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="footer">PMIS · 本機運作 · 資料存於 data\pmis.db</footer>
+</body>
+</html>

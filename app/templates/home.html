@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>產出報表(日常操作)</h1>
+<p class="hint">把廠商檔案丟進要產出的報表區塊,系統會自動辨識廠商、填入範本、產出報表。</p>
+
+{% if 'produce_reports' not in caps %}
+  <div class="alert alert-info">您目前沒有「產出報表」的權限。可用的功能請見上方選單,或聯絡系統管理者開放權限。</div>
+{% elif not reports %}
+  <div class="alert alert-info">
+    還沒有任何報表。請先到 <a href="/reports">📄 報表</a> 建立報表範本,
+    再到 <a href="/mapping">🔗 對應設定</a> 設定廠商對應。
+  </div>
+{% else %}
+  <div class="card">
+    <h2>上傳廠商檔案 → 自動產出</h2>
+    <form action="/process" method="post" enctype="multipart/form-data">
+      <label>1. 選擇要產出的報表</label>
+      <select name="report_id" required>
+        {% for r in reports %}
+          <option value="{{ r.id }}">{{ r.name }}</option>
+        {% endfor %}
+      </select>
+
+      <label>2. 選擇廠商繳交的來源檔案</label>
+      <input type="file" name="source" required
+             accept=".xlsx,.xls,.csv,.ods,.docx,.pdf">
+      <p class="muted">支援 Excel / CSV / ODS / Word / 文字型 PDF。</p>
+
+      <label>3. 期別(選填,例:2026-07)—— 填了會一併登記交件追蹤</label>
+      <input type="text" name="period" placeholder="2026-07">
+
+      <div style="margin-top:10px">
+        <label class="cap-item"><input type="checkbox" name="carry_over" value="1"> 帶入上期未填欄位(同報表同廠商)</label>
+        <label class="cap-item"><input type="checkbox" name="make_pdf" value="1"> 同時輸出 PDF</label>
+      </div>
+
+      <button class="btn" type="submit">🚀 自動產出報表</button>
+    </form>
+    <p class="hint" style="margin-top:10px">要一次合併多家廠商成一張總表?請用 <a href="/summary">📊 彙總總表</a>。</p>
+  </div>
+{% endif %}
+
+{% if 'view_outputs' in caps %}
+<div class="card">
+  <h2>最近產出</h2>
+  {% if outputs %}
+  <table>
+    <tr><th>時間</th><th>報表</th><th>狀態</th><th>下載</th></tr>
+    {% for o in outputs %}
+    <tr>
+      <td>{{ o.created_at }}</td>
+      <td>{{ o.source_file }}</td>
+      <td>
+        {% if o.status == 'ok' %}<span class="tag tag-ok">成功</span>
+        {% elif o.status == 'warning' %}<span class="tag tag-warn">有警告</span>
+        {% else %}<span class="tag tag-error">失敗</span>{% endif %}
+      </td>
+      <td>
+        {% if o.output_path %}<a class="btn btn-sm btn-ghost" href="/download/{{ o.id }}">下載</a>{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="hint"><a href="/outputs">查看全部產出記錄 →</a></p>
+  {% else %}
+    <p class="muted">尚無產出記錄。</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

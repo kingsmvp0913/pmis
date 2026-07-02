@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登入 · PMIS 營造廠商報表系統</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="brand" style="color:#1f3a5f;text-align:center;font-size:22px;margin-bottom:6px">
+        🏗️ PMIS 營造廠商報表系統
+      </div>
+      <p class="muted" style="text-align:center">請登入以繼續</p>
+      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+      <form action="/login" method="post">
+        <label>帳號</label>
+        <input type="text" name="username" required autofocus>
+        <label>密碼</label>
+        <input type="password" name="password" required>
+        <button class="btn" type="submit" style="width:100%">登入</button>
+      </form>
+      <p class="muted" style="text-align:center;margin-top:16px">
+        第一次使用?預設管理者帳號為 <b>admin</b> / <b>admin</b>,登入後請盡快改密碼。
+      </p>
+    </div>
+  </div>
+</body>
+</html>
