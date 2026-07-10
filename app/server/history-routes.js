@@ -15,7 +15,7 @@
  *
  * 繳交狀態邏輯(§5.2):
  *   自工程 start_date(無則 created_at)當月起到當前月,每月一「應繳週期」。
- *   該週期有 monthly 紀錄 = 已繳(綠);已過 deadline 仍無 = 未繳(紅);未到期 = 中性。
+ *   該週期有 monthly 紀錄 = 已繳(綠);結算日凌晨(台灣 GMT+8 當日 00:00)起仍無 = 未繳(紅);之前 = 中性。
  *   deadline = 該週期年月的 settlement_day 日。督導(supervision)不影響每月週期綠/紅。
  */
 const fs = require('fs');
@@ -83,9 +83,10 @@ function buildSubmissionStatus(opts) {
     if (submitted.has(period)) {
       status = 'submitted';
     } else {
-      // 逾期判定:now 已過該週期 deadline(當日結束)仍無 monthly 紀錄 = 未繳(紅)
-      const dl = new Date(`${deadline}T23:59:59`);
-      status = now > dl ? 'overdue' : 'pending';
+      // 逾期判定(台灣時區 GMT+8):結算日「凌晨 00:00」一到,仍無 monthly 紀錄即算未繳(紅)。
+      // deadline 語意為「須於當日前繳」,故當日 00:00 起即逾期。顯式帶 +08:00,不吃伺服器時區。
+      const dl = new Date(`${deadline}T00:00:00+08:00`);
+      status = now >= dl ? 'overdue' : 'pending';
     }
     list.push({ period, deadline, status });
     mo++;

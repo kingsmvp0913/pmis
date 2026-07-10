@@ -1,0 +1,8 @@
+# 依賴
+app/node_modules/
+
+# 執行期資料(含 data/config.json 的 JWT_SECRET、上傳施工日誌、產出報表、已安裝讀取檔)
+data/
+
+# 工具快取
+.serena/

@@ -82,6 +82,23 @@ describe('buildSubmissionStatus', () => {
     expect(list[0].status).toBe('pending');
   });
 
+  // 逾期臨界(台灣 GMT+8):結算日 00:00 一到即紅,前一刻仍中性
+  test('結算日凌晨 00:00(台灣時區)整點即逾期(紅)', () => {
+    const atMidnight = new Date('2026-07-05T00:00:00+08:00');
+    const list = buildSubmissionStatus({
+      startYm: '2026-07', nowYm: '2026-07', settlementDay: 5, now: atMidnight, submittedMonthly: [],
+    });
+    expect(list[0].status).toBe('overdue');
+  });
+
+  test('結算日前一刻(台灣 07-04 23:59:59)仍中性(pending)', () => {
+    const justBefore = new Date('2026-07-04T23:59:59+08:00');
+    const list = buildSubmissionStatus({
+      startYm: '2026-07', nowYm: '2026-07', settlementDay: 5, now: justBefore, submittedMonthly: [],
+    });
+    expect(list[0].status).toBe('pending');
+  });
+
   test('多月:早月逾期紅、當月未到期中性、已繳月綠', () => {
     const list = buildSubmissionStatus({
       startYm: '2026-05', nowYm: '2026-07', settlementDay: 5,
