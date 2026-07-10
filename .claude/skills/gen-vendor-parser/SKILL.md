@@ -72,7 +72,7 @@ module.exports = {
 ## 分層架構(務必沿用,勿把檔型邏輯塞進廠商 reader)
 - **`app/server/parsers/filetypes/`**:檔型共用讀取器,回傳**原始結構**,可跨廠商重用。**讀取器經 `ctx.filetypes` 注入取用,不直接 require**(見上「檔型工具注入」)。`filetypes/index.js` re-export 各檔型工具(pdf 的 `extractPages` + xlsx 的公開函式),即注入的 `ctx.filetypes`。
   - `pdf.js`(已存在):pdf-parse@1 + 自訂 `pagerender`(依 `transform[5]` y 座標換行)逐頁抽文字;**對每頁文字做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。
-  - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。
+  - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。⑥**error cell 陷阱**:SheetJS 對 `#REF!`/`#VALUE!` 格的 `.v` 是「錯誤代碼數字」(#REF!→23、#VALUE!→15),會偽裝成正常數字。**已在 `gridFromWorksheet` 於 grid 端把 `t==='e'` 轉 null**(所有 Excel 讀取器自動受保護),但仍要警覺:別去讀那些整片 `#REF!` 的 snapshot sheet(見上「多視圖選乾淨來源」)。
   - Word(`docx.js`):`mammoth` 或解 `word/document.xml`;回傳段落/表格。
 - **`app/server/parsers/vendors/samples/<key>.pmisparser.js`**:只放**該家版面規則**(從原始結構取值 → 統一 schema)。
 - **純函式 `parsePage(rawText 或 rawGrid)`**:單頁/單日解析,供 `selfTest` 內建樣本呼叫(不碰檔案系統)。
@@ -82,7 +82,7 @@ module.exports = {
 2. **列邊界 / 欄序規則**:
    - PDF/逐列型(金大):以「行首 token 是否為**項次 id**(中文大寫壹貳參… 或 1–2 位阿拉伯整數)」為列界;續行(名稱片段/單位/數字/`-`)併入當前列;再以「第一個單位 token」切「名稱 | 數字欄」。
    - Excel 座標型(摯東:一天一 sheet;承昇:固定欄):直接依固定 row/col 座標取值。
-   - 矩陣型(晉林:235 欄監造版):依表頭列定位欄索引,逐日在橫向或縱向展開——**最棘手,需個別處理並容忍 `#REF!`/`#VALUE!` 髒格(視為 null)**。
+   - 矩陣型(晉林:235 欄監造版):依表頭列定位欄索引,逐日在橫向或縱向展開——**最棘手,需個別處理**。實測晉林教訓:①item 欄可能分成**多個平行區塊**(如 Block1=完成數量、Block2=完成金額,欄名一字不差),先偵測區塊、確認欄序對齊再取值;②天可能佔**多列**(本日列 + 累計列);③**同一檔多視圖時,優先選 error-free 的乾淨來源**(晉林逐日底稿 `so` 零 error,而 `60項監工日報`/`施工日報表` 等 snapshot sheet 才是 `#REF!`/`#VALUE!` 集中地),別盲從來源分析文件先提到的座標表;殘留舊範本 sheet 直接不讀。
 3. **vendorKey(廠商名稱)**:`meta.vendorKey` = **該廠商正式名稱**(中文字串,如 `'金大營造有限公司'`)。安裝時 registry 依此名稱查 vendors 表自動歸位到同名廠商;**名稱必須與 vendors 表一字不差**,否則單家安裝被 `install()` 擋下、批次安裝標記 unmatched。名稱須通過 `isValidVendorKey`(無檔名危險字元/首尾空白、≤100 字)。
 4. **日期正規化**:支援**民國⇄西元雙制**自動辨識(民國 `115 年` → +1911=2026;西元 `2025/6/7`、`5/29/26` 等)。統一輸出 `YYYY-MM-DD`。
 

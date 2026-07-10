@@ -81,7 +81,9 @@ function gridFromWorksheet(ws) {
     for (let c = 0; c < nCols; c++) {
       const addr = XLSX.utils.encode_cell({ r: r + range.s.r, c: c + range.s.c });
       const cell = ws[addr];
-      row[c] = cell && cell.v !== undefined ? cell.v : null;
+      // error cell(t==='e',如 #REF!/#VALUE!)的 .v 是「錯誤代碼數字」(#REF!→23、#VALUE!→15),
+      // 會偽裝成正常數字混入。一律轉 null,避免髒格污染下游數量/金額。
+      row[c] = (cell && cell.v !== undefined && cell.t !== 'e') ? cell.v : null;
     }
     grid.push(row);
   }
