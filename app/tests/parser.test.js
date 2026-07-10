@@ -36,7 +36,7 @@ async function makeApp() {
 }
 
 // dummy 讀取檔 fixture 內容:回傳一個合法 module 字串。
-// vendorKey 由呼叫端帶入(對應該廠商 id);selfTestReturn 控制 selfTest 結果。
+// vendorKey 由呼叫端帶入(現為廠商「名稱」字串);selfTestReturn 控制 selfTest 結果。
 function dummyParserSource(vendorKey, { selfTestReturn = true } = {}) {
   return `
 module.exports = {
@@ -59,30 +59,31 @@ module.exports = {
 }
 
 describe('parser routes', () => {
-  let app, token, vendorId;
+  let app, token, vendorId, vendorName;
 
   beforeEach(async () => {
     db._setPoolForTesting(freshPool());
     await db.migrate();
     ({ app, token } = await makeApp());
+    vendorName = '測試廠商';
     const v = await request(app).post('/api/vendors')
       .set('Authorization', `Bearer ${token}`)
-      .send({ name: '測試廠商' });
+      .send({ name: vendorName });
     vendorId = v.body.id;
   });
 
   afterEach(async () => {
-    // 每測試移除該廠商讀取檔,避免暫存目錄殘留影響其他測試
-    try { registry.remove(String(vendorId)); } catch { /* noop */ }
+    // 每測試移除該廠商讀取檔(以名稱為 key),避免暫存目錄殘留影響其他測試
+    try { registry.remove(vendorName); } catch { /* noop */ }
     db._setPoolForTesting(null);
   });
 
   function auth(req) { return req.set('Authorization', `Bearer ${token}`); }
 
   test('安裝合法 dummy parser → 200 + status 顯示 installed/version/targetFields', async () => {
-    const src = dummyParserSource(vendorId);
+    const src = dummyParserSource(vendorName);
     const res = await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
     expect(res.status).toBe(201);
     expect(res.body.installed).toBe(true);
     expect(res.body.version).toBe('1.0.0');
@@ -96,12 +97,12 @@ describe('parser routes', () => {
     expect(st.body.version).toBe('1.0.0');
   });
 
-  test('registry.getParser(id).parse() 回 fixture 預期結構(分派可用)', async () => {
-    const src = dummyParserSource(vendorId);
+  test('registry.getParser(name).parse() 回 fixture 預期結構(分派可用)', async () => {
+    const src = dummyParserSource(vendorName);
     await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
 
-    const mod = registry.getParser(String(vendorId));
+    const mod = registry.getParser(vendorName);
     expect(mod).not.toBeNull();
     const out = mod.parse('/some/daily-log.xlsx');
     expect(out.header.project_name).toBe('DUMMY-PROJECT');
@@ -111,10 +112,10 @@ describe('parser routes', () => {
   });
 
   test('vendorKey 不符該廠商 → 拒絕(400)', async () => {
-    // 讀取檔內 meta.vendorKey 故意用別的值
-    const src = dummyParserSource(String(vendorId) + '999');
+    // 讀取檔內 meta.vendorKey 故意用別家名稱
+    const src = dummyParserSource('別家廠商');
     const res = await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/廠商鍵/);
     // 未安裝
@@ -123,9 +124,9 @@ describe('parser routes', () => {
   });
 
   test('selfTest 回 false 的 parser → 拒絕(400)', async () => {
-    const src = dummyParserSource(vendorId, { selfTestReturn: false });
+    const src = dummyParserSource(vendorName, { selfTestReturn: false });
     const res = await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/selfTest/);
   });
@@ -140,10 +141,10 @@ describe('parser routes', () => {
     );
     const userToken = jwt.sign({ userId: rows[0].id }, 'test-secret', { expiresIn: '7d' });
 
-    const src = dummyParserSource(vendorId);
+    const src = dummyParserSource(vendorName);
     const res = await request(app).post(`/api/vendors/${vendorId}/parser`)
       .set('Authorization', `Bearer ${userToken}`)
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
     expect(res.status).toBe(403);
   });
 
@@ -162,10 +163,11 @@ describe('parser routes', () => {
   });
 
   test('remove 後 status=not installed 且檔案不存在', async () => {
-    const src = dummyParserSource(vendorId);
+    const src = dummyParserSource(vendorName);
     await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(src), `${vendorId}.pmisparser.js`);
-    const filePath = path.join(registry.PARSER_DIR, `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(src), 'p.pmisparser.js');
+    // 落地檔名 = 廠商名稱安全化(此名無危險字元 → 原名)
+    const filePath = path.join(registry.PARSER_DIR, `${vendorName}.pmisparser.js`);
     expect(fs.existsSync(filePath)).toBe(true);
 
     const del = await auth(request(app).delete(`/api/vendors/${vendorId}/parser`));
@@ -178,22 +180,160 @@ describe('parser routes', () => {
 
   test('安裝更新覆蓋:第二次安裝新版 → status 反映新版本', async () => {
     await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(dummyParserSource(vendorId)), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(dummyParserSource(vendorName)), 'p.pmisparser.js');
 
     // 換一個版本號的內容重新安裝
-    const v2 = dummyParserSource(vendorId).replace("version: '1.0.0'", "version: '2.5.0'");
+    const v2 = dummyParserSource(vendorName).replace("version: '1.0.0'", "version: '2.5.0'");
     const res = await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
-      .attach('parser', Buffer.from(v2), `${vendorId}.pmisparser.js`);
+      .attach('parser', Buffer.from(v2), 'p.pmisparser.js');
     expect(res.status).toBe(201);
     expect(res.body.version).toBe('2.5.0');
 
-    const mod = registry.getParser(String(vendorId));
+    const mod = registry.getParser(vendorName);
     expect(mod.meta.version).toBe('2.5.0');
   });
 
   test('缺廠商 → 404', async () => {
     const st = await auth(request(app).get('/api/vendors/99999/parser'));
     expect(st.status).toBe(404);
+  });
+
+  // ── GET /api/parsers 總覽 ──
+  test('GET /api/parsers:列出各廠商狀態 + 孤兒讀取器', async () => {
+    // 建第二家(有讀取器)與第三家(無讀取器)
+    const v2 = await auth(request(app).post('/api/vendors')).send({ name: '甲營造' });
+    await auth(request(app).post('/api/vendors')).send({ name: '乙營造' });
+
+    // 給「測試廠商」與「甲營造」各裝一支讀取器
+    await auth(request(app).post(`/api/vendors/${vendorId}/parser`))
+      .attach('parser', Buffer.from(dummyParserSource(vendorName)), 'p.pmisparser.js');
+    await auth(request(app).post(`/api/vendors/${v2.body.id}/parser`))
+      .attach('parser', Buffer.from(dummyParserSource('甲營造')), 'p.pmisparser.js');
+
+    // 直接安裝一支「對不到任何廠商」的孤兒讀取器
+    registry.install(Buffer.from(dummyParserSource('不存在的廠商')), '不存在的廠商');
+
+    try {
+      const res = await auth(request(app).get('/api/parsers'));
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.vendors)).toBe(true);
+      expect(Array.isArray(res.body.orphans)).toBe(true);
+
+      const byName = Object.fromEntries(res.body.vendors.map(v => [v.vendorName, v]));
+      expect(byName['測試廠商'].installed).toBe(true);
+      expect(byName['測試廠商'].version).toBe('1.0.0');
+      expect(byName['甲營造'].installed).toBe(true);
+      expect(byName['乙營造'].installed).toBe(false);
+      expect(byName['乙營造'].version).toBeNull();
+
+      const orphanKeys = res.body.orphans.map(o => o.vendorKey);
+      expect(orphanKeys).toContain('不存在的廠商');
+      // 已對到廠商者不應出現在孤兒清單
+      expect(orphanKeys).not.toContain('測試廠商');
+    } finally {
+      registry.remove('甲營造');
+      registry.remove('不存在的廠商');
+    }
+  });
+
+  // ── POST /api/parsers/bulk 批次 ──
+  test('bulk:多檔含 matched + unmatched,部分成功個別回報', async () => {
+    // 已存在廠商:測試廠商(beforeEach)、甲營造
+    await auth(request(app).post('/api/vendors')).send({ name: '甲營造' });
+
+    try {
+      const res = await auth(request(app).post('/api/parsers/bulk'))
+        .attach('files', Buffer.from(dummyParserSource(vendorName)), 'a.pmisparser.js')
+        .attach('files', Buffer.from(dummyParserSource('甲營造')), 'b.pmisparser.js')
+        .attach('files', Buffer.from(dummyParserSource('查無此家')), 'c.pmisparser.js')
+        .attach('files', Buffer.from(dummyParserSource('壞檔', { selfTestReturn: false })), 'd.pmisparser.js');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(4);
+      const byFile = Object.fromEntries(res.body.map(r => [r.filename, r]));
+
+      // matched + 安裝成功
+      expect(byFile['a.pmisparser.js'].ok).toBe(true);
+      expect(byFile['a.pmisparser.js'].vendorKey).toBe('測試廠商');
+      expect(byFile['a.pmisparser.js'].matchedVendorId).toBe(vendorId);
+      expect(byFile['b.pmisparser.js'].ok).toBe(true);
+      expect(byFile['b.pmisparser.js'].matchedVendorId).toBeTruthy();
+
+      // unmatched:查無同名廠商 → 不安裝
+      expect(byFile['c.pmisparser.js'].ok).toBe(false);
+      expect(byFile['c.pmisparser.js'].vendorKey).toBe('查無此家');
+      expect(byFile['c.pmisparser.js'].matchedVendorId).toBeNull();
+      expect(byFile['c.pmisparser.js'].error).toMatch(/unmatched/);
+
+      // 壞檔(selfTest false)→ 個別回報失敗,不影響其他
+      expect(byFile['d.pmisparser.js'].ok).toBe(false);
+      expect(byFile['d.pmisparser.js'].error).toMatch(/selfTest/);
+
+      // 安裝結果真的落地:測試廠商 + 甲營造 installed
+      expect(registry.status('測試廠商').installed).toBe(true);
+      expect(registry.status('甲營造').installed).toBe(true);
+      expect(registry.status('查無此家').installed).toBe(false);
+    } finally {
+      registry.remove('甲營造');
+    }
+  });
+
+  test('bulk:非 admin → 403', async () => {
+    const { hashPassword } = require('../server/password');
+    const hash = await hashPassword('password1');
+    const { rows } = await db.query(
+      "INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, 'user') RETURNING id",
+      ['bulkuser', hash, '一般使用者']
+    );
+    const userToken = jwt.sign({ userId: rows[0].id }, 'test-secret', { expiresIn: '7d' });
+
+    const res = await request(app).post('/api/parsers/bulk')
+      .set('Authorization', `Bearer ${userToken}`)
+      .attach('files', Buffer.from(dummyParserSource(vendorName)), 'a.pmisparser.js');
+    expect(res.status).toBe(403);
+  });
+
+  test('bulk:無檔案 → 400', async () => {
+    const res = await auth(request(app).post('/api/parsers/bulk'));
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── 純函式:isValidVendorKey(廠商名稱鍵)──
+describe('registry.isValidVendorKey', () => {
+  test('接受含中文的非空名稱', () => {
+    expect(registry.isValidVendorKey('金大營造有限公司')).toBe(true);
+    expect(registry.isValidVendorKey('甲')).toBe(true);
+    expect(registry.isValidVendorKey('ABC Co')).toBe(true);
+  });
+
+  test('拒絕空字串 / 非字串', () => {
+    expect(registry.isValidVendorKey('')).toBe(false);
+    expect(registry.isValidVendorKey(null)).toBe(false);
+    expect(registry.isValidVendorKey(123)).toBe(false);
+  });
+
+  test('拒絕檔名危險字元(路徑分隔 / 保留字元)', () => {
+    for (const bad of ['a/b', 'a\\b', 'a:b', 'a*b', 'a?b', 'a"b', 'a<b', 'a>b', 'a|b']) {
+      expect(registry.isValidVendorKey(bad)).toBe(false);
+    }
+  });
+
+  test('拒絕單獨的 . 與 ..', () => {
+    expect(registry.isValidVendorKey('.')).toBe(false);
+    expect(registry.isValidVendorKey('..')).toBe(false);
+    // 名稱中含點但非單獨點號 → 允許
+    expect(registry.isValidVendorKey('甲.乙')).toBe(true);
+  });
+
+  test('拒絕開頭 / 結尾空白', () => {
+    expect(registry.isValidVendorKey(' 甲')).toBe(false);
+    expect(registry.isValidVendorKey('甲 ')).toBe(false);
+  });
+
+  test('拒絕超長(>100)', () => {
+    expect(registry.isValidVendorKey('甲'.repeat(101))).toBe(false);
+    expect(registry.isValidVendorKey('甲'.repeat(100))).toBe(true);
   });
 });
 
