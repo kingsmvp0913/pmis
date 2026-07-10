@@ -97,7 +97,10 @@ function buildSubmissionStatus(opts) {
 // multer:存 data/uploads/proj_<id>/,檔名 <時間戳>_<原名>(防碰撞)
 const storage = multer.diskStorage({
   destination(req, file, cb) {
-    const dir = path.join(UPLOAD_DIR, `proj_${req.params.id}`);
+    // 防 Path Traversal:工程 id 一律為數字,拒絕含路徑字元的值
+    const id = String(req.params.id);
+    if (!/^\d+$/.test(id)) return cb(new Error('工程 id 不合法'));
+    const dir = path.join(UPLOAD_DIR, `proj_${id}`);
     fs.mkdirSync(dir, { recursive: true });
     cb(null, dir);
   },
@@ -113,6 +116,16 @@ const upload = multer({ storage });
 // 相對 DATA_DIR 的 POSIX 路徑(DB 只存相對路徑)
 function relToData(absPath) {
   return path.relative(DATA_DIR, absPath).split(path.sep).join('/');
+}
+
+// 將 DB 存的相對路徑解析為絕對路徑,並確保**仍在 DATA_DIR 內**(防 Path Traversal)。
+// 不合法(含 ../ 逃逸、絕對路徑逃逸)回傳 null。
+function safeResolve(rel) {
+  if (!rel) return null;
+  const abs = path.resolve(DATA_DIR, rel);
+  const relCheck = path.relative(DATA_DIR, abs);
+  if (relCheck === '' || relCheck.startsWith('..') || path.isAbsolute(relCheck)) return null;
+  return abs;
 }
 
 const KIND_COLUMN = {
@@ -205,7 +218,8 @@ function registerRoutes(app) {
 
       const rel = rows[0][col];
       if (!rel) return res.status(404).json({ error: '檔案不存在' });
-      const abs = path.join(DATA_DIR, rel);
+      const abs = safeResolve(rel);
+      if (!abs) return res.status(400).json({ error: '檔案路徑不合法' });
       if (!fs.existsSync(abs)) return res.status(404).json({ error: '檔案已遺失' });
       res.download(abs, path.basename(abs));
     } catch (err) {
@@ -223,7 +237,8 @@ function registerRoutes(app) {
       for (const col of ['daily_log_path', 'official_doc_path', 'report_path']) {
         const rel = rec[col];
         if (!rel) continue;
-        const abs = path.join(DATA_DIR, rel);
+        const abs = safeResolve(rel);
+        if (!abs) continue; // 路徑不合法(逃逸 DATA_DIR)→ 不觸碰檔案系統
         if (fs.existsSync(abs)) {
           try {
             fs.unlinkSync(abs);
@@ -245,6 +260,7 @@ module.exports = {
   registerRoutes,
   computeDeadline,
   buildSubmissionStatus,
+  safeResolve,
   DATA_DIR,
   UPLOAD_DIR,
 };

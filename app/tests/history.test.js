@@ -19,6 +19,7 @@ const {
   registerRoutes: registerHistoryRoutes,
   computeDeadline,
   buildSubmissionStatus,
+  safeResolve,
   DATA_DIR,
 } = require('../server/history-routes');
 
@@ -192,5 +193,30 @@ describe('history routes', () => {
   test('缺工程回 404', async () => {
     const res = await auth(request(app).get('/api/projects/99999/history'));
     expect(res.status).toBe(404);
+  });
+});
+
+describe('safeResolve(防 Path Traversal)', () => {
+  test('正常相對路徑 → 解析為 DATA_DIR 內的絕對路徑', () => {
+    const abs = safeResolve('uploads/proj_1/x.pdf');
+    expect(abs).toBe(path.join(DATA_DIR, 'uploads', 'proj_1', 'x.pdf'));
+  });
+
+  test('../ 逃逸 → null', () => {
+    expect(safeResolve('../secret.txt')).toBeNull();
+    expect(safeResolve('uploads/../../../secret.txt')).toBeNull();
+  });
+
+  test('絕對路徑逃逸 → null', () => {
+    // 以 DATA_DIR 所在磁碟根組出絕對路徑(避免反斜線字面跳脫問題);位於根目錄故在 DATA_DIR 之外
+    const outside = path.join(path.parse(DATA_DIR).root, 'pmis-evil.txt');
+    expect(path.isAbsolute(outside)).toBe(true);
+    expect(safeResolve(outside)).toBeNull();
+  });
+
+  test('空值 → null', () => {
+    expect(safeResolve('')).toBeNull();
+    expect(safeResolve(null)).toBeNull();
+    expect(safeResolve(undefined)).toBeNull();
   });
 });
