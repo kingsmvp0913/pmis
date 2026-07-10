@@ -90,7 +90,7 @@ async function main() {
   await db.migrate();
   console.log('[OK] 資料表 migration 完成');
 
-  console.log('安裝完成。可執行 .\\start.ps1 啟動(首次啟動會導向建立管理員)。');
+  console.log('安裝完成。請雙擊「啟動.bat」啟動(首次啟動會導向建立管理員)。');
 }
 
 if (require.main === module) {
