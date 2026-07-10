@@ -319,8 +319,9 @@
     async function download(sid, kind) {
       try { await Api.download('submissions/' + sid + '/download/' + kind); }
       catch (e) {
-        // 409 = 尚未產出(待範本)
-        showToast(e.message, e.message.indexOf('尚未產出') >= 0 ? 'warn' : 'error');
+        // 409 = 尚未產出/尚未產生 → warn;其餘 error
+        const soft = e.message.indexOf('尚未產出') >= 0 || e.message.indexOf('尚未產生') >= 0;
+        showToast(e.message, soft ? 'warn' : 'error');
       }
     }
 
@@ -334,8 +335,15 @@
       fd.append('period', r.period);
       fd.append('daily_log', r.file);
       try {
-        await Api.upload('projects/' + p.id + '/submissions', fd);
-        showToast('已建立', 'success');
+        const resp = await Api.upload('projects/' + p.id + '/submissions', fd);
+        if (resp && resp.report_generated) {
+          showToast('已產生監造報表', 'success');
+        } else if (resp && resp.reason) {
+          // 未產生報表:明確告知原因(如尚未安裝讀取器),避免以為成功卻沒東西。
+          showToast(resp.reason, 'warn');
+        } else {
+          showToast('已建立', 'success');
+        }
         await renderHistory(p, cell);
       } catch (e) { showToast(e.message, 'error'); }
     }

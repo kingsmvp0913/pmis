@@ -15,8 +15,9 @@
  * ROUND_HALF_UP(台灣四捨五入,非銀行家捨入)算至小數 2 位。缺欄留空,不編造。
  *
  * 匯出:
- *   buildSupervisionReport(data) -> Promise<ExcelJS.Workbook>
- *   roundHalfUp(value, digits)   -> number|null   (供測試/計算)
+ *   buildSupervisionReport(data)          -> Promise<ExcelJS.Workbook>  單日一 sheet
+ *   buildMonthlyReport({ 工程, days })    -> Promise<ExcelJS.Workbook>  多日每天一 sheet
+ *   roundHalfUp(value, digits)            -> number|null   (供測試/計算)
  */
 const ExcelJS = require('exceljs');
 
@@ -66,21 +67,20 @@ function cell(v) {
 }
 
 /**
- * 產生監造報表 workbook。
+ * 在既有 worksheet 上寫入「單日監造報表」版面(附表五)。
+ * 抽成共用函式:單日版(buildSupervisionReport)與多日版(buildMonthlyReport)
+ * 皆呼叫本函式,避免複製整段排版邏輯。
+ *
+ * @param {ExcelJS.Worksheet} ws 目標工作表(呼叫端已建好、命好名)
  * @param {object} data
  * @param {object} data.工程 主檔:工程名稱/工程編號/契約工期/開工日期/契約竣工日/契約金額/決標金額/預定進度
  * @param {object} data.日報 讀取器:填報日期/天氣_上午/天氣_下午/實際進度/dailyRows[]
  * @param {object} [data.監造] 五大查核項(留空給監造方填)
- * @returns {Promise<ExcelJS.Workbook>}
  */
-async function buildSupervisionReport(data) {
+function writeSupervisionSheet(ws, data) {
   const 工程 = data.工程 || {};
   const 日報 = data.日報 || {};
   const rows = Array.isArray(日報.dailyRows) ? 日報.dailyRows : [];
-
-  const wb = new ExcelJS.Workbook();
-  wb.creator = 'PMIS';
-  const ws = wb.addWorksheet('監造報表');
 
   // 欄寬(項次窄、工程項目寬)。
   ws.columns = [
@@ -255,8 +255,96 @@ async function buildSupervisionReport(data) {
   sign.alignment = { horizontal: 'left', vertical: 'middle' };
   applyBorder(r, 1, N_COLS);
   ws.getRow(r).height = 40;
+}
+
+// sheet 名安全化:Excel 禁用字元 \ / ? * [ ] :,長度上限 31。
+// 用於「每天一 sheet」的分頁名(如填報日期 2026-04-08 → '04-08')。
+function safeSheetName(name, fallback) {
+  let s = String(name == null ? '' : name).replace(/[\\/?*[\]:]/g, '-').trim();
+  if (!s) s = fallback;
+  return s.slice(0, 31);
+}
+
+// 由某天結構取「MM-DD」分頁名;無填報日期則以序號 fallback。
+function sheetNameForDay(day, index) {
+  const 填報日期 = day && day.header && day.header.填報日期;
+  const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(填報日期 || ''));
+  const base = m ? `${m[1]}-${m[2]}` : `第${index + 1}天`;
+  return base;
+}
+
+// 把讀取器某天結構(header/dailyRows)攤平成 writeSupervisionSheet 期望的 日報 形狀。
+function dayToReport(day) {
+  const header = (day && day.header) || {};
+  return {
+    填報日期: header.填報日期,
+    星期: header.星期,
+    天氣_上午: header.天氣_上午,
+    天氣_下午: header.天氣_下午,
+    實際進度: header.實際進度,
+    dailyRows: (day && day.dailyRows) || [],
+  };
+}
+
+/**
+ * 產生監造報表 workbook(單日一 sheet)。
+ * @param {object} data 見 writeSupervisionSheet
+ * @returns {Promise<ExcelJS.Workbook>}
+ */
+async function buildSupervisionReport(data) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'PMIS';
+  const ws = wb.addWorksheet('監造報表');
+  writeSupervisionSheet(ws, data);
+  return wb;
+}
+
+/**
+ * 產生「多日 → 一個 workbook,每天一 sheet」的監造報表。
+ * 每天沿用單日版面(writeSupervisionSheet),sheet 名以填報日期 MM-DD 命名。
+ * days 為讀取器 parseAll 過濾後的多天陣列;工程主檔對每天共用。
+ * 督導(單筆)也走本函式(可能只有 1 天)。
+ *
+ * @param {object} params
+ * @param {object} params.工程 工程主檔(對每天共用)
+ * @param {Array<{header, dailyRows}>} params.days 讀取器過濾後的多天陣列
+ * @param {object} [params.監造] 五大查核項(留空)
+ * @returns {Promise<ExcelJS.Workbook>}
+ */
+async function buildMonthlyReport({ 工程, days, 監造 } = {}) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'PMIS';
+  const list = Array.isArray(days) ? days : [];
+
+  // 空陣列:仍給一張空 sheet,避免產出無工作表的壞 xlsx。
+  if (list.length === 0) {
+    const ws = wb.addWorksheet('監造報表');
+    writeSupervisionSheet(ws, { 工程: 工程 || {}, 日報: {}, 監造: 監造 || {} });
+    return wb;
+  }
+
+  const used = new Set();
+  list.forEach((day, i) => {
+    let name = safeSheetName(sheetNameForDay(day, i), `第${i + 1}天`);
+    // sheet 名不可重複(同日多筆時)→ 補序號。
+    let unique = name;
+    let n = 2;
+    while (used.has(unique)) {
+      const suffix = `_${n++}`;
+      unique = name.slice(0, 31 - suffix.length) + suffix;
+    }
+    used.add(unique);
+    const ws = wb.addWorksheet(unique);
+    writeSupervisionSheet(ws, { 工程: 工程 || {}, 日報: dayToReport(day), 監造: 監造 || {} });
+  });
 
   return wb;
 }
 
-module.exports = { buildSupervisionReport, roundHalfUp, REVIEW_SECTIONS, DETAIL_HEADERS };
+module.exports = {
+  buildSupervisionReport,
+  buildMonthlyReport,
+  roundHalfUp,
+  REVIEW_SECTIONS,
+  DETAIL_HEADERS,
+};

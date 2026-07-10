@@ -24,6 +24,8 @@ const multer = require('multer');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { getSettlementDay } = require('./settings');
+const registry = require('./parsers/registry');
+const { buildMonthlyReport } = require('./report');
 
 // 資料根:相對本檔求出(app/server → repo/data),禁止寫死絕對路徑。
 // 測試可用 PMIS_DATA_DIR 覆寫,避免污染真 data/。
@@ -31,6 +33,7 @@ const DATA_DIR = process.env.PMIS_DATA_DIR
   ? path.resolve(process.env.PMIS_DATA_DIR)
   : path.resolve(__dirname, '../../data');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const OUTPUT_DIR = path.join(DATA_DIR, 'output');
 
 // 兩位數補零
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -135,12 +138,91 @@ const KIND_COLUMN = {
   official_doc: 'official_doc_path',
 };
 
+// 兩位數補零過的日期字串 → YYYY-MM(取月份)。填報日期形如 2026-04-08。
+function periodOfDate(iso) {
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(iso || ''));
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+// 由工程主檔列組出 report.js 期望的「工程」欄位。缺欄留空(不編造)。
+function projectToReportHeader(proj) {
+  const p = proj || {};
+  return {
+    工程名稱: p.name || '',
+    工程編號: p.project_no || '',
+    契約金額: p.award_amount != null ? Number(p.award_amount) : '',
+    決標金額: p.award_amount != null ? Number(p.award_amount) : '',
+    開工日期: p.start_date ? String(p.start_date).slice(0, 10) : '',
+    契約竣工日: p.contract_completion_date ? String(p.contract_completion_date).slice(0, 10) : '',
+  };
+}
+
+/**
+ * 上傳後嘗試產生監造報表。deterministic,絕不拋出:任何錯誤都收斂成
+ * { report_generated:false, reason }。成功則寫檔 + 回填 report_path。
+ *
+ * @param {object} opts
+ * @param {object} opts.proj        工程主檔列(含 name/vendor_id/…)
+ * @param {number} opts.submissionId 剛 INSERT 的 submission_history.id
+ * @param {string} opts.absDailyLog 上傳施工日誌絕對路徑
+ * @param {string} opts.type        'monthly' | 'supervision'
+ * @param {string} opts.period      YYYY-MM
+ * @returns {Promise<{ report_generated: boolean, report_path?: string, reason?: string }>}
+ */
+async function tryGenerateReport({ proj, submissionId, absDailyLog, type, period }) {
+  // 1. 查廠商名稱。
+  let vendorName = null;
+  if (proj.vendor_id != null) {
+    const { rows } = await query('SELECT name FROM vendors WHERE id = $1', [proj.vendor_id]);
+    if (rows[0]) vendorName = rows[0].name;
+  }
+  if (!vendorName) {
+    return { report_generated: false, reason: '此工程尚未指定廠商,無法自動產生監造報表' };
+  }
+
+  // 2. 取該廠商讀取器。
+  const parser = registry.getParser(vendorName);
+  if (!parser || typeof parser.parseAll !== 'function') {
+    return { report_generated: false, reason: '此廠商尚未安裝讀取器,無法自動產生監造報表' };
+  }
+
+  // 3. 解析 + 產表(整段包在 try:讀取器丟錯 / 檔格式不符 → 不 500)。
+  try {
+    const all = await parser.parseAll(absDailyLog);
+    const list = Array.isArray(all) ? all : [];
+
+    // 依 type 過濾天數:monthly 只取填報日期屬該 period 的天;supervision 取全部。
+    let days = list;
+    if (type === 'monthly') {
+      days = list.filter(d => periodOfDate(d && d.header && d.header.填報日期) === period);
+    }
+    if (days.length === 0) {
+      return { report_generated: false, reason: '施工日誌解析失敗:未取得可對應的日誌天數' };
+    }
+
+    const wb = await buildMonthlyReport({ 工程: projectToReportHeader(proj), days });
+
+    // 4. 寫檔:data/output/proj_<id>/監造報表_<period>_<type>_<時間戳>.xlsx。
+    const dir = path.join(OUTPUT_DIR, `proj_${proj.id}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const fname = `監造報表_${period}_${type}_${Date.now()}.xlsx`;
+    const absOut = path.join(dir, fname);
+    await wb.xlsx.writeFile(absOut);
+
+    const relPath = relToData(absOut);
+    await query('UPDATE submission_history SET report_path = $1 WHERE id = $2', [relPath, submissionId]);
+    return { report_generated: true, report_path: relPath };
+  } catch (err) {
+    return { report_generated: false, reason: `施工日誌解析失敗:${err.message}` };
+  }
+}
+
 function registerRoutes(app) {
   // 上傳施工日誌 → 建立 submission_history(督導額外多插一筆)
   app.post('/api/projects/:id/submissions', verifyToken, upload.single('daily_log'), async (req, res) => {
     try {
       const projectId = req.params.id;
-      const { rows: proj } = await query('SELECT id FROM projects WHERE id = $1', [projectId]);
+      const { rows: proj } = await query('SELECT * FROM projects WHERE id = $1', [projectId]);
       if (!proj[0]) return res.status(404).json({ error: '工程不存在' });
 
       const type = req.body.type === 'supervision' ? 'supervision' : 'monthly';
@@ -161,7 +243,19 @@ function registerRoutes(app) {
          RETURNING *`,
         [projectId, period, type, dailyLogPath, deadline]
       );
-      res.status(201).json(rows[0]);
+      const record = rows[0];
+
+      // 紀錄已建立;接著嘗試產生監造報表(絕不因報表失敗中斷/500)。
+      const gen = await tryGenerateReport({
+        proj: proj[0],
+        submissionId: record.id,
+        absDailyLog: req.file.path,
+        type,
+        period,
+      });
+      if (gen.report_generated) record.report_path = gen.report_path;
+
+      res.status(201).json({ ...record, ...gen });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -213,8 +307,13 @@ function registerRoutes(app) {
       const { rows } = await query('SELECT * FROM submission_history WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '紀錄不存在' });
 
-      if (kind === 'report' || kind === 'official_doc') {
-        return res.status(409).json({ error: '監造報表/公文尚未產出(待範本)' });
+      // 公文另做(待範本):一律 409。
+      if (kind === 'official_doc') {
+        return res.status(409).json({ error: '公文尚未產出(待範本)' });
+      }
+      // 監造報表:有檔才給,沒值才 409。
+      if (kind === 'report' && !rows[0][col]) {
+        return res.status(409).json({ error: '監造報表尚未產生' });
       }
 
       const rel = rows[0][col];
@@ -264,4 +363,5 @@ module.exports = {
   safeResolve,
   DATA_DIR,
   UPLOAD_DIR,
+  OUTPUT_DIR,
 };

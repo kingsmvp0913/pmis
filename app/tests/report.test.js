@@ -7,7 +7,7 @@
  * 若金額改用銀行家捨入或欄位錯位,這些斷言會失敗)。
  */
 const ExcelJS = require('exceljs');
-const { buildSupervisionReport, roundHalfUp } = require('../server/report');
+const { buildSupervisionReport, buildMonthlyReport, roundHalfUp } = require('../server/report');
 
 // 找出某欄第一個 value === target 的列號(掃整表)。
 function findRow(ws, target) {
@@ -166,5 +166,66 @@ describe('buildSupervisionReport 產出 workbook', () => {
       });
     });
     expect(hit).toBe(true);
+  });
+});
+
+// ── buildMonthlyReport:多日 → 一個 workbook,每天一 sheet ──
+describe('buildMonthlyReport 多日每天一 sheet', () => {
+  // 兩天:各一列細目,金額需 ROUND_HALF_UP 補算。
+  const DAYS = [
+    {
+      header: { 工程名稱: '嘉義縣立竹崎高中教育部補助圍牆重建工程', 填報日期: '2026-04-08', 星期: '星期三' },
+      dailyRows: [
+        { 項次: '1', 工程項目: '工程告示牌(租用)', 單位: '面', 契約單價: 2250, 契約數量: 1, 本日完成數量: 1, 本日完成金額: 2250, 累計完成數量: 1 },
+      ],
+    },
+    {
+      header: { 工程名稱: '嘉義縣立竹崎高中教育部補助圍牆重建工程', 填報日期: '2026-04-09', 星期: '星期四' },
+      dailyRows: [
+        // 本日完成金額缺 → 由 33.335 × 2 = 66.67(half-up)補算。
+        { 項次: 'X', 工程項目: '測試補算項', 單位: '式', 契約單價: 33.335, 契約數量: 2, 本日完成數量: 2, 本日完成金額: null, 累計完成數量: 2 },
+      ],
+    },
+  ];
+  const 工程 = { 工程名稱: '嘉義縣立竹崎高中教育部補助圍牆重建工程', 工程編號: 'SAMPLE-2026-001' };
+
+  let wb2;
+  beforeAll(async () => {
+    const wb = await buildMonthlyReport({ 工程, days: DAYS });
+    const buf = await wb.xlsx.writeBuffer();
+    wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.load(buf);
+  });
+
+  test('每天一 worksheet,sheet 名為填報日期 MM-DD', () => {
+    const names = wb2.worksheets.map(w => w.name);
+    expect(names).toEqual(['04-08', '04-09']);
+  });
+
+  test('第一天 sheet:工程名稱、填報日期、項次1 數量/金額正確', () => {
+    const ws = wb2.getWorksheet('04-08');
+    const nameRow = findRow(ws, '工程名稱');
+    expect(rowValues(ws, nameRow)).toContain('嘉義縣立竹崎高中教育部補助圍牆重建工程');
+    const dateRow = findRow(ws, '填報日期');
+    const joined = rowValues(ws, dateRow).map(v => (v == null ? '' : String(v))).join(' ');
+    expect(joined).toContain('2026-04-08');
+    const itemRow = findRow(ws, '工程告示牌(租用)');
+    const v = rowValues(ws, itemRow);
+    expect(v[5]).toBe(1);      // 本日完成數量
+    expect(v[6]).toBe(2250);   // 本日完成金額
+  });
+
+  test('第二天 sheet:金額缺欄以 33.335×2 ROUND_HALF_UP → 66.67', () => {
+    const ws = wb2.getWorksheet('04-09');
+    const dateRow = findRow(ws, '填報日期');
+    const joined = rowValues(ws, dateRow).map(v => (v == null ? '' : String(v))).join(' ');
+    expect(joined).toContain('2026-04-09');
+    const itemRow = findRow(ws, '測試補算項');
+    expect(rowValues(ws, itemRow)[6]).toBe(66.67);
+  });
+
+  test('督導(單天)也走同函式 → 一張 sheet', async () => {
+    const wb = await buildMonthlyReport({ 工程, days: [DAYS[0]] });
+    expect(wb.worksheets.map(w => w.name)).toEqual(['04-08']);
   });
 });
