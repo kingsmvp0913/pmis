@@ -294,7 +294,6 @@ async function parse(filePath, ctx) {
 // selfTest:內建小樣本 so grid + 監造表頭 grid,驗證矩陣展開/區塊對齊/星期/error→null。
 function selfTest(ft) {
   try {
-    const XLSX = require('xlsx');
     const { gridFromWorksheet, colToIndex } = ft;
 
     // ── 建 so worksheet 小樣本 ──

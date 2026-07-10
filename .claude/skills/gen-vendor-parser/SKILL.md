@@ -98,6 +98,8 @@ module.exports = {
 - **金額類欄位一律追溯到來源具體位置;找不到就留 null + 警告,絕不編造數字。**
 - 無資料標記(`-`/`－`/空白)→ 統一 null(數量/金額),測試明確驗證。
 - 禁寫死絕對路徑;**檔型工具只經 `ctx.filetypes` 注入取用(禁 `process.cwd()`/寫死 app 路徑/require 檔型檔)**;fixture 用 `path.join(__dirname,'fixtures',...)`。
+- **讀取器(含 `selfTest`)不要 `require('xlsx')`/`require('pdf-parse')` 等 node_modules**:讀取器裝到 `data/vendor-parsers/`(該目錄無 node_modules),`selfTest` 內若 `require('xlsx')` 會在安裝時**靜默失敗**(丟例外被 try/catch 吃掉 → 回 false → 「selfTest 未通過」)。一律用注入的 `ft`。(registry 的 `loadModuleFromFile` 已把 app 的 node_modules 併入解析路徑作為防線,但仍以注入為準。)
+- **測試要涵蓋 `registry.install` 完整安裝路徑**(不只直接呼叫 `selfTest`),否則這類「只在安裝時發作」的 bug 會漏(晉林即因此漏掉)。
 - 產出純 deterministic 程式,**不得在讀取器內呼叫任何 AI/網路**。
 - 一次只做一家;不改其他階段的檔。
 

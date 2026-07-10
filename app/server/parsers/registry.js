@@ -85,8 +85,10 @@ function loadModuleFromFile(absPath) {
   const src = fs.readFileSync(absPath, 'utf8');
   const mod = new Module(absPath, module);
   mod.filename = absPath;
-  // 讓讀取檔內的 require(若有)以其所在目錄解析(僅共用檔型工具用;本階段 dummy 不需)。
-  mod.paths = Module._nodeModulePaths(path.dirname(absPath));
+  // 讓讀取檔內的 require 解析:先看自身目錄,再**接上 registry 自己的 node_modules 路徑**。
+  // 關鍵:讀取器安裝到 data/vendor-parsers/ 後,該目錄沒有 node_modules;若讀取器(或其
+  // selfTest)require 了 xlsx/pdf-parse 等,沒有這段就會在安裝時 selfTest 靜默失敗。
+  mod.paths = Module._nodeModulePaths(path.dirname(absPath)).concat(module.paths);
   mod._compile(src, absPath);
   return mod.exports;
 }
