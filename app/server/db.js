@@ -58,6 +58,69 @@ async function migrate() {
       key   TEXT PRIMARY KEY,
       value TEXT
     )`,
+
+    `CREATE TABLE IF NOT EXISTS vendors (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS vendor_contacts (
+      id         SERIAL PRIMARY KEY,
+      vendor_id  INTEGER NOT NULL REFERENCES vendors(id) ON DELETE CASCADE,
+      name       TEXT,
+      phone      TEXT,
+      email      TEXT,
+      line_id    TEXT,
+      is_primary BOOLEAN NOT NULL DEFAULT false
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS schools (
+      id     SERIAL PRIMARY KEY,
+      name   TEXT NOT NULL,
+      county TEXT
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS school_contacts (
+      id         SERIAL PRIMARY KEY,
+      school_id  INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      name       TEXT,
+      phone      TEXT,
+      email      TEXT,
+      line_id    TEXT,
+      is_primary BOOLEAN NOT NULL DEFAULT false
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS insurers (
+      id   SERIAL PRIMARY KEY,
+      name TEXT NOT NULL
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS insurance_types (
+      id         SERIAL PRIMARY KEY,
+      insurer_id INTEGER NOT NULL REFERENCES insurers(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS projects (
+      id                       SERIAL PRIMARY KEY,
+      project_no               TEXT,
+      name                     TEXT NOT NULL,
+      vendor_id                INTEGER REFERENCES vendors(id),
+      school_id                INTEGER REFERENCES schools(id),
+      start_date               DATE,
+      contract_completion_date DATE,
+      actual_completion_date   DATE,
+      award_amount             NUMERIC,
+      insurer_id               INTEGER REFERENCES insurers(id),
+      insurance_type_id        INTEGER REFERENCES insurance_types(id),
+      insurance_start          DATE,
+      insurance_end            DATE,
+      design_fee_type          TEXT,
+      design_fee_amount        NUMERIC,
+      design_fee_pct           NUMERIC,
+      created_at               TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
