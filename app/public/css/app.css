@@ -131,6 +131,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .modal-body { padding: 0 var(--space-6); font-size: var(--fs-md); color: var(--text-secondary); line-height: 1.7; }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-5) var(--space-6) var(--space-6); }
 
+/* ── Toolbar(list 頁上方搜尋 + 動作)── */
+.toolbar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
+.toolbar .search { flex: 1; min-width: 180px; max-width: 340px; }
+.toolbar .spacer { flex: 1; }
+
+/* ── Table ── */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+table.data th, table.data td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
+table.data th { font-weight: var(--fw-semibold); color: var(--text-secondary); background: var(--bg); font-size: var(--fs-sm); }
+table.data tbody tr:last-child td { border-bottom: none; }
+table.data tbody tr:hover { background: var(--bg); }
+table.data td.actions { text-align: right; }
+.empty-row { text-align: center; color: var(--text-muted); padding: 24px 12px; }
+
+/* ── Card / 編輯區塊 ── */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-6); box-shadow: var(--shadow-sm); max-width: 720px; }
+.card + .card { margin-top: var(--space-4); }
+.card-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); margin-bottom: var(--space-4); }
+.form-row { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.form-row > .form-group { flex: 1; min-width: 160px; }
+.form-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
+select.form-control { appearance: auto; }
+textarea.form-control { min-height: 160px; resize: vertical; font-family: inherit; }
+.hint { font-size: var(--fs-sm); color: var(--text-muted); margin-top: var(--space-2); }
+
+/* ── 聯絡人/險種 子列 ── */
+.subrow { display: flex; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); flex-wrap: wrap; }
+.subrow .form-control { flex: 1; min-width: 110px; }
+.subrow .primary-check { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-sm); color: var(--text-secondary); white-space: nowrap; }
+.subrow .btn-remove { background: transparent; border: 1px solid var(--border-strong); color: var(--danger); padding: 6px 10px; }
+
+/* ── 計算結果顯示 ── */
+.calc-box { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); font-size: var(--fs-base); color: var(--text); margin-top: var(--space-2); }
+.calc-box strong { color: var(--primary); }
+.calc-box.warn { color: var(--warning); }
+
 /* ── Toasts ── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: var(--z-toast); }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.18); max-width: 340px; }

@@ -4,7 +4,6 @@
 
 const routes = {};
 function registerRoute(hash, renderFn) { routes[hash] = renderFn; }
-window.PmisApp = { registerRoute };
 
 const root = document.getElementById('app');
 
@@ -83,11 +82,20 @@ async function renderLogin() {
   root.appendChild(el('div', { class: 'login-wrap' }, [box]));
 }
 
-// ── 登入後主框架(空殼,日後掛主檔 view)──
-async function renderShell() {
+// 主選單項目(第二階段只掛這四項 + 首頁)
+const NAV = [
+  { hash: '#/', label: '🏠 首頁' },
+  { hash: '#/vendors', label: '🏗️ 廠商' },
+  { hash: '#/schools', label: '🏫 學校' },
+  { hash: '#/insurers', label: '🛡️ 保險公司' },
+  { hash: '#/projects', label: '📋 工程' }
+];
+
+// ── 登入後主框架:sidebar + content;主檔 view 以 registerRoute 掛入並 dispatch 至 content ──
+async function renderShell(activeHash) {
   let me;
   try { me = await Api.get('auth/me'); }
-  catch { Api.clearToken(); window.location.hash = '/login'; return; }
+  catch { Api.clearToken(); window.location.hash = '/login'; return null; }
 
   root.innerHTML = '';
   const content = el('div', { class: 'content', id: 'view-root' });
@@ -97,9 +105,9 @@ async function renderShell() {
       el('strong', {}, 'PMIS'),
       el('span', {}, '營建監造管理')
     ]),
-    el('nav', {}, [
-      el('a', { class: 'active', href: '#/' }, '🏠 首頁')
-    ]),
+    el('nav', {}, NAV.map(n =>
+      el('a', { class: n.hash === activeHash ? 'active' : '', href: n.hash }, n.label)
+    )),
     el('div', { class: 'sidebar-footer' }, [
       el('div', { style: 'font-size:12px;margin-bottom:8px;color:var(--sidebar-text)' }, me.display_name || me.username),
       el('a', { onClick: () => { Api.clearToken(); window.location.hash = '/login'; } }, '登出')
@@ -108,10 +116,7 @@ async function renderShell() {
   const main = el('div', { class: 'main' }, [content]);
   root.appendChild(sidebar);
   root.appendChild(main);
-
-  // 首頁(空殼歡迎頁);日後主檔 view 以 registerRoute 掛入並在此 dispatch
-  content.appendChild(el('div', { class: 'page-title' }, `歡迎,${me.display_name || me.username}`));
-  content.appendChild(el('p', { style: 'color:var(--text-muted)' }, '平台基座已就緒。主檔功能將於後續階段掛載。'));
+  return content;
 }
 
 // ── router ──
@@ -121,9 +126,23 @@ async function route() {
   if (Api.isLoggedIn() && hash === '/login') { window.location.hash = '/'; return; }
 
   if (hash === '/login') return renderLogin();
-  if (routes['#' + hash]) return routes['#' + hash](document.getElementById('view-root') || root, {});
-  return renderShell();
+
+  // 掛在對應 nav 的 active(取 hash 第一段,如 #/vendors、#/vendors/3 皆對應 #/vendors)
+  const seg = '#/' + (hash.replace(/^\//, '').split('/')[0] || '');
+  const activeHash = NAV.some(n => n.hash === seg) ? seg : '#/';
+  const content = await renderShell(activeHash);
+  if (!content) return; // 已導向登入
+
+  const renderFn = routes['#' + hash] || routes[seg];
+  if (renderFn) return renderFn(content, hash);
+
+  // 首頁歡迎(其餘未註冊 hash 也回首頁)
+  content.appendChild(el('div', { class: 'page-title' }, '歡迎'));
+  content.appendChild(el('p', { style: 'color:var(--text-muted)' }, '請由左側選單選擇主檔。'));
 }
+
+// 對外:view 檔用 PmisApp.el 建 DOM、registerRoute 掛路由
+window.PmisApp = { registerRoute, el };
 
 window.addEventListener('hashchange', route);
 window.addEventListener('DOMContentLoaded', route);
