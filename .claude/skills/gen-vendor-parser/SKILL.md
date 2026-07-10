@@ -56,7 +56,7 @@ module.exports = {
 ## 分層架構(務必沿用,勿把檔型邏輯塞進廠商 reader)
 - **`app/server/parsers/filetypes/`**:檔型共用讀取器,回傳**原始結構**,可跨廠商重用。
   - `pdf.js`(已存在):pdf-parse@1 + 自訂 `pagerender`(依 `transform[5]` y 座標換行)逐頁抽文字;**對每頁文字做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。
-  - Excel(`xlsx.js`):用 `xlsx` 套件;回傳每 sheet 的 cell 矩陣(注意合併儲存格要抓合併起點值)。
+  - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。
   - Word(`docx.js`):`mammoth` 或解 `word/document.xml`;回傳段落/表格。
 - **`app/server/parsers/vendors/samples/<key>.pmisparser.js`**:只放**該家版面規則**(從原始結構取值 → 統一 schema)。
 - **純函式 `parsePage(rawText 或 rawGrid)`**:單頁/單日解析,供 `selfTest` 內建樣本呼叫(不碰檔案系統)。
