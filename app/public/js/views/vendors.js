@@ -59,6 +59,93 @@
     }
   }
 
+  // ── 讀取檔安裝區塊(廠商詳細頁;僅既有廠商顯示)──
+  // 顯示狀態(未安裝/已安裝:版本、目標欄位、安裝時間);安裝/更新/移除限 admin。
+  function parserSection(vendorId) {
+    const isAdmin = !!(PmisApp.currentUser && PmisApp.currentUser.role === 'admin');
+    const body = el('div', {});
+    const card = el('div', { class: 'card', style: 'margin-top:16px' }, [
+      el('div', { class: 'card-title' }, '讀取檔(施工日誌解析)'),
+      body
+    ]);
+
+    // 隱藏檔案輸入(限 .pmisparser.js);點按鈕觸發
+    const fileInput = el('input', {
+      type: 'file', accept: '.js,.pmisparser.js', style: 'display:none'
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files && fileInput.files[0]) doInstall(fileInput.files[0]);
+    });
+    card.appendChild(fileInput);
+
+    async function load() {
+      let st;
+      try { st = await Api.get('vendors/' + vendorId + '/parser'); }
+      catch (e) { body.innerHTML = ''; body.appendChild(el('div', { class: 'hint' }, '無法讀取安裝狀態:' + e.message)); return; }
+      render(st);
+    }
+
+    function render(st) {
+      body.innerHTML = '';
+      if (!st.installed) {
+        body.appendChild(el('div', { class: 'hint', style: 'margin-top:0' }, '尚未安裝讀取檔。'));
+        if (isAdmin) {
+          body.appendChild(el('div', { class: 'form-actions' }, [
+            el('button', { class: 'btn btn-primary', type: 'button', onClick: pick }, '安裝讀取檔')
+          ]));
+          body.appendChild(el('div', { class: 'hint' }, '選擇該廠商的 .pmisparser.js 讀取檔;系統會驗證廠商鍵與內附測試後才安裝。'));
+        } else {
+          body.appendChild(el('div', { class: 'hint' }, '僅管理員可安裝讀取檔。'));
+        }
+        return;
+      }
+      const info = el('div', {}, [
+        el('div', {}, [el('strong', {}, '狀態:'), '已安裝']),
+        el('div', {}, [el('strong', {}, '版本:'), ' ' + (st.version || '-')]),
+        el('div', {}, [el('strong', {}, '目標欄位:'), ' ' + ((st.targetFields || []).join('、') || '-')]),
+        el('div', {}, [el('strong', {}, '安裝時間:'), ' ' + fmtTime(st.installedAt)])
+      ]);
+      body.appendChild(info);
+      if (isAdmin) {
+        body.appendChild(el('div', { class: 'form-actions' }, [
+          el('button', { class: 'btn btn-outline', type: 'button', onClick: pick }, '更新'),
+          el('button', { class: 'btn btn-danger', type: 'button', onClick: doRemove }, '移除')
+        ]));
+      }
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return '-';
+      const d = new Date(iso);
+      return isNaN(d) ? iso : d.toLocaleString();
+    }
+
+    function pick() { fileInput.value = ''; fileInput.click(); }
+
+    async function doInstall(file) {
+      const fd = new FormData();
+      fd.append('parser', file);
+      try {
+        const st = await Api.upload('vendors/' + vendorId + '/parser', fd);
+        showToast('讀取檔安裝成功', 'success');
+        render(st);
+      } catch (e) { showToast('安裝失敗:' + e.message, 'error'); }
+    }
+
+    async function doRemove() {
+      const ok = await confirmDialog({ title: '移除讀取檔', message: '確定移除此廠商的讀取檔?', danger: true });
+      if (!ok) return;
+      try {
+        await Api.delete('vendors/' + vendorId + '/parser');
+        showToast('已移除讀取檔', 'success');
+        load();
+      } catch (e) { showToast('移除失敗:' + e.message, 'error'); }
+    }
+
+    load();
+    return card;
+  }
+
   // ── 編輯 / 新增 ──
   async function renderEdit(content, id) {
     const isNew = id === 'new';
@@ -80,6 +167,9 @@
       ])
     ]);
     content.appendChild(card);
+
+    // 讀取檔安裝區塊:僅既有廠商(已有 id)顯示
+    if (!isNew) content.appendChild(parserSection(id));
 
     async function save() {
       const name = nameI.value.trim();

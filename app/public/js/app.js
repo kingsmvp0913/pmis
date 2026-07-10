@@ -97,6 +97,7 @@ async function renderShell(activeHash) {
   let me;
   try { me = await Api.get('auth/me'); }
   catch { Api.clearToken(); window.location.hash = '/login'; return null; }
+  PmisApp.currentUser = me; // 供 view 判斷權限(如讀取檔安裝限 admin)
 
   root.innerHTML = '';
   const content = el('div', { class: 'content', id: 'view-root' });
