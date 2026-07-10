@@ -104,6 +104,25 @@ describe('POST /submissions 串接監造報表產生', () => {
     expect(dl.body.length).toBeGreaterThan(0);
   }, 30000);
 
+  test('選到沒資料的月份 → reason 列出檔案實際含有的月份(可操作提示)', async () => {
+    const inst = registry.install(fs.readFileSync(JINDA_SRC), VENDOR_KEY);
+    expect(inst.ok).toBe(true);
+    const projectId = await makeProjectWithVendor(VENDOR_KEY);
+
+    // jinda 施工日誌實際為 2026-04~07;故意選 2026-01(無資料)。
+    const res = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
+      .field('type', 'monthly')
+      .field('period', '2026-01')
+      .attach('daily_log', FIXTURE);
+
+    expect(res.status).toBe(201);            // 紀錄仍建立
+    expect(res.body.report_generated).toBe(false);
+    // 訊息要明確列出檔案內含月份,讓使用者知道改選哪個。
+    expect(res.body.reason).toContain('檔案內含月份');
+    expect(res.body.reason).toContain('2026-04');
+    expect(res.body.reason).not.toContain('未取得可對應');
+  }, 30000);
+
   test('無讀取器 → 明確回報:report_generated=false + reason,紀錄仍建、download report 409', async () => {
     const projectId = await makeProjectWithVendor('沒有讀取器的廠商');
 

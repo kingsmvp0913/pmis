@@ -197,7 +197,20 @@ async function tryGenerateReport({ proj, submissionId, absDailyLog, type, period
       days = list.filter(d => periodOfDate(d && d.header && d.header.填報日期) === period);
     }
     if (days.length === 0) {
-      return { report_generated: false, reason: '施工日誌解析失敗:未取得可對應的日誌天數' };
+      // 檔案內實際含有的月份,直接列給使用者,避免「選錯月份」時看不懂為何無資料。
+      const avail = [...new Set(
+        list.map(d => periodOfDate(d && d.header && d.header.填報日期)).filter(Boolean)
+      )].sort();
+      if (type === 'monthly' && avail.length > 0) {
+        return {
+          report_generated: false,
+          reason: `此施工日誌沒有 ${period} 的資料;檔案內含月份:${avail.join('、')}。請改選其中一個月份再產生。`,
+        };
+      }
+      return {
+        report_generated: false,
+        reason: '施工日誌解析失敗:未取得可對應的日誌天數(檔案可能格式不符或無逐日資料)',
+      };
     }
 
     const wb = await buildMonthlyReport({ 工程: projectToReportHeader(proj), days });
