@@ -88,7 +88,8 @@ const NAV = [
   { hash: '#/vendors', label: '🏗️ 廠商' },
   { hash: '#/schools', label: '🏫 學校' },
   { hash: '#/insurers', label: '🛡️ 保險公司' },
-  { hash: '#/projects', label: '📋 工程' }
+  { hash: '#/projects', label: '📋 工程' },
+  { hash: '#/settings', label: '⚙️ 系統設定' }
 ];
 
 // ── 登入後主框架:sidebar + content;主檔 view 以 registerRoute 掛入並 dispatch 至 content ──

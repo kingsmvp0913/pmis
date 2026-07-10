@@ -168,6 +168,24 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 .calc-box strong { color: var(--primary); }
 .calc-box.warn { color: var(--warning); }
 
+/* ── 工程歷史 / 繳交狀態 ── */
+.history-panel { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-4); margin: 0; }
+.history-panel .history-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
+.history-panel .history-title { font-weight: var(--fw-semibold); color: var(--text); }
+.status-grid { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.status-pill { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: var(--fs-sm); background: var(--surface); color: var(--text); min-width: 96px; }
+.status-pill .pill-period { font-weight: var(--fw-semibold); }
+.status-pill .pill-label { font-size: 11px; }
+/* 綠=已繳:用 --success;紅=未繳:用 --danger;皆自帶可讀文字色,不依 var(--text) */
+.status-pill.submitted { background: rgba(16,185,129,0.14); border-color: var(--success); color: var(--success); }
+.status-pill.overdue { background: rgba(239,68,68,0.14); border-color: var(--danger); color: var(--danger); }
+.status-pill.pending { background: var(--surface); border-color: var(--border-strong); color: var(--text-muted); }
+.record-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--border); }
+.record-row .rec-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-secondary); }
+.record-row .rec-tag.supervision { border-color: var(--info); color: var(--info); }
+.record-row .rec-main { color: var(--text); }
+.record-row .spacer { flex: 1; }
+
 /* ── Toasts ── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: var(--z-toast); }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.18); max-width: 340px; }

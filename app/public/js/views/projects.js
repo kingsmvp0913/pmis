@@ -1,6 +1,50 @@
-// projects.js — 工程 view:list + 搜尋 + 編輯(全欄位;險種連動、設計費切換與即時計算)
+// projects.js — 工程 view:list + 搜尋 + 編輯(全欄位;險種連動、設計費切換與即時計算)+ 歷史檔案/繳交狀態
 (function () {
   const el = PmisApp.el;
+
+  const STATUS_LABEL = { submitted: '已繳', overdue: '未繳', pending: '未到期' };
+
+  // ── 產生監造報表彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
+  function submissionDialog(defaultPeriod) {
+    return new Promise((resolve) => {
+      const overlay = el('div', { class: 'modal-overlay' });
+      const typeSel = el('select', { class: 'form-control' }, [
+        el('option', { value: 'monthly' }, '每月'),
+        el('option', { value: 'supervision' }, '督導')
+      ]);
+      const periodI = el('input', { class: 'form-control', type: 'month', value: defaultPeriod || '' });
+      const fileI = el('input', { class: 'form-control', type: 'file' });
+      const errBox = el('div', { class: 'error-msg', style: 'display:none' });
+
+      function close(val) { window.removeEventListener('keydown', onKey); overlay.remove(); resolve(val); }
+      function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(null); } }
+
+      function submit() {
+        const period = periodI.value.trim();
+        if (!/^\d{4}-\d{2}$/.test(period)) { errBox.textContent = '請選擇週期(年月)'; errBox.style.display = ''; return; }
+        if (!fileI.files || !fileI.files[0]) { errBox.textContent = '請選擇施工日誌檔'; errBox.style.display = ''; return; }
+        close({ type: typeSel.value, period, file: fileI.files[0] });
+      }
+
+      const modal = el('div', { class: 'modal', role: 'dialog' }, [
+        el('div', { class: 'modal-title' }, '產生監造報表'),
+        el('div', { class: 'modal-body' }, [
+          errBox,
+          el('div', { class: 'form-group' }, [el('label', {}, '類型'), typeSel]),
+          el('div', { class: 'form-group' }, [el('label', {}, '週期'), periodI]),
+          el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔'), fileI])
+        ]),
+        el('div', { class: 'modal-actions' }, [
+          el('button', { class: 'btn btn-outline', onClick: () => close(null) }, '取消'),
+          el('button', { class: 'btn btn-primary', onClick: submit }, '送出')
+        ])
+      ]);
+      overlay.appendChild(modal);
+      overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
+      window.addEventListener('keydown', onKey);
+      document.body.appendChild(overlay);
+    });
+  }
 
   // 前端即時預覽用 half-up(與後端 project-routes.roundHalfUp 一致);實際存檔仍以後端計算為準
   function roundHalfUp(v) {
@@ -207,16 +251,100 @@
         if (p.design_fee_unbid) feeText = '未招標,待補';
         else if (p.design_fee_actual != null) feeText = Number(p.design_fee_actual).toLocaleString() + ' 元';
         else feeText = '—';
-        tbody.appendChild(el('tr', {}, [
+        const panelCell = el('td', { colspan: '4', style: 'padding:0' });
+        const panelRow = el('tr', { style: 'display:none' }, [panelCell]);
+        const tr = el('tr', {}, [
           el('td', {}, p.project_no || '—'),
           el('td', {}, p.name),
           el('td', {}, feeText),
           el('td', { class: 'actions' }, [
-            el('button', { class: 'btn btn-outline', onClick: () => { window.location.hash = '/projects/' + p.id; } }, '編輯'),
+            el('button', { class: 'btn btn-outline', onClick: () => toggleHistory(p, panelRow) }, '歷史'),
+            el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => { window.location.hash = '/projects/' + p.id; } }, '編輯'),
             el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => remove(p) }, '刪除')
           ])
-        ]));
+        ]);
+        tbody.appendChild(tr);
+        tbody.appendChild(panelRow);
       }
+    }
+
+    // 展開/收合歷史面板
+    async function toggleHistory(p, panelRow) {
+      const cell = panelRow.firstChild;
+      if (panelRow.style.display !== 'none') { panelRow.style.display = 'none'; return; }
+      panelRow.style.display = '';
+      cell.innerHTML = '';
+      cell.appendChild(el('div', { class: 'history-panel' }, [el('span', { style: 'color:var(--text-muted)' }, '載入中…')]));
+      await renderHistory(p, cell);
+    }
+
+    // 繳交狀態格 + 紀錄列 + 產生監造報表
+    async function renderHistory(p, cell) {
+      let data;
+      try { data = await Api.get('projects/' + p.id + '/history'); }
+      catch (e) { showToast(e.message, 'error'); return; }
+
+      const grid = el('div', { class: 'status-grid' });
+      (data.status || []).forEach(s => {
+        grid.appendChild(el('div', { class: 'status-pill ' + s.status }, [
+          el('span', { class: 'pill-period' }, s.period),
+          el('span', { class: 'pill-label' }, STATUS_LABEL[s.status] || '')
+        ]));
+      });
+      if (!(data.status || []).length) grid.appendChild(el('span', { style: 'color:var(--text-muted)' }, '尚無應繳週期'));
+
+      const recWrap = el('div', {});
+      (data.records || []).forEach(r => {
+        recWrap.appendChild(el('div', { class: 'record-row' }, [
+          el('span', { class: 'rec-tag' + (r.type === 'supervision' ? ' supervision' : '') }, r.type === 'supervision' ? '督導' : '每月'),
+          el('span', { class: 'rec-main' }, (r.period || '—')),
+          el('span', { class: 'spacer' }),
+          el('button', { class: 'btn btn-outline', onClick: () => download(r.id, 'official_doc') }, '公文'),
+          el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'report') }, '監造報表'),
+          el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'daily_log') }, '施工日誌'),
+          el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => removeRec(p, r, cell) }, '刪除')
+        ]));
+      });
+
+      const head = el('div', { class: 'history-head' }, [
+        el('span', { class: 'history-title' }, '歷史檔案(結算日 ' + data.settlement_day + ' 日)'),
+        el('span', { class: 'spacer', style: 'flex:1' }),
+        el('button', { class: 'btn btn-primary', onClick: () => generate(p, cell) }, '＋ 產生監造報表')
+      ]);
+
+      cell.innerHTML = '';
+      cell.appendChild(el('div', { class: 'history-panel' }, [head, grid, recWrap]));
+    }
+
+    async function download(sid, kind) {
+      try { await Api.download('submissions/' + sid + '/download/' + kind); }
+      catch (e) {
+        // 409 = 尚未產出(待範本)
+        showToast(e.message, e.message.indexOf('尚未產出') >= 0 ? 'warn' : 'error');
+      }
+    }
+
+    async function generate(p, cell) {
+      const now = new Date();
+      const dp = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+      const r = await submissionDialog(dp);
+      if (!r) return;
+      const fd = new FormData();
+      fd.append('type', r.type);
+      fd.append('period', r.period);
+      fd.append('daily_log', r.file);
+      try {
+        await Api.upload('projects/' + p.id + '/submissions', fd);
+        showToast('已建立', 'success');
+        await renderHistory(p, cell);
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    async function removeRec(p, r, cell) {
+      const ok = await confirmDialog({ title: '刪除紀錄', message: '確定刪除此筆紀錄(連同檔案)?', danger: true });
+      if (!ok) return;
+      try { await Api.delete('submissions/' + r.id); showToast('已刪除', 'success'); await renderHistory(p, cell); }
+      catch (e) { showToast(e.message, 'error'); }
     }
 
     async function remove(p) {
