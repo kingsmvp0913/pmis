@@ -89,6 +89,7 @@ const NAV = [
   { hash: '#/schools', label: '🏫 學校' },
   { hash: '#/insurers', label: '🛡️ 保險公司' },
   { hash: '#/projects', label: '📋 工程' },
+  { hash: '#/parsers', label: '🧩 讀取器' },
   { hash: '#/settings', label: '⚙️ 系統設定' }
 ];
 

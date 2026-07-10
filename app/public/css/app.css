@@ -186,6 +186,11 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 .record-row .rec-main { color: var(--text); }
 .record-row .spacer { flex: 1; }
 
+/* ── 讀取器上傳結果列 ── */
+.parser-result-row { display: flex; align-items: center; gap: var(--space-3); padding: 6px 0; flex-wrap: wrap; }
+.parser-result-row .status-pill { white-space: normal; }
+.parser-result-file { font-size: var(--fs-sm); color: var(--text-muted); }
+
 /* ── Toasts ── */
 .toast-container { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: var(--z-toast); }
 .toast { padding: 10px 16px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.18); max-width: 340px; }
