@@ -299,6 +299,131 @@ describe('parser routes', () => {
   });
 });
 
+// ── 內建讀取器一鍵安裝 ──
+describe('bundled parsers', () => {
+  let app, token, adminToken;
+
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token: adminToken } = await makeApp());
+    token = adminToken;
+  });
+
+  afterEach(async () => {
+    // 清掉本區可能裝過的內建讀取器,避免暫存目錄殘留影響其他測試
+    for (const k of ['金大營造有限公司', '摯東營造有限公司', '晉林土木包工業']) {
+      try { registry.remove(k); } catch { /* noop */ }
+    }
+    db._setPoolForTesting(null);
+  });
+
+  function auth(req) { return req.set('Authorization', `Bearer ${token}`); }
+
+  async function userToken(username) {
+    const { hashPassword } = require('../server/password');
+    const hash = await hashPassword('password1');
+    const { rows } = await db.query(
+      "INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, 'user') RETURNING id",
+      [username, hash, '一般使用者']
+    );
+    return jwt.sign({ userId: rows[0].id }, 'test-secret', { expiresIn: '7d' });
+  }
+
+  test('GET /api/parsers/bundled:列出 jinda/zhidong/jinlin 且欄位齊', async () => {
+    const res = await auth(request(app).get('/api/parsers/bundled'));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+
+    const byKey = Object.fromEntries(res.body.map(b => [b.vendorKey, b]));
+    expect(byKey['金大營造有限公司']).toBeTruthy();
+    expect(byKey['摯東營造有限公司']).toBeTruthy();
+    expect(byKey['晉林土木包工業']).toBeTruthy();
+
+    const b = byKey['晉林土木包工業'];
+    expect(b.file).toBe('jinlin.pmisparser.js');
+    expect(b.version).toBe('1.0.0');
+    expect(Array.isArray(b.targetFields)).toBe(true);
+    expect(typeof b.vendorExists).toBe('boolean');
+    expect(typeof b.installed).toBe('boolean');
+    // 尚未建廠商 / 尚未安裝
+    expect(b.vendorExists).toBe(false);
+    expect(b.installed).toBe(false);
+  });
+
+  test('GET /api/parsers/bundled:登入即可(不需 admin)', async () => {
+    token = await userToken('bundleduser');
+    const res = await auth(request(app).get('/api/parsers/bundled'));
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  test('POST install-bundled:一鍵安裝並自動建廠商', async () => {
+    const res = await auth(request(app).post('/api/parsers/install-bundled'))
+      .send({ file: 'jinlin.pmisparser.js' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.vendorKey).toBe('晉林土木包工業');
+    expect(res.body.vendorCreated).toBe(true);
+    expect(res.body.status.installed).toBe(true);
+
+    // registry 真的裝好
+    expect(registry.status('晉林土木包工業').installed).toBe(true);
+
+    // vendors 表出現同名廠商
+    const { rows } = await db.query('SELECT id FROM vendors WHERE name = $1', ['晉林土木包工業']);
+    expect(rows).toHaveLength(1);
+
+    // 再查 bundled → installed:true、vendorExists:true
+    const list = await auth(request(app).get('/api/parsers/bundled'));
+    const b = list.body.find(x => x.vendorKey === '晉林土木包工業');
+    expect(b.installed).toBe(true);
+    expect(b.vendorExists).toBe(true);
+  });
+
+  test('POST install-bundled:已有同名廠商 → vendorCreated:false 仍 installed', async () => {
+    await auth(request(app).post('/api/vendors')).send({ name: '晉林土木包工業' });
+    const res = await auth(request(app).post('/api/parsers/install-bundled'))
+      .send({ file: 'jinlin.pmisparser.js' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.vendorCreated).toBe(false);
+    expect(res.body.status.installed).toBe(true);
+    expect(registry.status('晉林土木包工業').installed).toBe(true);
+
+    // 沒有多建一筆
+    const { rows } = await db.query('SELECT id FROM vendors WHERE name = $1', ['晉林土木包工業']);
+    expect(rows).toHaveLength(1);
+  });
+
+  test('POST install-bundled:非 admin → 403', async () => {
+    token = await userToken('installuser');
+    const res = await auth(request(app).post('/api/parsers/install-bundled'))
+      .send({ file: 'jinlin.pmisparser.js' });
+    expect(res.status).toBe(403);
+  });
+
+  test('POST install-bundled:路徑逃逸(../)→ 400', async () => {
+    for (const bad of ['../etc/passwd', '..\\..\\a.pmisparser.js', 'sub/dir.pmisparser.js', 'jinlin.pmisparser.js/../x']) {
+      const res = await auth(request(app).post('/api/parsers/install-bundled'))
+        .send({ file: bad });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('POST install-bundled:不存在的內建檔 → 400', async () => {
+    const res = await auth(request(app).post('/api/parsers/install-bundled'))
+      .send({ file: 'nonexistent.pmisparser.js' });
+    expect(res.status).toBe(400);
+  });
+
+  test('POST install-bundled:非 .pmisparser.js 檔名 → 400', async () => {
+    const res = await auth(request(app).post('/api/parsers/install-bundled'))
+      .send({ file: 'jinlin.js' });
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── 純函式:isValidVendorKey(廠商名稱鍵)──
 describe('registry.isValidVendorKey', () => {
   test('接受含中文的非空名稱', () => {

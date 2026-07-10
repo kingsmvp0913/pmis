@@ -12,6 +12,74 @@
     const isAdmin = !!(PmisApp.currentUser && PmisApp.currentUser.role === 'admin');
     content.appendChild(el('div', { class: 'page-title' }, '讀取器'));
 
+    // ── 內建讀取器區(主要入口,擺最上面)──
+    const bundledWrap = el('div', {});
+    content.appendChild(bundledWrap);
+
+    async function loadBundled() {
+      let items;
+      try { items = await Api.get('parsers/bundled'); }
+      catch (e) {
+        bundledWrap.innerHTML = '';
+        bundledWrap.appendChild(el('div', { class: 'card', style: 'margin-bottom:16px' }, [
+          el('div', { class: 'card-title' }, '內建讀取器'),
+          el('div', { class: 'hint' }, '無法讀取內建讀取器:' + e.message)
+        ]));
+        return;
+      }
+      renderBundled(items || []);
+    }
+
+    function renderBundled(items) {
+      bundledWrap.innerHTML = '';
+      const list = el('div', {});
+      if (!items.length) {
+        list.appendChild(el('div', { class: 'hint', style: 'margin:0' }, '沒有內建讀取器。'));
+      }
+      for (const b of items) {
+        const status = b.installed
+          ? el('span', { class: 'status-pill submitted' }, '已安裝 · v' + (b.version || '-'))
+          : el('span', { class: 'status-pill overdue' }, '未安裝');
+        list.appendChild(el('div', { class: 'record-row' }, [
+          el('span', { class: 'rec-main' }, b.vendorKey),
+          status,
+          el('span', { class: 'spacer' }),
+          bundledAction(b)
+        ]));
+      }
+      bundledWrap.appendChild(el('div', { class: 'card', style: 'margin-bottom:16px' }, [
+        el('div', { class: 'card-title' }, '內建讀取器'),
+        el('div', { class: 'hint', style: 'margin-top:0' },
+          '系統內建的廠商讀取器,一鍵安裝即可使用(必要時自動建立同名廠商)。'),
+        list
+      ]));
+    }
+
+    function bundledAction(b) {
+      if (!isAdmin) {
+        return el('span', { class: 'hint', style: 'margin:0' }, b.installed ? '已安裝' : '');
+      }
+      const label = b.installed ? '重新安裝' : '安裝';
+      const cls = b.installed ? 'btn btn-outline' : 'btn btn-primary';
+      return el('button', { class: cls, type: 'button',
+        onClick: (ev) => installBundled(b, ev.target) }, label);
+    }
+
+    async function installBundled(b, btn) {
+      if (btn) btn.disabled = true;
+      try {
+        const r = await Api.post('parsers/install-bundled', { file: b.file });
+        let msg = '已安裝 ' + (r.vendorKey || b.vendorKey);
+        if (r.vendorCreated) msg += ',並已建立廠商';
+        showToast(msg, 'success');
+        await loadBundled();
+        await load();
+      } catch (e) {
+        showToast('安裝失敗:' + e.message, 'error');
+        if (btn) btn.disabled = false;
+      }
+    }
+
     // 上傳結果面板(逐檔顯示)
     const resultPanel = el('div', {});
 
@@ -168,6 +236,7 @@
       ]));
     }
 
+    loadBundled();
     load();
   }
 
