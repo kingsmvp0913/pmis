@@ -121,6 +121,19 @@ async function migrate() {
       design_fee_pct           NUMERIC,
       created_at               TIMESTAMPTZ DEFAULT NOW()
     )`,
+
+    `CREATE TABLE IF NOT EXISTS submission_history (
+      id                SERIAL PRIMARY KEY,
+      project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      period            TEXT,
+      type              TEXT NOT NULL DEFAULT 'monthly',
+      daily_log_path    TEXT,
+      official_doc_path TEXT,
+      report_path       TEXT,
+      deadline          DATE,
+      submitted_at      TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.

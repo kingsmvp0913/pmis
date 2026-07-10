@@ -36,6 +36,32 @@ describe('db.migrate', () => {
     }
   });
 
+  test('建立 submission_history 表', async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    const { rows } = await db.query(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+    );
+    const names = rows.map(r => r.table_name);
+    expect(names).toContain('submission_history');
+  });
+
+  test('submission_history 重複 migrate 仍冪等且可插入', async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    await db.migrate();
+    await db.query("INSERT INTO projects (name) VALUES ('工程A')");
+    const { rows: proj } = await db.query('SELECT id FROM projects');
+    await db.query(
+      "INSERT INTO submission_history (project_id, period, type) VALUES ($1, '2026-07', 'monthly')",
+      [proj[0].id]
+    );
+    const { rows } = await db.query('SELECT period, type FROM submission_history');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].period).toBe('2026-07');
+    expect(rows[0].type).toBe('monthly');
+  });
+
   test('新主檔表重複 migrate 仍冪等', async () => {
     db._setPoolForTesting(freshPool());
     await db.migrate();
