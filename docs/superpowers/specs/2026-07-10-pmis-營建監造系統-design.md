@@ -27,7 +27,7 @@
 | 資料庫 | PostgreSQL(`pg`)+ `app/server/db.js`(`getPool()` / `migrate()` / `query()`),schema 以 `CREATE TABLE IF NOT EXISTS` 冪等建立;測試用 `pg-mem` 注入 |
 | 多使用者 | JWT(Bearer token)+ `bcryptjs`;首次啟動 `/api/setup/status` 回報 `needsSetup`,引導建立管理員;`verifyToken` middleware 保護 API |
 | 前端 | 原生 JS SPA:`app/public/js/views/*.js`(一個 view 一檔)、`app.css`(dark-aware CSS 變數)、`dialog.js`、`api.js`、`app.js` 路由 |
-| 安裝/啟動 | `install.ps1`(winget 靜默安裝 Node LTS + PostgreSQL 17,再跑 `scripts/setup.js` 建 DB、跑 migration、建管理員)+ `start.ps1`(背景啟動、自動開瀏覽器) |
+| 安裝/啟動 | **雙擊 `安裝.bat`**(winget 靜默裝 Node LTS + PostgreSQL 17 → `npm install` → `app/scripts/setup.js` 建 DB/migration)+ **雙擊 `啟動.bat`**(→ `app/scripts/start.js` 讀 config、開瀏覽器、啟動)。改用 `.bat` 讓不懂程式者可雙擊執行(避開 `.ps1` 雙擊限制)。未來架站則直接 `git clone` + `node app/server/index.js` + 反向代理(Caddy) |
 | 服務埠 | `localhost:4141`(避開 odoo-v2 的 3939) |
 | 檔案 | 上傳/產出檔存 `data/`;DB 只存相對路徑 |
 
@@ -35,8 +35,8 @@
 
 ```
 C:\pmis\
-├── install.ps1                  ← 一鍵安裝(winget + setup)
-├── start.ps1                    ← 一鍵啟動
+├── 安裝.bat                     ← 雙擊安裝(winget + npm + setup)
+├── 啟動.bat                     ← 雙擊啟動(→ app/scripts/start.js)
 ├── package.json
 ├── app\
 │   ├── server\
