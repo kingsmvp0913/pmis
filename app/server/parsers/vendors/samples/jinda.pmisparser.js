@@ -8,10 +8,15 @@
  * 來源:金大竹崎「第二聯」估驗表 PDF,每頁 1 天(共 80 頁);純文字可抽。
  *
  * ── 介面(對齊 registry.js 檔頭定義)──
- *   meta       = { vendorKey:'sample-jinda', version, targetFields }
- *   parse(filePath)     -> Promise<單一天(第一頁)結構>
- *   parseAll(filePath)  -> Promise<[每天結構…]>
- *   selfTest()          -> boolean  (以內建小樣本頁文字驗證重組邏輯,不依賴檔案)
+ *   meta       = { vendorKey:'金大營造有限公司', version, targetFields }
+ *   parse(filePath, ctx)     -> Promise<單一天(第一頁)結構>
+ *   parseAll(filePath, ctx)  -> Promise<[每天結構…]>
+ *   selfTest()               -> boolean  (以內建小樣本頁文字驗證重組邏輯,不依賴檔案)
+ *
+ * ── 檔型工具「注入」──
+ *   讀取器不自己 require 檔型檔或摸路徑;由 registry 於 parse/parseAll 時注入
+ *   ctx.filetypes(= app/server/parsers/filetypes 的 exports),本檔以
+ *   ctx.filetypes.extractPages(...) 取用。
  *
  * ── 逐列重組策略(PDF 換行錯位)──
  *   pdf-parse 抽出的頁文字以 \n 分行、\t/空白 分欄。單一「項次」可能:
@@ -28,9 +33,6 @@
  * 檔內漢字碼位:金大 PDF 的 CID 字型把部分漢字(如「年」)映到 CJK 相容區,
  * 已於 filetypes/pdf.js 統一做 NFKC 正規化,本檔拿到的都是標準漢字。
  */
-const path = require('path');
-const { extractPages } = require(path.join(__dirname, '..', '..', 'filetypes', 'pdf.js'));
-
 // 中文大寫項次(類別/管理費列)。
 const CJK_ITEM_IDS = ['壹', '貳', '參', '肆', '伍', '陸', '柒', '捌', '玖', '拾'];
 
@@ -196,21 +198,22 @@ function buildRow(id, tokens) {
 }
 
 /**
- * parse(filePath) — 回該檔第一天(第一頁)結構。
+ * parse(filePath, ctx) — 回該檔第一天(第一頁)結構。
+ * @param {object} ctx registry 注入;ctx.filetypes.extractPages 抽 PDF 頁文字。
  * @returns {Promise<{header, dailyRows, extras}>}
  */
-async function parse(filePath) {
-  const pages = await extractPages(filePath);
+async function parse(filePath, ctx) {
+  const pages = await ctx.filetypes.extractPages(filePath);
   if (!pages.length) return { header: {}, dailyRows: [], extras: {} };
   return parsePage(pages[0].text);
 }
 
 /**
- * parseAll(filePath) — 逐頁(逐日)解析,回每天結構陣列。
+ * parseAll(filePath, ctx) — 逐頁(逐日)解析,回每天結構陣列。
  * @returns {Promise<Array<{header, dailyRows, extras}>>}
  */
-async function parseAll(filePath) {
-  const pages = await extractPages(filePath);
+async function parseAll(filePath, ctx) {
+  const pages = await ctx.filetypes.extractPages(filePath);
   return pages.map(p => parsePage(p.text));
 }
 
@@ -262,7 +265,7 @@ function selfTest() {
 
 module.exports = {
   meta: {
-    vendorKey: 'sample-jinda',
+    vendorKey: '金大營造有限公司',
     version: '1.0.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '本日累計金額',

@@ -8,11 +8,15 @@
 const path = require('path');
 const jinda = require('../server/parsers/vendors/samples/jinda.pmisparser.js');
 
+// 檔型工具注入:讀取器不自己 require 檔型檔,由呼叫端(此處測試 / 正式為 registry)
+// 以 ctx.filetypes 注入。此測試直接帶入 filetypes 的 exports。
+const ctx = { filetypes: require('../server/parsers/filetypes') };
+
 const FIXTURE = path.join(__dirname, 'fixtures', 'jinda.pdf');
 
 describe('sample-jinda 讀取器 meta / 結構驗證', () => {
   test('meta 完整:vendorKey / version / targetFields', () => {
-    expect(jinda.meta.vendorKey).toBe('sample-jinda');
+    expect(jinda.meta.vendorKey).toBe('金大營造有限公司');
     expect(typeof jinda.meta.version).toBe('string');
     expect(Array.isArray(jinda.meta.targetFields)).toBe(true);
     expect(jinda.meta.targetFields).toEqual(
@@ -29,7 +33,7 @@ describe('sample-jinda 讀取器 meta / 結構驗證', () => {
 describe('sample-jinda parse(第一天/第一頁)', () => {
   let out;
   beforeAll(async () => {
-    out = await jinda.parse(FIXTURE);
+    out = await jinda.parse(FIXTURE, ctx);
   });
 
   test('header:工程名稱 / 填報日期(民國115→西元2026-04-08) / 星期', () => {
@@ -108,7 +112,7 @@ describe('sample-jinda parse(第一天/第一頁)', () => {
 describe('sample-jinda parseAll(逐日彙總)', () => {
   let all;
   beforeAll(async () => {
-    all = await jinda.parseAll(FIXTURE);
+    all = await jinda.parseAll(FIXTURE, ctx);
   });
 
   test('80 頁 → 80 天', () => {

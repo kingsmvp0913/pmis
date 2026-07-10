@@ -8,11 +8,16 @@
 const path = require('path');
 const zhidong = require('../server/parsers/vendors/samples/zhidong.pmisparser.js');
 
+// 檔型工具注入:讀取器不自己 require 檔型檔,由呼叫端(此處測試 / 正式為 registry)
+// 以 ctx.filetypes 注入。parse/parseAll 帶 ctx;Excel selfTest 需檔型工具建 grid,直接帶 filetypes。
+const filetypes = require('../server/parsers/filetypes');
+const ctx = { filetypes };
+
 const FIXTURE = path.join(__dirname, 'fixtures', 'zhidong.xls');
 
 describe('sample-zhidong 讀取器 meta / 結構驗證', () => {
   test('meta 完整:vendorKey / version / targetFields', () => {
-    expect(zhidong.meta.vendorKey).toBe('sample-zhidong');
+    expect(zhidong.meta.vendorKey).toBe('摯東營造有限公司');
     expect(typeof zhidong.meta.version).toBe('string');
     expect(Array.isArray(zhidong.meta.targetFields)).toBe(true);
     expect(zhidong.meta.targetFields).toEqual(
@@ -22,14 +27,14 @@ describe('sample-zhidong 讀取器 meta / 結構驗證', () => {
 
   test('selfTest 回 truthy(內建小樣本 grid 自我驗證)', () => {
     expect(typeof zhidong.selfTest).toBe('function');
-    expect(zhidong.selfTest()).toBeTruthy();
+    expect(zhidong.selfTest(filetypes)).toBeTruthy();
   });
 });
 
 describe('sample-zhidong parse(第一天 = sheet (1))', () => {
   let out;
   beforeAll(async () => {
-    out = await zhidong.parse(FIXTURE);
+    out = await zhidong.parse(FIXTURE, ctx);
   });
 
   test('header:工程名稱 / 填報日期(Excel 序號→西元 2026-06-01)', () => {
@@ -119,7 +124,7 @@ describe('sample-zhidong parse(第一天 = sheet (1))', () => {
 describe('sample-zhidong parseAll(逐日彙總)', () => {
   let all;
   beforeAll(async () => {
-    all = await zhidong.parseAll(FIXTURE);
+    all = await zhidong.parseAll(FIXTURE, ctx);
   });
 
   test('31 個日 sheet → 31 天(簽章表被排除)', () => {

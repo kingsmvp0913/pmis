@@ -11,10 +11,17 @@
  *   每個日 sheet 是「施工日誌＋估驗」整合單頁,座標固定(範圍 A1:AD70,約 280 merges)。
  *
  * ── 介面(對齊 registry.js 檔頭定義)──
- *   meta       = { vendorKey:'sample-zhidong', version, targetFields }
- *   parse(filePath)     -> Promise<單一天(第一個 (n) sheet)結構>
- *   parseAll(filePath)  -> Promise<[每天結構…]>(依 (1)…(31) 順序)
- *   selfTest()          -> boolean  (以內建小樣本 grid 驗證取值/轉換邏輯,不依賴檔案)
+ *   meta       = { vendorKey:'摯東營造有限公司', version, targetFields }
+ *   parse(filePath, ctx)     -> Promise<單一天(第一個 (n) sheet)結構>
+ *   parseAll(filePath, ctx)  -> Promise<[每天結構…]>(依 (1)…(31) 順序)
+ *   selfTest(ft)             -> boolean  (以內建小樣本 grid 驗證取值/轉換邏輯,不依賴檔案)
+ *
+ * ── 檔型工具「注入」──
+ *   讀取器不自己 require 檔型檔或摸路徑;由 registry 於 parse/parseAll 時注入
+ *   ctx.filetypes(= app/server/parsers/filetypes 的 exports),Excel 相關工具
+ *   (readWorkbook / gridFromWorksheet / colToIndex / excelSerialToISO)一律經
+ *   ctx.filetypes 取用。selfTest 因需以檔型工具建 grid,由 registry 於驗證時
+ *   把同一份 filetypes 當參數傳入(ft)。
  *
  * ── 版面座標(每個日 sheet;R 為 1-based Excel 列,欄為字母)──
  *   header:
@@ -42,41 +49,38 @@
  *   由 filetypes/xlsx.js 將每個合併區「起點值填滿整個合併區」,故本檔用合併區內任一欄
  *   索引都能取到同一值(此處固定用起點欄字母:契約數量→K、本日完成→N…)。
  */
-const path = require('path');
-const {
-  readWorkbook, gridFromWorksheet, colToIndex, excelSerialToISO,
-} = require(path.join(__dirname, '..', '..', 'filetypes', 'xlsx.js'));
-
 // 中文大寫項次(大項/管理費/稅列)。
 const CJK_ITEM_IDS = ['壹', '貳', '參', '肆', '伍', '陸', '柒', '捌', '玖', '拾'];
 
 // 估驗表結束錨(A 欄出現此字串即停)。
 const ITEM_END_ANCHOR = '營造業專業工程特定施工項目';
 
-// 各欄字母 → 0-based 索引(模組載入時算一次)。
-const COL = {
-  報表編號: colToIndex('C'), // C1
-  天氣上午: colToIndex('E'), // E2
-  天氣下午: colToIndex('I'), // I2
-  填報日期: colToIndex('R'), // R2
-  工程名稱: colToIndex('C'), // C3
-  承攬廠商: colToIndex('Q'), // Q3
-  核定工期: colToIndex('C'), // C4
-  累計工期: colToIndex('H'), // H4
-  剩餘工期: colToIndex('N'), // N4
-  開工日期: colToIndex('F'), // F6
-  完工日期: colToIndex('Q'), // Q6
-  預定進度: colToIndex('F'), // F7
-  實際進度: colToIndex('Q'), // Q7
-  項次: colToIndex('A'),
-  工程項目: colToIndex('B'),
-  單位: colToIndex('J'),
-  契約數量: colToIndex('K'),
-  本日完成數量: colToIndex('N'),
-  累計完成數量: colToIndex('Q'),
-  備註: colToIndex('T'),
-  契約單價: colToIndex('Y'),
-};
+// 各欄字母 → 0-based 索引;以注入的 ft.colToIndex 於解析時算一次(不 require 檔型檔)。
+function buildCols(colToIndex) {
+  return {
+    報表編號: colToIndex('C'), // C1
+    天氣上午: colToIndex('E'), // E2
+    天氣下午: colToIndex('I'), // I2
+    填報日期: colToIndex('R'), // R2
+    工程名稱: colToIndex('C'), // C3
+    承攬廠商: colToIndex('Q'), // Q3
+    核定工期: colToIndex('C'), // C4
+    累計工期: colToIndex('H'), // H4
+    剩餘工期: colToIndex('N'), // N4
+    開工日期: colToIndex('F'), // F6
+    完工日期: colToIndex('Q'), // Q6
+    預定進度: colToIndex('F'), // F7
+    實際進度: colToIndex('Q'), // Q7
+    項次: colToIndex('A'),
+    工程項目: colToIndex('B'),
+    單位: colToIndex('J'),
+    契約數量: colToIndex('K'),
+    本日完成數量: colToIndex('N'),
+    累計完成數量: colToIndex('Q'),
+    備註: colToIndex('T'),
+    契約單價: colToIndex('Y'),
+  };
+}
 
 // 資料列在 grid 的固定列索引(0-based)。表頭在 R9;資料自 R10(大項「壹」)起→idx 9。
 const DATA_START_IDX = 9; // R10(含大項「壹 直接工程費」)
@@ -118,7 +122,8 @@ function toPct(v) {
 }
 
 // 填報/開完工日期:Excel 序號(number)→ 'YYYY-MM-DD';已是字串日期則盡量解析。
-function toDateISO(v) {
+// excelSerialToISO 由注入的 ft 提供(不 require 檔型檔)。
+function toDateISO(v, excelSerialToISO) {
   if (v == null || v === '') return null;
   if (typeof v === 'number') return excelSerialToISO(v);
   // 少數情況值為字串(民國/西元),交由雙制辨識。
@@ -162,11 +167,14 @@ function isItemId(v) {
  * 解析單一日 sheet 的 grid → { header, dailyRows, extras }。
  * 純函式,不碰檔案;selfTest 重用之。
  *
- * @param {Array<Array<any>>} grid 由 filetypes/xlsx.js 產出(合併已填滿)
+ * @param {Array<Array<any>>} grid 由 ft.gridFromWorksheet 產出(合併已填滿)
+ * @param {object} ft   注入的檔型工具(需 colToIndex / excelSerialToISO)
  */
-function parseGrid(grid) {
+function parseGrid(grid, ft) {
+  const { colToIndex, excelSerialToISO } = ft;
+  const COL = buildCols(colToIndex);
   // ── header(固定座標)──
-  const 填報日期 = toDateISO(cell(grid, 1, COL.填報日期));      // R2
+  const 填報日期 = toDateISO(cell(grid, 1, COL.填報日期), excelSerialToISO);      // R2
   const 工程名稱 = toStr(cell(grid, 2, COL.工程名稱));          // C3
 
   const header = {
@@ -244,29 +252,34 @@ function daySheetNames(sheetNames) {
 }
 
 /**
- * parse(filePath) — 回該檔第一天(第一個 (n) sheet)結構。
+ * parse(filePath, ctx) — 回該檔第一天(第一個 (n) sheet)結構。
+ * @param {object} ctx registry 注入;ctx.filetypes 提供 readWorkbook / colToIndex / excelSerialToISO。
  */
-async function parse(filePath) {
-  const wb = readWorkbook(filePath);
+async function parse(filePath, ctx) {
+  const ft = ctx.filetypes;
+  const wb = ft.readWorkbook(filePath);
   const days = daySheetNames(wb.sheetNames);
   if (!days.length) return { header: {}, dailyRows: [], extras: {} };
-  return parseGrid(wb.sheets[days[0]]);
+  return parseGrid(wb.sheets[days[0]], ft);
 }
 
 /**
- * parseAll(filePath) — 依 (1)…(31) 逐日解析,回每天結構陣列。
+ * parseAll(filePath, ctx) — 依 (1)…(31) 逐日解析,回每天結構陣列。
  */
-async function parseAll(filePath) {
-  const wb = readWorkbook(filePath);
+async function parseAll(filePath, ctx) {
+  const ft = ctx.filetypes;
+  const wb = ft.readWorkbook(filePath);
   const days = daySheetNames(wb.sheetNames);
-  return days.map((n) => parseGrid(wb.sheets[n]));
+  return days.map((n) => parseGrid(wb.sheets[n], ft));
 }
 
-// selfTest:以內建小樣本 grid 驗證取值/日期轉換/『-』→null(不依賴檔案,安裝時可執行)。
-// 用真的 SheetJS worksheet(含 !merges)經 gridFromWorksheet 建 grid,確保合併填充邏輯也一起驗。
-function selfTest() {
+// selfTest(ft):以內建小樣本 grid 驗證取值/日期轉換/『-』→null(不依賴檔案,安裝時可執行)。
+// 用真的 SheetJS worksheet(含 !merges)經 ft.gridFromWorksheet 建 grid,確保合併填充邏輯也一起驗。
+// ft 由 registry 於驗證時注入(= filetypes 的 exports);Excel 讀取器 selfTest 需檔型工具建 grid。
+function selfTest(ft) {
   try {
     const XLSX = require('xlsx');
+    const { gridFromWorksheet } = ft;
     const ws = {};
     const set = (addr, v) => { ws[addr] = { v, t: typeof v === 'number' ? 'n' : 's' }; };
     // header
@@ -301,7 +314,7 @@ function selfTest() {
       XLSX.utils.decode_range('B12:I12'),
     ];
     const grid = gridFromWorksheet(ws);
-    const out = parseGrid(grid);
+    const out = parseGrid(grid, ft);
 
     if (out.header.填報日期 !== '2026-06-01') return false;
     if (out.header.工程名稱 !== '測試工程') return false;
@@ -338,7 +351,7 @@ function selfTest() {
 
 module.exports = {
   meta: {
-    vendorKey: 'sample-zhidong',
+    vendorKey: '摯東營造有限公司',
     version: '1.0.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
