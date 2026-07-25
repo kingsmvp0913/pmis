@@ -33,9 +33,13 @@ function createApp() {
 
 if (require.main === module) {
   const { migrate } = require('./db');
+  const { runStartupOnboarding } = require('./parser-onboarding');
   const app = createApp();
   migrate()
-    .then(() => {
+    .then(async () => {
+      // 啟動即 git pull + 掃描安裝讀取器並 upsert 廠商(best-effort,不擋啟動)。
+      await runStartupOnboarding().catch((err) =>
+        console.warn('[onboarding] 略過:', err.message));
       app.listen(PORT, () => console.log(`PMIS http://localhost:${PORT}`));
     })
     .catch((err) => {
