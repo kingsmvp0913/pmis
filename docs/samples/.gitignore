@@ -4,6 +4,8 @@
 *.xlsx
 *.pdf
 *.docx
+*.doc
+*.odt
 
 !監造報表範本/監造報表_空白公版範本.xlsm
 !驗證清單/*.xlsx
