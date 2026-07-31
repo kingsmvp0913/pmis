@@ -51,4 +51,24 @@ describe('compareBasics — 決標公告值 vs PMIS 專案主檔', () => {
       .find((r) => r.欄位 === '主辦機關');
     expect(hit.狀態).toBe('missing');
   });
+
+  test('工程編號等識別碼不做數值正規化——前導零是不同編號,不可因數值相等被誤判 match', () => {
+    // 案號格式各機關自訂,無「不會有前導零」的上界保證;若對識別碼套用數值轉換,
+    // '0123' 會被吃掉前導零變成 '123',跟真的是 '123' 的編號誤判為相同
+    const a = { ...award, 工程編號: '0123' };
+    const b = { ...award, 工程編號: '123' };
+    const hit = compareBasics(a, b).find((r) => r.欄位 === '工程編號');
+    expect(hit.狀態).toBe('diff');
+  });
+
+  test('COMPARABLE 是封閉的五欄——契約工期/開工日期決標公告推不出(人工對照開工報告表填,無從比對),監造/設計單位來自系統設定(無從比對),不可再加', () => {
+    expect(COMPARABLE).toEqual(['工程名稱', '主辦機關', '承包廠商', '契約金額', '工程編號']);
+  });
+
+  test('契約金額正規化後判 match,但回傳的主檔值仍是正規化前的原始字串,供畫面原樣顯示', () => {
+    const project = { ...award, 契約金額: '3057698.00' };
+    const hit = compareBasics(award, project).find((r) => r.欄位 === '契約金額');
+    expect(hit.狀態).toBe('match');
+    expect(hit.主檔值).toBe('3057698.00');
+  });
 });
