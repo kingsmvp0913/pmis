@@ -135,6 +135,19 @@ async function migrate() {
       submitted_at      TIMESTAMPTZ,
       created_at        TIMESTAMPTZ DEFAULT NOW()
     )`,
+
+    // 工程層一次性文件(決標公告、開工報告表)。刻意不塞進 submission_history——
+    // 那張表的語意是「每月/督導繳交週期」,綁著 period/deadline/繳交狀態計算,
+    // 混入工程層文件會污染那套邏輯。
+    `CREATE TABLE IF NOT EXISTS project_attachments (
+      id            SERIAL PRIMARY KEY,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      kind          TEXT NOT NULL,
+      file_path     TEXT NOT NULL,
+      original_name TEXT,
+      uploaded_by   INTEGER REFERENCES users(id),
+      uploaded_at   TIMESTAMPTZ DEFAULT NOW()
+    )`,
   ];
 
   // Build set of tables that already exist so we can skip them.
