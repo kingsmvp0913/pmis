@@ -293,7 +293,7 @@
           const dl = el('button', { class: 'btn', type: 'button' }, '下載');
           dl.addEventListener('click', () => Api.download('attachments/' + a.id + '/download')
             .catch((e) => showToast(e.message, 'error')));
-          const rm = el('button', { class: 'btn btn-remove', type: 'button' }, '刪除');
+          const rm = el('button', { class: 'btn btn-danger', type: 'button' }, '刪除');
           rm.addEventListener('click', async () => {
             const ok = await confirmDialog({
               title: '刪除附件', message: `確定刪除「${a.original_name || ''}」?`, danger: true,
