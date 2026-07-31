@@ -13,6 +13,7 @@
  *   firstValue(rows, label)   取某標籤第一個「有值」的列(標籤換行續行無值,須跳過)
  *   parseAmount(v)            '3,122,168元' -> 3122168;非此格式回 null
  *   parseDirectFields(rows)   標籤與值同列的 4 個錨點
+ *   winningVendor(rows)       由「投標廠商N」群組取「是否得標=是」那家
  */
 
 // 標籤 → 輸出欄位。全部 28 份樣本實測皆為「標籤與值同列」。
@@ -58,6 +59,30 @@ function parseAmount(v) {
 }
 
 /**
+ * 由「投標廠商N」群組取得標廠商名稱。
+ *
+ * 決標公告會列出所有投標廠商,**得標的不必然是第一家**——28 份樣本中有 4 份不是
+ * (仁德第 2、四湖永慶第 3、豐榮第 2、鹿場第 3)。故一律以群組內的
+ * 「是否得標 = 是」判定,取第一個「廠商名稱」是錯的。
+ *
+ * @param {Array<{label,value}>} rows
+ * @returns {string|null}
+ */
+function winningVendor(rows) {
+  let name = null;
+  for (const r of rows || []) {
+    if (!r) continue;
+    if (/^投標廠商\d+$/.test(r.label)) { name = null; continue; }
+    if (r.label === '廠商名稱') { name = r.value || null; continue; }
+    if (r.label === '是否得標') {
+      if (r.value === '是' && name) return name;
+      name = null;
+    }
+  }
+  return null;
+}
+
+/**
  * 抽出標籤與值同列的 4 個錨點。任一欄抽不到就是 null,其餘照抽。
  * @param {Array<{label,value}>} rows
  * @returns {{工程名稱:string|null, 主辦機關:string|null, 工程編號:string|null, 契約金額:number|null}}
@@ -69,4 +94,6 @@ function parseDirectFields(rows) {
   return out;
 }
 
-module.exports = { flattenRows, firstValue, parseAmount, parseDirectFields };
+module.exports = {
+  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor,
+};

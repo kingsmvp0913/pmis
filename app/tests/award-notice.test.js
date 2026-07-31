@@ -1,5 +1,5 @@
 const {
-  flattenRows, firstValue, parseAmount, parseDirectFields,
+  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor,
 } = require('../server/award-notice');
 
 describe('flattenRows / firstValue — 跨頁攤平與錨點查找', () => {
@@ -71,5 +71,58 @@ describe('parseDirectFields — 標籤與值同列的 4 個錨點', () => {
     for (const no of ['A1150608', 'TKPS-A1150603', 'DRJH-1140923', 'ywjh11504', '114-17']) {
       expect(parseDirectFields([{ label: '標案案號', value: no }]).工程編號).toBe(no);
     }
+  });
+});
+
+describe('winningVendor — 得標廠商必須靠「是否得標」判定', () => {
+  test('得標的是第 2 家時不得取第一家', () => {
+    // 仁德國小實例:投標廠商1 落標、投標廠商2 得標。取第一家會把落標廠商寫成契約基準
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商代碼', value: '87089760' },
+      { label: '廠商名稱', value: '陳宏鈞土木包工業' },
+      { label: '是否得標', value: '否' },
+      { label: '投標廠商2', value: '' },
+      { label: '廠商代碼', value: '12345678' },
+      { label: '廠商名稱', value: '展翔營造股份有限公司' },
+      { label: '是否得標', value: '是' },
+    ];
+    expect(winningVendor(rows)).toBe('展翔營造股份有限公司');
+  });
+
+  test('得標的是第 3 家(四湖永慶、鹿場實例)', () => {
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '甲營造' },
+      { label: '是否得標', value: '否' },
+      { label: '投標廠商2', value: '' },
+      { label: '廠商名稱', value: '乙營造' },
+      { label: '是否得標', value: '否' },
+      { label: '投標廠商3', value: '' },
+      { label: '廠商名稱', value: '富森土木包工業' },
+      { label: '是否得標', value: '是' },
+    ];
+    expect(winningVendor(rows)).toBe('富森土木包工業');
+  });
+
+  test('沒有任何一家「是否得標=是」回 null(不猜第一家)', () => {
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '甲營造' },
+      { label: '是否得標', value: '否' },
+    ];
+    expect(winningVendor(rows)).toBe(null);
+  });
+
+  test('決標品項區塊的「得標廠商」不得污染判定', () => {
+    // 決標公告後段「決標品項」也會出現廠商名,但那不是投標廠商群組
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '甲營造' },
+      { label: '是否得標', value: '否' },
+      { label: '第1品項', value: '' },
+      { label: '得標廠商', value: '甲營造' },
+    ];
+    expect(winningVendor(rows)).toBe(null);
   });
 });
