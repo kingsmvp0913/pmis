@@ -219,6 +219,51 @@
     ]);
     content.appendChild(card);
 
+    // 寫監造報表要開 Excel COM、可能重試失敗,比一般存檔重得多。
+    // 故必須是獨立按鈕——否則改個保險到期日也會去開一次 Excel。
+    if (!isNew) {
+      const 工期I = el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
+      const 開工I = el('input', { class: 'form-control', type: 'date',
+        value: p.start_date ? String(p.start_date).slice(0, 10) : '' });
+      const supI = el('input', { class: 'form-control', type: 'text', value: p.supervisor_firm || '' });
+      const desI = el('input', { class: 'form-control', type: 'text', value: p.designer_firm || '' });
+      const basicsErr = el('div', { class: 'error-msg', style: 'display:none' });
+      const writeBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '寫入監造報表');
+
+      writeBtn.addEventListener('click', async () => {
+        basicsErr.style.display = 'none';
+        writeBtn.disabled = true;
+        try {
+          const values = {
+            工程名稱: nameI.value.trim(), 監造單位: supI.value.trim(),
+            主辦機關: schoolI.options[schoolI.selectedIndex] ? schoolI.options[schoolI.selectedIndex].textContent : '',
+            設計單位: desI.value.trim(),
+            承包廠商: vendorI.options[vendorI.selectedIndex] ? vendorI.options[vendorI.selectedIndex].textContent : '',
+            契約金額: awardI.value.trim(), 契約工期: 工期I.value.trim(),
+            開工日期: 開工I.value, 工程編號: noI.value.trim(),
+          };
+          const r = await Api.post('projects/' + id + '/basics', { values });
+          showToast(`已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
+        } catch (e) {
+          const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
+          basicsErr.textContent = e.message + suffix;
+          basicsErr.style.display = '';
+        } finally { writeBtn.disabled = false; }
+      });
+
+      content.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'card-title' }, '監造報表基本資料'),
+        el('div', { class: 'hint', style: 'margin-top:0' },
+          '契約工期與開工日期須對照開工報告表填寫,系統不會自動帶入。完工期限由範本公式算出。'),
+        el('div', { class: 'form-group' }, [el('label', {}, '監造單位'), supI]),
+        el('div', { class: 'form-group' }, [el('label', {}, '設計單位'), desI]),
+        el('div', { class: 'form-group' }, [el('label', {}, '契約工期(日曆天)'), 工期I]),
+        el('div', { class: 'form-group' }, [el('label', {}, '開工日期'), 開工I]),
+        el('div', { class: 'form-actions' }, [writeBtn]),
+        basicsErr,
+      ]));
+    }
+
     // 決標公告解析結果 → 表單。廠商/學校對不到時當場提供建立鈕,
     // 因為 vendors 只有 name 一欄、schools 只有 name + county,沒有其他要填的。
     function applyParsed(data) {
