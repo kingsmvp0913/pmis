@@ -38,6 +38,7 @@ async function query(text, params) {
 /**
  * Creates the base application tables if they don't exist.
  * Safe to call multiple times (idempotent via IF NOT EXISTS + existence probe).
+ * 同時做欄位級冪等異動(見 ALTERS)。
  *
  * @returns {Promise<void>}
  */
@@ -157,6 +158,25 @@ async function migrate() {
     } catch (err) {
       // Ignore "table already exists" (pg code 42P07)
       if (err.code !== '42P07') throw err;
+    }
+  }
+
+  // 欄位級異動(冪等)。刻意不用 ADD COLUMN IF NOT EXISTS——pg-mem 支援不一致,
+  // 且既有建表段已採「先查 information_schema 再決定跑不跑」的手法,沿用同一套。
+  const ALTERS = [
+    ['projects', 'supervisor_firm', 'TEXT'], // 監造單位,空則吊 settings 預設
+    ['projects', 'designer_firm', 'TEXT'],   // 設計單位,空則吊 settings 預設
+  ];
+  const { rows: colRows } = await query(
+    "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
+  );
+  const haveCol = new Set(colRows.map((r) => `${r.table_name}.${r.column_name}`));
+  for (const [table, col, type] of ALTERS) {
+    if (haveCol.has(`${table}.${col}`)) continue;
+    try {
+      await query(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+    } catch (err) {
+      if (err.code !== '42701') throw err; // 42701 = duplicate_column
     }
   }
 }

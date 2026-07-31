@@ -5,7 +5,7 @@ const request = require('supertest');
 const { newDb } = require('pg-mem');
 const db = require('../server/db');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
-const { registerRoutes: registerSettingsRoutes } = require('../server/settings');
+const { registerRoutes: registerSettingsRoutes, getFirmDefaults } = require('../server/settings');
 
 function freshPool() {
   const mem = newDb();
@@ -58,5 +58,66 @@ describe('settlement-day 設定', () => {
     expect(tooLow.status).toBe(400);
     const tooHigh = await auth(request(app).put('/api/settings/settlement-day')).send({ settlement_day: 29 });
     expect(tooHigh.status).toBe(400);
+  });
+});
+
+describe('監造/設計單位系統預設', () => {
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  test('未設定時兩者皆 null(不假設等於某家事務所)', async () => {
+    const { app } = await makeAppWithToken();
+    expect(app).toBeDefined();
+    await expect(getFirmDefaults()).resolves.toEqual({
+      supervisor_firm: null, designer_firm: null,
+    });
+  });
+
+  test('PUT 後 GET 取得同值', async () => {
+    const { app, token } = await makeAppWithToken();
+    const put = await request(app).put('/api/settings/firms')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ supervisor_firm: '呂罡銘建築師事務所', designer_firm: '呂罡銘建築師事務所' });
+    expect(put.status).toBe(200);
+
+    const get = await request(app).get('/api/settings/firms')
+      .set('Authorization', `Bearer ${token}`);
+    expect(get.body).toEqual({
+      supervisor_firm: '呂罡銘建築師事務所', designer_firm: '呂罡銘建築師事務所',
+    });
+  });
+
+  test('只更新其中一個不會把另一個洗掉', async () => {
+    const { app, token } = await makeAppWithToken();
+    await request(app).put('/api/settings/firms').set('Authorization', `Bearer ${token}`)
+      .send({ supervisor_firm: '甲事務所', designer_firm: '乙事務所' });
+    await request(app).put('/api/settings/firms').set('Authorization', `Bearer ${token}`)
+      .send({ supervisor_firm: '丙事務所' });
+    const get = await request(app).get('/api/settings/firms')
+      .set('Authorization', `Bearer ${token}`);
+    expect(get.body).toEqual({ supervisor_firm: '丙事務所', designer_firm: '乙事務所' });
+  });
+});
+
+describe('migrate 欄位級異動', () => {
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  test('projects 取得 supervisor_firm / designer_firm 且重跑 migrate 不炸', async () => {
+    // migrate() 在每次啟動都會跑;不冪等會讓第二次啟動直接掛掉
+    await makeAppWithToken();
+    await db.migrate();
+    const { rows } = await db.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'projects'"
+    );
+    const cols = rows.map((r) => r.column_name);
+    expect(cols).toContain('supervisor_firm');
+    expect(cols).toContain('designer_firm');
   });
 });

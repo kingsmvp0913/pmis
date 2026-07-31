@@ -29,6 +29,35 @@
         el('button', { class: 'btn btn-primary', onClick: save }, '儲存')
       ])
     ]));
+
+    let firms = { supervisor_firm: '', designer_firm: '' };
+    try { firms = await Api.get('settings/firms'); }
+    catch (e) { showToast(e.message, 'error'); }
+
+    const supI = el('input', { class: 'form-control', type: 'text', value: firms.supervisor_firm || '' });
+    const desI = el('input', { class: 'form-control', type: 'text', value: firms.designer_firm || '' });
+
+    async function saveFirms() {
+      try {
+        await Api.put('settings/firms', {
+          supervisor_firm: supI.value.trim(),
+          designer_firm: desI.value.trim(),
+        });
+        showToast('已儲存', 'success');
+      } catch (e) { showToast(e.message, 'error'); }
+    }
+
+    content.appendChild(el('div', { class: 'card' }, [
+      el('div', { class: 'card-title' }, '監造 / 設計單位預設'),
+      el('div', { class: 'form-group' }, [el('label', {}, '監造單位'), supI]),
+      el('div', { class: 'form-group' }, [
+        el('label', {}, '設計單位'), desI,
+        el('div', { class: 'hint' }, '填工程基本資料時的預設值;個別工程若不同家,可在該工程頁覆寫。')
+      ]),
+      el('div', { class: 'form-actions' }, [
+        el('button', { class: 'btn btn-primary', onClick: saveFirms }, '儲存')
+      ])
+    ]));
   }
 
   PmisApp.registerRoute('#/settings', (content) => render(content));
