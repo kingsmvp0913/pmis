@@ -1,5 +1,5 @@
 const {
-  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor,
+  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor, parseAwardNotice,
 } = require('../server/award-notice');
 
 describe('flattenRows / firstValue — 跨頁攤平與錨點查找', () => {
@@ -124,5 +124,44 @@ describe('winningVendor — 得標廠商必須靠「是否得標」判定', () =
       { label: '得標廠商', value: '甲營造' },
     ];
     expect(winningVendor(rows)).toBe(null);
+  });
+});
+
+describe('parseAwardNotice — 組合輸出 5 值', () => {
+  const pages = [
+    { page: 1, rows: [
+      { label: '機關名稱', value: '雲林縣元長鄉仁德國民小學' },
+      { label: '標案案號', value: 'A1150519' },
+      { label: '標案名稱', value: '仁德國小114年度老舊廁所整修工程' },
+    ] },
+    { page: 4, rows: [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '陳宏鈞土木包工業' },
+      { label: '是否得標', value: '否' },
+      { label: '投標廠商2', value: '' },
+      { label: '廠商名稱', value: '展翔營造股份有限公司' },
+      { label: '是否得標', value: '是' },
+      { label: '總決標金額', value: '2,406,478元' },
+    ] },
+  ];
+
+  test('5 值齊出,且不含契約工期(決標公告推不出,見 spec §4.3)', () => {
+    const out = parseAwardNotice(pages);
+    expect(out).toEqual({
+      工程名稱: '仁德國小114年度老舊廁所整修工程',
+      主辦機關: '雲林縣元長鄉仁德國民小學',
+      承包廠商: '展翔營造股份有限公司',
+      契約金額: 2406478,
+      工程編號: 'A1150519',
+    });
+    expect(out).not.toHaveProperty('契約工期');
+  });
+
+  test('整份抽不到任何文字視為掃描件,直接 throw 且帶 code', () => {
+    // 掃描件不得靜默回一堆 null——那會讓承辦人以為「解析過了只是沒抓到」
+    const err = (() => { try { parseAwardNotice([{ page: 1, rows: [] }]); } catch (e) { return e; } })();
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe('SCANNED_PDF');
+    expect(err.message).toMatch(/掃描件/);
   });
 });

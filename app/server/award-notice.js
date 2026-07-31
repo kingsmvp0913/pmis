@@ -14,7 +14,11 @@
  *   parseAmount(v)            '3,122,168元' -> 3122168;非此格式回 null
  *   parseDirectFields(rows)   標籤與值同列的 4 個錨點
  *   winningVendor(rows)       由「投標廠商N」群組取「是否得標=是」那家
+ *   parseAwardNotice(pages)   組合上述,純函式輸出 5 值;掃描件 throw
+ *   readAwardNotice(fileOrBuffer)  讀檔(路徑或 Buffer)後解析,薄薄一層 IO
  */
+
+const { extractRows } = require('./parsers/filetypes/pdf');
 
 // 標籤 → 輸出欄位。全部 28 份樣本實測皆為「標籤與值同列」。
 const DIRECT_ANCHORS = [
@@ -94,6 +98,41 @@ function parseDirectFields(rows) {
   return out;
 }
 
+/**
+ * 解析決標公告 → 5 值。純函式,吃 extractRows 的輸出。
+ *
+ * 整份抽不到任何文字 = 掃描件。此時直接 throw(帶 code 'SCANNED_PDF')而非回滿滿 null,
+ * 否則承辦人會誤以為「已解析、只是沒抓到」而放行。不做 OCR fallback。
+ *
+ * @param {Array<{page:number, rows:Array<{label,value}>}>} pages
+ * @returns {{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號}}
+ */
+function parseAwardNotice(pages) {
+  const rows = flattenRows(pages);
+  if (!rows.some((r) => r && (r.label || r.value))) {
+    const err = new Error('此決標公告為掃描件(PDF 內無可抽取文字),無法自動解析');
+    err.code = 'SCANNED_PDF';
+    throw err;
+  }
+  const direct = parseDirectFields(rows);
+  return {
+    工程名稱: direct.工程名稱,
+    主辦機關: direct.主辦機關,
+    承包廠商: winningVendor(rows),
+    契約金額: direct.契約金額,
+    工程編號: direct.工程編號,
+  };
+}
+
+/**
+ * 讀檔並解析。上傳走記憶體時直接傳 Buffer,不落地暫存檔。
+ * @param {string|Buffer} fileOrBuffer
+ * @returns {Promise<{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號}>}
+ */
+async function readAwardNotice(fileOrBuffer) {
+  return parseAwardNotice(await extractRows(fileOrBuffer));
+}
+
 module.exports = {
-  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor,
+  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor, parseAwardNotice, readAwardNotice,
 };
