@@ -262,6 +262,53 @@
         el('div', { class: 'form-actions' }, [writeBtn]),
         basicsErr,
       ]));
+
+      const attBox = el('div', { class: 'table-wrap' });
+      const attCard = el('div', { class: 'card' }, [
+        el('div', { class: 'card-title' }, '附件'),
+        attBox,
+      ]);
+      content.appendChild(attCard);
+
+      const KIND_LABEL = { award_notice: '決標公告', kickoff_report: '開工報告表' };
+
+      async function loadAttachments() {
+        attBox.innerHTML = '';
+        let list = [];
+        try { list = await Api.get('projects/' + id + '/attachments'); }
+        catch (e) { showToast(e.message, 'error'); return; }
+        if (!list.length) {
+          attBox.appendChild(el('div', { class: 'hint' }, '尚無附件。'));
+          return;
+        }
+        const rows = list.map((a) => {
+          const dl = el('button', { class: 'btn', type: 'button' }, '下載');
+          dl.addEventListener('click', () => Api.download('attachments/' + a.id + '/download')
+            .catch((e) => showToast(e.message, 'error')));
+          const rm = el('button', { class: 'btn btn-remove', type: 'button' }, '刪除');
+          rm.addEventListener('click', async () => {
+            const ok = await confirmDialog({
+              title: '刪除附件', message: `確定刪除「${a.original_name || ''}」?`, danger: true,
+            });
+            if (!ok) return;
+            try { await Api.delete('attachments/' + a.id); await loadAttachments(); }
+            catch (e) { showToast(e.message, 'error'); }
+          });
+          return el('tr', {}, [
+            el('td', {}, KIND_LABEL[a.kind] || a.kind),
+            el('td', {}, a.original_name || ''),
+            el('td', {}, String(a.uploaded_at || '').slice(0, 10)),
+            el('td', {}, [dl, rm]),
+          ]);
+        });
+        attBox.appendChild(el('table', { class: 'data' }, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', {}, '類型'), el('th', {}, '檔名'), el('th', {}, '上傳日'), el('th', {}, ''),
+          ])]),
+          el('tbody', {}, rows),
+        ]));
+      }
+      loadAttachments();
     }
 
     // 決標公告解析結果 → 表單。廠商/學校對不到時當場提供建立鈕,
