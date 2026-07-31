@@ -19,13 +19,24 @@ const { compareBasics, basicsToOperations, CELL_OF } = require('./project-basics
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { getFirmDefaults } = require('./settings');
-const { excelSerialToISO } = require('./parsers/filetypes/xlsx');
+const { excelSerialToISO, isoToExcelSerial } = require('./parsers/filetypes/xlsx');
 
 // 決標公告只讀不存,走記憶體即可,不落暫存檔。
 const upload = multer({ storage: multer.memoryStorage() });
 
 // 9 值全部必填 —— CELL_OF 的鍵就是完整清單,避免兩處各維護一份而漂移。
 const REQUIRED = Object.keys(CELL_OF);
+
+// 這三欄會被送進型別化的目的地(Excel 日期序號 / PostgreSQL DATE、NUMERIC),格式必須在
+// 落檔前驗:renameSync 一旦成功 .xlsm 就已定案,若之後 UPDATE 才因型別錯誤(22P02)失敗,
+// 就會留下「報表已改、主檔沒改」的半套狀態,而且沒有補償機制。
+// 驗證結果併進硬擋的同一份 fields ——「這欄要回頭改」對承辦人是同一件事,
+// 分成兩種回應形狀只會讓前端各寫一套。
+const FORMAT_OK = {
+  契約工期: (v) => Number.isInteger(Number(v)) && Number(v) >= 1,
+  開工日期: (v) => isoToExcelSerial(v) != null, // 已含日曆合法性(2/30 這種不放行)
+  契約金額: (v) => Number.isFinite(Number(v)),  // '3,057,698' 這類千分位會被擋下
+};
 
 // projects.id 是 SERIAL(int4),非此形狀的 :id 永遠比不到任何一列。
 // 不先擋掉的話有兩個後果:PostgreSQL 會以型別錯誤(22P02/22003)中斷這句 SQL、
@@ -86,13 +97,16 @@ function registerRoutes(app) {
           },
         });
       } catch (err) {
-        // 掃描件是「這份檔案不能用」,屬 400;其餘視為伺服器端問題
-        const status = err.code === 'SCANNED_PDF' ? 400 : 500;
-        res.status(status).json({ error: err.message });
+        // 掃描件是「這份檔案不能用」,屬 400,訊息本來就是寫給承辦人看的,原樣回。
+        if (err.code === 'SCANNED_PDF') return res.status(400).json({ error: err.message });
+        // 其餘視為伺服器端問題:內部訊息(路徑、解析器細節)只留 log,不回給前端。
+        console.error('[project-basics] 決標公告解析失敗:', err);
+        res.status(500).json({ error: '決標公告解析失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
       }
     });
 
   app.post('/api/projects/:id/basics', verifyToken, async (req, res) => {
+    let tmp = null;
     try {
       // 先確認工程存在再談內容:對不存在的工程回報「缺哪些欄位」是誤導,
       // 更要緊的是不能在確認之前 ensureWorkbook —— 那會替一個不存在的工程建出常駐報表檔,
@@ -101,21 +115,42 @@ function registerRoutes(app) {
       if (!p) return res.status(404).json({ error: '找不到工程' });
 
       const values = (req.body && req.body.values) || {};
-      const missing = REQUIRED.filter((k) => values[k] == null || values[k] === '');
-      if (missing.length) {
-        return res.status(400).json({ error: '以下欄位尚未裁決或未填', fields: missing });
+      // 未填與格式不合法一次列全,不在第一個問題就中斷 —— 只報第一個會讓承辦人來回送好幾次。
+      const fields = REQUIRED.filter((k) => {
+        const v = values[k];
+        if (v == null || v === '') return true;
+        return FORMAT_OK[k] ? !FORMAT_OK[k](v) : false;
+      });
+      if (fields.length) {
+        return res.status(400).json({ error: '以下欄位尚未裁決、未填或格式不正確', fields });
       }
 
       const dest = ensureWorkbook(req.params.id);
       // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
-      const tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}.xlsm`);
+      tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}.xlsm`);
       await fillTemplate(dest, tmp, basicsToOperations(values));
+      // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await:並行安全靠 fillTemplate 內部的
+      // _chain 全域序列化,加上 renameSync 在同一個 microtask 續行中同步跑完 —— 這是隱性不變量。
+      // 中間一 await,另一個請求的 COM job 就會插隊,把還沒寫完的 tmp rename 成本尊。
       fs.renameSync(tmp, dest);
 
-      // 完工期限由範本公式 =B8+B7-1 算出,讀回來當主檔的 contract_completion_date
+      // 完工期限由範本公式 =B8+B7-1 算出,讀回來當主檔的 contract_completion_date。
+      // 只認「數值格且不早於開工日期」:SheetJS 對公式錯誤格回 t:'e',v 是錯誤碼小整數
+      // (#VALUE!=15、#REF!=23),只看 v != null 的話 excelSerialToISO(15) 會回 '1900-01-15'
+      // 照寫進主檔 —— 承辦人收到 200,主檔卻是假日期。=B8+B7-1 且工期至少 1 天,
+      // 故正常結果必然 >= 開工日期序號,拿它當下界比寫死一個年份區間更貼合語意。
       const wb = XLSX.readFile(dest, { sheets: ['工程基本資料'] });
       const b9 = wb.Sheets['工程基本資料'] && wb.Sheets['工程基本資料'].B9;
-      const 完工期限 = b9 && b9.v != null ? excelSerialToISO(b9.v) : null;
+      const startSerial = isoToExcelSerial(values.開工日期); // 上面已驗過,必非 null
+      const 完工期限 = (b9 && b9.t === 'n' && Number.isFinite(b9.v) && b9.v >= startSerial)
+        ? excelSerialToISO(b9.v)
+        : null;
+      if (完工期限 == null) {
+        console.error('[project-basics] B9 完工期限非日期值,已中止回寫主檔:', b9);
+        return res.status(500).json({
+          error: '監造報表已更新,但完工期限未算出;為免寫入錯誤日期,已中止回寫工程主檔,請檢查報表後重送',
+        });
+      }
 
       await query(
         `UPDATE projects
@@ -130,11 +165,18 @@ function registerRoutes(app) {
     } catch (err) {
       // 分流:ensureWorkbook 的 id 驗證屬用戶端輸入問題(上方守門已擋掉,這裡是後備),
       // 回 400 而非 500,免得承辦人以為是系統故障而不去檢查網址。
-      // 其餘(範本缺檔、Excel COM 失敗、DB 故障)才是伺服器問題:除了回 message,
-      // 另把整個 error 留在 server log —— 只回 message 會丟掉 COM 失敗的現場,事後查不出原因。
-      const clientErr = /projectId 不合法/.test(err.message || '');
-      if (!clientErr) console.error('[project-basics] 寫入工程基本資料失敗:', err);
-      res.status(clientErr ? 400 : 500).json({ error: err.message });
+      if (/projectId 不合法/.test(err.message || '')) {
+        return res.status(400).json({ error: '網址中的工程 id 不合法' });
+      }
+      // 其餘(範本缺檔、Excel COM 失敗、DB 故障)是伺服器問題。細節只留 server log:
+      // err.message 可能含「公版範本不存在:<絕對路徑>」這類伺服器結構,不該回給前端;
+      // 但也不能只回一句話就把現場丟掉,故整個 error(含 stack)照原樣寫進 log。
+      console.error('[project-basics] 寫入工程基本資料失敗:', err);
+      res.status(500).json({ error: '寫入監造報表失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
+    } finally {
+      // rename 成功後 tmp 已不存在;失敗時則會留下半寫的活頁簿在專案報表目錄裡,清掉。
+      // 清除本身失敗不得覆蓋原始錯誤(回應此時已送出),故整段吞掉。
+      if (tmp) { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
     }
   });
 }

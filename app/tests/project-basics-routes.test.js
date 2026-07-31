@@ -8,6 +8,7 @@ process.env.PMIS_DATA_DIR = TMP;
 
 const express = require('express');
 const request = require('supertest');
+const XLSX = require('xlsx');
 const { newDb } = require('pg-mem');
 const db = require('../server/db');
 
@@ -50,6 +51,31 @@ async function makeApp() {
   );
   return { app, token: setup.body.token, projectId: prows[0].id };
 }
+
+// 會真的落檔的測試一律另開一個專案:與「硬擋時不得建立報表檔」共用 project_<id>
+// 目錄會讓兩者依執行順序互相污染。
+async function addProject(baseId) {
+  const base = (await db.query('SELECT * FROM projects WHERE id = $1', [baseId])).rows[0];
+  const { rows } = await db.query(
+    `INSERT INTO projects (project_no, name, vendor_id, school_id, award_amount)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    ['ywjh11504b', '第二件工程', base.vendor_id, base.school_id, 3057698]
+  );
+  return rows[0].id;
+}
+
+// Excel COM 與檔案搬移不在單元測範圍:把 rename 與讀回也擋掉,才驗得到「讀回 B9 → 回寫主檔」
+// 這段business logic。b9 由各測試指定,用來模擬正常值與公式錯誤格。
+function mockWorkbookIO(b9) {
+  const rename = jest.spyOn(fs, 'renameSync').mockImplementation(() => {});
+  const read = jest.spyOn(XLSX, 'readFile').mockReturnValue({ Sheets: { 工程基本資料: { B9: b9 } } });
+  return () => { rename.mockRestore(); read.mockRestore(); };
+}
+
+// pg 依驅動可能把 DATE 回成 Date 或字串,測試只關心日曆上的那一天
+const isoDay = (v) => (v instanceof Date
+  ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`
+  : String(v).slice(0, 10));
 
 const FULL = {
   工程名稱: '115年度宜梧國中老舊廁所整修工程',
@@ -154,5 +180,82 @@ describe('POST /api/projects/:id/basics — 專案不存在', () => {
     const res = await request(app).post('/api/projects/abc/basics')
       .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL } });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/projects/:id/basics — 值的格式', () => {
+  // 格式不合法的值送進 UPDATE 會讓 PostgreSQL 丟 22P02,而此時 .xlsm 已經 rename 定案、
+  // 沒有補償機制 → 「報表已改、主檔沒改」的半套狀態。故格式必須在落檔前擋下。
+  test('格式不合法與未填併在同一份 fields,一次列全', async () => {
+    const { app, token, projectId } = await makeApp();
+    const res = await request(app).post(`/api/projects/${projectId}/basics`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ values: { ...FULL, 契約金額: '3,057,698', 開工日期: '2026/06/19', 契約工期: '一百二十' } });
+    expect(res.status).toBe(400);
+    expect(res.body.fields.sort()).toEqual(['契約工期', '契約金額', '開工日期'].sort());
+  });
+});
+
+describe('POST /api/projects/:id/basics — 成功路徑', () => {
+  test('回 200 與完工期限,7 欄回寫主檔,且 vendor_id/school_id 不被改綁', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const before = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+    // 46311 = 開工 2026-06-19(46192)+ 契約工期 120 - 1,即範本 B9 的 =B8+B7-1
+    const restore = mockWorkbookIO({ t: 'n', v: 46311 });
+    try {
+      const res = await request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ values: { ...FULL, 工程名稱: '改過的工程名稱' } });
+      expect(res.status).toBe(200);
+      expect(res.body.完工期限).toBe('2026-10-16');
+
+      const after = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+      // 承包廠商/主辦機關即使被裁決成新值也只更新報表值,不動外鍵(spec §5.3)
+      expect(after.vendor_id).toBe(before.vendor_id);
+      expect(after.school_id).toBe(before.school_id);
+      // 該寫的 7 欄
+      expect(after.project_no).toBe(FULL.工程編號);
+      expect(after.name).toBe('改過的工程名稱');
+      expect(Number(after.award_amount)).toBe(FULL.契約金額);
+      expect(isoDay(after.start_date)).toBe('2026-06-19');
+      expect(isoDay(after.contract_completion_date)).toBe('2026-10-16');
+      expect(after.supervisor_firm).toBe(FULL.監造單位);
+      expect(after.designer_firm).toBe(FULL.設計單位);
+    } finally { restore(); }
+  });
+
+  test('B9 是公式錯誤格時不得回 200、不得回寫主檔(錯誤碼會被當成 1900 年的日期)', async () => {
+    // SheetJS 對 #VALUE! 回 { t:'e', v:15 };只看 v != null 的話 excelSerialToISO(15)
+    // 會回 '1900-01-15' 並照寫進 contract_completion_date —— 假成功 + 髒資料。
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const before = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+    const restore = mockWorkbookIO({ t: 'e', v: 15 });
+    try {
+      const res = await request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL } });
+      expect(res.status).not.toBe(200);
+      const after = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+      expect(after.contract_completion_date == null).toBe(true);
+      expect(after.name).toBe(before.name);
+    } finally { restore(); }
+  });
+
+  test('寫入失敗時不留暫存檔、原檔完好,且錯誤訊息不外洩伺服器內部細節', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const { fillTemplate } = require('../server/template-engine');
+    // 模擬 COM 寫到一半失敗:tmp 已產生但 job 未完成
+    fillTemplate.mockImplementationOnce(async (dest, tmp) => {
+      fs.writeFileSync(tmp, '半寫的活頁簿');
+      throw new Error(`Excel 驅動重試 3 次仍失敗:輸出 ${tmp}`);
+    });
+    const res = await request(app).post(`/api/projects/${id}/basics`)
+      .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL } });
+    expect(res.status).toBe(500);
+    const dir = path.join(TMP, 'reports', `project_${id}`);
+    expect(fs.readdirSync(dir)).toEqual(['監造報表.xlsm']);
+    expect(res.body.error).not.toMatch(/Excel|xlsm|tmp-/);
   });
 });
