@@ -27,7 +27,12 @@ const Api = {
       throw new Error('Unauthorized');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(data.error || `HTTP ${res.status}`);
+      // 硬擋回應除了訊息還帶一份出問題的欄位清單,只丟 message 會讓 view 沒辦法指出是哪幾欄
+      if (Array.isArray(data.fields)) err.fields = data.fields;
+      throw err;
+    }
     return data;
   },
 
