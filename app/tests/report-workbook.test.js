@@ -33,4 +33,34 @@ describe('report-workbook — 專案監造報表常駐檔', () => {
   test('不同專案各自一份,互不干擾', () => {
     expect(ensureWorkbook(3)).not.toBe(ensureWorkbook(4));
   });
+
+  // 路由層是 const dest = ensureWorkbook(req.params.id),req.params.id 未經 DB 查驗就直接進來。
+  // Express 會對路徑參數做 percent-decoding,惡意使用者能送 '../../etc' 這類值,
+  // 若 workbookPath 不擋,就能把常駐檔複製到 DATA_DIR 之外的任意可寫位置(任意檔案寫入)。
+  describe('projectId 路徑逃逸防護 — 未擋就是任意檔案寫入', () => {
+    test.each([
+      ['../../etc'],
+      ['..\\..\\windows'],
+      ['a/b'],
+    ])('逃逸輸入 %s 必須被擋,不能拼出 DATA_DIR 之外的路徑', (bad) => {
+      expect(() => workbookPath(bad)).toThrow();
+    });
+
+    test.each([
+      [''],
+      [null],
+      [undefined],
+      ['abc'],
+      ['-1'],
+      ['1.5'],
+    ])('非正整數 %s 必須被擋 — projects.id 是 SERIAL,本來就只會是正整數', (bad) => {
+      expect(() => workbookPath(bad)).toThrow();
+    });
+
+    test('合法輸入(數字或數字字串)仍正常放行 — 路由拿到的 req.params.id 是字串', () => {
+      expect(() => workbookPath(7)).not.toThrow();
+      expect(() => workbookPath('7')).not.toThrow();
+      expect(workbookPath('7')).toBe(workbookPath(7));
+    });
+  });
 });
