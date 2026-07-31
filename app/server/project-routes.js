@@ -29,10 +29,12 @@ const upload = multer({ storage: multer.memoryStorage() });
 // 提高手動路徑的門檻會擋住沒有決標公告的舊案補登。
 const AWARD_REQUIRED = ['project_no', 'name', 'award_amount', 'school_id', 'vendor_id'];
 
-// 未填的判定:null/undefined/空字串/純空白一律視同未填。
+// 未填的判定:null/undefined/空字串/純空白/非純量一律視同未填(spec §4.5)。
 // 「停在找不到廠商的狀態就送出」在 body 裡表現為 vendor_id 空字串,必須擋下。
+// 陣列要另外擋:multipart 同名欄位重複出現時 body[k] 會是陣列,String(['a','b'])
+// 得到 'a,b' 就這樣穿透必填檢查,再被當成單一值寫進 DB。
 function isBlank(v) {
-  return v == null || String(v).trim() === '';
+  return v == null || !(typeof v === 'number' || typeof v === 'string') || String(v).trim() === '';
 }
 
 // 台灣四捨五入(half-up),避免 JS Math.round 對負數/浮點誤差的偏差。
@@ -159,7 +161,9 @@ function registerRoutes(app) {
           });
         } catch (err) {
           console.error('[projects] 決標公告歸檔失敗:', err);
-          project.attachment_warning = '工程已建立,但決標公告歸檔失敗,請稍後於工程頁重新上傳';
+          // 不寫「請稍後於工程頁重新上傳」:編輯模式沒有任何上傳決標公告的入口,
+          // 叫承辦人去做一件做不到的事,只會讓他反覆找不到而懷疑自己。
+          project.attachment_warning = '工程已建立,但決標公告歸檔失敗,請聯絡系統管理員';
         }
       }
 
