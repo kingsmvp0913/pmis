@@ -77,6 +77,42 @@
 
     content.appendChild(el('div', { class: 'page-title' }, isNew ? '新增工程' : '編輯工程'));
 
+    // 決標公告區塊只在新增模式出現:既有工程要重新裁決仍走原本的逐欄比對流程。
+    // 沿用 vendors.js:172 的 if (!isNew) 分岔慣例。
+    let awardFile = null;
+    if (isNew) {
+      const fileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
+      const parseBtn = el('button', { class: 'btn', type: 'button' }, '解析決標公告');
+      const awardMsg = el('div', { class: 'hint' },
+        '上傳決標公告可自動帶入工程名稱、編號、金額、主辦機關與承包廠商;也可略過直接手動填寫。');
+      const awardErr = el('div', { class: 'error-msg', style: 'display:none' });
+
+      parseBtn.addEventListener('click', async () => {
+        awardErr.style.display = 'none';
+        if (!fileI.files[0]) { showToast('請先選擇決標公告 PDF', 'warn'); return; }
+        parseBtn.disabled = true;
+        try {
+          const fd = new FormData();
+          fd.append('award_notice', fileI.files[0]);
+          const data = await Api.upload('award-notice/parse', fd);
+          applyParsed(data);
+          awardFile = fileI.files[0];
+          showToast('已帶入決標公告內容,請確認後儲存', 'success');
+        } catch (e) {
+          awardErr.textContent = e.message;
+          awardErr.style.display = '';
+        } finally { parseBtn.disabled = false; }
+      });
+
+      content.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'card-title' }, '決標公告'),
+        awardMsg,
+        el('div', { class: 'form-group' }, [fileI]),
+        el('div', { class: 'form-actions' }, [parseBtn]),
+        awardErr,
+      ]));
+    }
+
     const noI = el('input', { class: 'form-control', type: 'text', value: p.project_no || '' });
     const nameI = el('input', { class: 'form-control', type: 'text', value: p.name || '' });
     const vendorI = selectFrom(vendors, p.vendor_id, '(未選廠商)');
@@ -183,6 +219,46 @@
     ]);
     content.appendChild(card);
 
+    // 決標公告解析結果 → 表單。廠商/學校對不到時當場提供建立鈕,
+    // 因為 vendors 只有 name 一欄、schools 只有 name + county,沒有其他要填的。
+    function applyParsed(data) {
+      const p = data.parsed || {};
+      if (p.工程名稱) nameI.value = p.工程名稱;
+      if (p.工程編號) noI.value = p.工程編號;
+      if (p.契約金額 != null) awardI.value = p.契約金額;
+      bindOrCreate(vendorI, data.vendorMatch, 'vendors', '廠商', null);
+      bindOrCreate(schoolI, data.schoolMatch, 'schools', '學校', (data.schoolMatch || {}).county);
+    }
+
+    // match.id 有值就直接選起來;沒有就長出一顆「建立並綁定」,
+    // 建立成功後把新選項插進下拉並選取。
+    function bindOrCreate(select, match, apiPath, label, county) {
+      const holder = select.parentNode;
+      const old = holder.querySelector('.org-create');
+      if (old) old.remove();
+      if (!match || !match.name) return;
+      if (match.id) { select.value = String(match.id); return; }
+
+      select.value = '';
+      const btn = el('button', { class: 'btn', type: 'button' }, `建立「${match.name}」並綁定`);
+      const box = el('div', { class: 'org-create hint' }, [
+        `找不到${label}「${match.name}」。`, btn,
+      ]);
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const body = county ? { name: match.name, county } : { name: match.name };
+          const created = await Api.post(apiPath, body);
+          const opt = el('option', { value: String(created.id) }, created.name);
+          select.appendChild(opt);
+          select.value = String(created.id);
+          box.remove();
+          showToast(`已建立${label}「${created.name}」`, 'success');
+        } catch (e) { showToast(e.message, 'error'); btn.disabled = false; }
+      });
+      holder.appendChild(box);
+    }
+
     async function save() {
       const name = nameI.value.trim();
       if (!name) { showToast('請輸入工程名稱', 'warn'); return; }
@@ -204,11 +280,33 @@
         design_fee_pct: feePctI.value.trim() || null
       };
       try {
-        if (isNew) await Api.post('projects', body);
-        else await Api.put('projects/' + id, body);
-        showToast('已儲存', 'success');
+        if (isNew && awardFile) {
+          // 有決標公告就走 multipart,讓後端在建檔的同一個請求裡歸檔。
+          const fd = new FormData();
+          Object.keys(body).forEach((k) => {
+            // null 不 append:FormData 會把 null 變成字串 'null',後端的空值判斷就失效。
+            if (body[k] != null) fd.append(k, body[k]);
+          });
+          fd.append('award_notice', awardFile);
+          const created = await Api.upload('projects', fd);
+          if (created.attachment_warning) showToast(created.attachment_warning, 'warn');
+          else showToast('已儲存', 'success');
+        } else if (isNew) {
+          await Api.post('projects', body);
+          showToast('已儲存', 'success');
+        } else {
+          await Api.put('projects/' + id, body);
+          showToast('已儲存', 'success');
+        }
         window.location.hash = '/projects';
-      } catch (e) { showToast(e.message, 'error'); }
+      } catch (e) {
+        // 後端硬擋會帶 fields;照後端訊息呈現,再把欄位名接在後面。
+        const names = { project_no: '工程編號', name: '工程名稱', award_amount: '決標金額',
+          school_id: '主辦機關', vendor_id: '承包廠商' };
+        const suffix = e.fields && e.fields.length
+          ? '：' + e.fields.map((f) => names[f] || f).join('、') : '';
+        showToast(e.message + suffix, 'error');
+      }
     }
   }
 
