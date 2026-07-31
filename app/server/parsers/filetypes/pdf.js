@@ -60,8 +60,31 @@ const BLOCK_MAX_X = 45;
 const LABEL_MAX_X = 130;
 const Y_TOLERANCE = 3;
 
+// 決標公告 PDF 的內嵌字型 ToUnicode CMap 把下列漢字誤映到 CJK 部首補充區
+// (U+2E80–U+2EFF),而非標準統一漢字。NFKC 對這個區塊沒有相容分解(它只
+// 還原得了 U+F9xx 相容漢字),不額外映射的話,這些字下游與專案主檔
+// (schools.name / projects.name,皆為標準碼位)逐字比對會誤判成不一致——
+// 28 份樣本實測「民」(U+2EA0)每一份的主辦機關都出現,不修等於硬擋機制
+// 形同虛設。僅列實測到的 3 個字,其餘部首補充區字元未實測到問題,不補。
+const CJK_RADICAL_FIXUPS = {
+  '⺠': '民', // 民
+  '⻑': '長', // 長
+  '⻄': '西', // 西
+};
+
+function fixCjkRadicals(s) {
+  let out = s;
+  for (const [bad, good] of Object.entries(CJK_RADICAL_FIXUPS)) {
+    out = out.split(bad).join(good);
+  }
+  return out;
+}
+
 /**
  * 由單頁 text item 座標陣列建「標籤/值」列。純函式,不碰檔案系統。
+ *
+ * NFKC 正規化後再做 CJK 部首補充區誤映還原(見 CJK_RADICAL_FIXUPS),
+ * 修正決標公告字型的已知缺陷。
  *
  * @param {Array<{x:number,y:number,s:string}>} items
  * @returns {Array<{label:string,value:string}>} 由上而下
@@ -84,12 +107,12 @@ function rowsFromItems(items) {
   buckets.sort((a, b) => b.y - a.y);
   return buckets.map((b) => {
     const sorted = b.items.slice().sort((p, q) => p.x - q.x);
-    const join = (lo, hi) => sorted
+    const join = (lo, hi) => fixCjkRadicals(sorted
       .filter((i) => i.x >= lo && i.x < hi)
       .map((i) => i.s)
       .join('')
       .normalize('NFKC')
-      .trim();
+      .trim());
     return { label: join(BLOCK_MAX_X, LABEL_MAX_X), value: join(LABEL_MAX_X, Infinity) };
   });
 }

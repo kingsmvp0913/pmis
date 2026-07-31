@@ -69,3 +69,34 @@ describe('rowsFromItems — 決標公告兩欄表座標分欄(純函式)', () =>
     expect(rowsFromItems(items)[0].value).toBe('1150113');
   });
 });
+
+describe('rowsFromItems — CJK 部首補充區誤映還原(決標公告字型缺陷)', () => {
+  // 用碼位跳脫(\uXXXX)而非直接貼字元:直接貼字元的話,檔案編碼一變(或編輯器
+  // 自動正規化)差異就會消失,測試會失去意義、看不出還原是否真的發生。
+  const BAD_MIN = '\u2EA0'; // 民 的部首補充區誤映
+  const BAD_CHANG = '\u2ED1'; // 長 的部首補充區誤映
+  const BAD_XI = '\u2EC4'; // 西 的部首補充區誤映
+  const GOOD_MIN = '\u6C11'; // 民
+  const GOOD_CHANG = '\u9577'; // 長
+  const GOOD_XI = '\u897F'; // 西
+
+  test('民/長/西 誤映到部首補充區需還原,否則與主檔(schools.name/projects.name)逐字比對每次都會誤判不一致', () => {
+    // 28 份決標公告樣本實測:PDF 字型把「民」「長」「西」映到 CJK 部首補充區
+    // (U+2EA0/U+2ED1/U+2EC4),NFKC 對這個區塊沒有相容分解(它只還原得了
+    // U+F9xx 相容漢字),不額外還原的話,「國民小學」「元長鄉」等字下游與
+    // 專案主檔逐字比對會每次都誤判成不一致,硬擋機制形同虛設。
+    const items = [
+      { x: 49, y: 100, s: '機關名稱' },
+      { x: 166, y: 100, s: `雲林縣元${BAD_CHANG}鄉仁德國${BAD_MIN}小學(${BAD_XI}棟)` },
+    ];
+    expect(rowsFromItems(items)[0].value).toBe(`雲林縣元${GOOD_CHANG}鄉仁德國${GOOD_MIN}小學(${GOOD_XI}棟)`);
+  });
+
+  test('標準碼位的民/長/西不得被誤改(對映表只還原問題碼位,不得動到正常字)', () => {
+    const items = [
+      { x: 49, y: 100, s: '工程名稱' },
+      { x: 166, y: 100, s: `雲林縣元${GOOD_CHANG}鄉仁德國${GOOD_MIN}小學(${GOOD_XI}棟)` },
+    ];
+    expect(rowsFromItems(items)[0].value).toBe(`雲林縣元${GOOD_CHANG}鄉仁德國${GOOD_MIN}小學(${GOOD_XI}棟)`);
+  });
+});
