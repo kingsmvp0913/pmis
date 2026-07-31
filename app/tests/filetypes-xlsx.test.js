@@ -27,3 +27,25 @@ describe('gridFromWorksheet 錯誤格處理', () => {
     expect(grid[0][2]).toBe(599);
   });
 });
+
+const { isoToExcelSerial, excelSerialToISO } = require('../server/parsers/filetypes/xlsx');
+
+describe('isoToExcelSerial — 開工日期寫進 .xlsm 前的轉換', () => {
+  test('對照已填實例的實際序號', () => {
+    // 範本 B8 存的是 Excel 序號,基準日搞錯會讓整份報表的日期欄全部偏移
+    expect(isoToExcelSerial('2026-06-19')).toBe(46192); // 宜梧國中實例
+    expect(isoToExcelSerial('2026-03-18')).toBe(46099); // 南陽國小實例
+  });
+
+  test('與 excelSerialToISO 互為反函式', () => {
+    for (const iso of ['2026-01-01', '2026-06-19', '2026-12-31']) {
+      expect(excelSerialToISO(isoToExcelSerial(iso))).toBe(iso);
+    }
+  });
+
+  test('格式不符或空值回 null(不編造日期)', () => {
+    expect(isoToExcelSerial('115/06/19')).toBe(null);
+    expect(isoToExcelSerial('')).toBe(null);
+    expect(isoToExcelSerial(null)).toBe(null);
+  });
+});

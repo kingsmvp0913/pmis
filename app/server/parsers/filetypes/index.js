@@ -10,7 +10,7 @@
  * re-export:
  *   來自 pdf.js  :extractPages, rowsFromItems, extractRows
  *   來自 xlsx.js :readWorkbook, readSheet, gridFromWorksheet,
- *                 colToIndex, indexToCol, excelSerialToISO
+ *                 colToIndex, indexToCol, excelSerialToISO, isoToExcelSerial
  */
 const { extractPages, rowsFromItems, extractRows } = require('./pdf');
 const {
@@ -20,6 +20,7 @@ const {
   colToIndex,
   indexToCol,
   excelSerialToISO,
+  isoToExcelSerial,
 } = require('./xlsx');
 
 module.exports = {
@@ -32,4 +33,5 @@ module.exports = {
   colToIndex,
   indexToCol,
   excelSerialToISO,
+  isoToExcelSerial,
 };

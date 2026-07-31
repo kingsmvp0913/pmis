@@ -23,6 +23,7 @@
  *   gridFromWorksheet(ws)           -> 由單一 worksheet 物件建 grid(純函式,供 selfTest 用)
  *   colToIndex('AA') -> 26 ;indexToCol(26) -> 'AA'
  *   excelSerialToISO(46174)         -> '2026-06-01'(Excel 1900 序號 → 西元 YYYY-MM-DD)
+ *   isoToExcelSerial('2026-06-19')  -> 46192(西元 YYYY-MM-DD → Excel 1900 序號)
  */
 const fs = require('fs');
 const XLSX = require('xlsx');
@@ -59,6 +60,23 @@ function excelSerialToISO(serial) {
   const mm = String(d.m).padStart(2, '0');
   const dd = String(d.d).padStart(2, '0');
   return `${d.y}-${mm}-${dd}`;
+}
+
+// Excel 1900 日期系統以 1899-12-30 為第 0 天(含相容 1900 閏年 bug 的偏移)。
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+
+/**
+ * 'YYYY-MM-DD' → Excel 1900 日期序號(excelSerialToISO 的反向)。
+ * 格式不符一律回 null,不猜測、不編造。
+ *
+ * @param {string} iso
+ * @returns {number|null}
+ */
+function isoToExcelSerial(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso == null ? '' : iso).trim());
+  if (!m) return null;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Math.round((ms - EXCEL_EPOCH_MS) / 86400000);
 }
 
 /**
@@ -142,4 +160,5 @@ module.exports = {
   colToIndex,
   indexToCol,
   excelSerialToISO,
+  isoToExcelSerial,
 };
