@@ -131,6 +131,17 @@ describe('project routes', () => {
     expect(res.status).toBe(400);
   });
 
+  // 拆出決標公告分岔前,name 一律 trim 後才寫入;拆分時若漏掉這行,
+  // 前後空白會原樣存進 DB(靜默行為漂移,舊測試只查狀態碼查不到)。
+  // 這裡直接讀 DB 落地值,釘住「寫入前必 trim」而不是只看回應。
+  test('工程名稱前後空白於寫入前裁掉(相容舊版行為)', async () => {
+    const res = await auth(request(app).post('/api/projects')).send({ name: '  校舍整修  ' });
+    expect(res.status).toBe(201);
+    expect(res.body.name).toBe('校舍整修');
+    const { rows } = await db.query('SELECT name FROM projects WHERE id = $1', [res.body.id]);
+    expect(rows[0].name).toBe('校舍整修');
+  });
+
   test('更新工程改設計費類型', async () => {
     const created = await auth(request(app).post('/api/projects')).send({
       name: '工程A', design_fee_type: 'lump_sum', design_fee_amount: 100

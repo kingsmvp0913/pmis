@@ -135,7 +135,9 @@ function registerRoutes(app) {
         });
       }
 
-      const data = normalize(body);
+      // name 此時已通過必填檢查(非 blank),trim 前後空白後才寫入——
+      // 舊版 JSON 路徑本就會 trim,拆成兩條路徑不能讓這行為悄悄漂走。
+      const data = normalize({ ...body, name: String(body.name).trim() });
       const cols = COLUMNS.join(', ');
       const params = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
       const { rows } = await query(
