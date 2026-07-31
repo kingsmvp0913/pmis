@@ -48,4 +48,18 @@ describe('isoToExcelSerial — 開工日期寫進 .xlsm 前的轉換', () => {
     expect(isoToExcelSerial('')).toBe(null);
     expect(isoToExcelSerial(null)).toBe(null);
   });
+
+  test('日曆上不存在的日期回 null(不能讓 Date.UTC 的靜默捲動編造出別的日期序號)', () => {
+    // Date.UTC 對超出範圍的月/日不會報錯,而是捲成別的合法日期(如 2/30 → 3/2);
+    // 若不擋下來,寫回範本的會是「捲動後那天」的序號,讓整份報表的日期欄全部偏移
+    expect(isoToExcelSerial('2026-13-45')).toBe(null); // 月份超範圍
+    expect(isoToExcelSerial('2026-02-30')).toBe(null); // 該月無此日
+    expect(isoToExcelSerial('2026-06-00')).toBe(null); // 日為 0
+  });
+
+  test('非字串輸入不得丟例外,一律回 null', () => {
+    expect(isoToExcelSerial(46192)).toBe(null);
+    expect(isoToExcelSerial(new Date('2026-06-19'))).toBe(null);
+    expect(isoToExcelSerial(undefined)).toBe(null);
+  });
 });

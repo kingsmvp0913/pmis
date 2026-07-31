@@ -75,7 +75,17 @@ const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 function isoToExcelSerial(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso == null ? '' : iso).trim());
   if (!m) return null;
-  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const ms = Date.UTC(y, mo - 1, d);
+  // Date.UTC 對超出範圍的月/日不會回 NaN,而是靜默捲動進位(例如 2 月 30 日會捲成
+  // 3 月 2 日)。不回推比對就會把捲動後那個「別的日期」的序號當成使用者輸入的日期
+  // 寫回範本,等於編造資料——回推年/月/日與輸入不一致就視為日曆上不存在的日期。
+  const check = new Date(ms);
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) {
+    return null;
+  }
   return Math.round((ms - EXCEL_EPOCH_MS) / 86400000);
 }
 
