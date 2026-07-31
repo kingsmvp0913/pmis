@@ -1,0 +1,87 @@
+/**
+ * project-attachments-routes.js — 工程層附件(決標公告、開工報告表)的落檔與存取
+ *
+ * Exports:
+ *   registerRoutes(app)
+ *   saveAttachment({projectId, kind, buffer, originalName, userId}) — 落檔 + 寫 DB,回 {id, file_path}
+ *
+ * 路由:
+ *   GET    /api/projects/:id/attachments   清單
+ *   GET    /api/attachments/:id/download   下載(還原原檔名)
+ *   DELETE /api/attachments/:id            刪除(先 unlink 再刪列)
+ *
+ * 路徑沿用既有慣例 data/uploads/proj_<id>/,與施工日誌同目錄,靠 kind 欄區分;
+ * 不另開 data/attachments/ 這個第四個根。safeResolve/relToData 直接沿用
+ * history-routes 那份,不重寫——防路徑逃逸的規則只該有一處。
+ */
+const fs = require('fs');
+const path = require('path');
+const { query } = require('./db');
+const { verifyToken } = require('./auth');
+const { safeResolve, relToData, UPLOAD_DIR } = require('./history-routes');
+
+const INT4_MAX = 2147483647;
+// SERIAL(int4):非此形狀的 id 永遠比不到任何一列,且會讓 PostgreSQL 丟型別錯誤
+// 而被 catch 成 500,讓承辦人以為系統壞了。
+function isIdShape(id) {
+  return /^[1-9][0-9]*$/.test(String(id)) && Number(id) <= INT4_MAX;
+}
+
+async function saveAttachment({ projectId, kind, buffer, originalName, userId }) {
+  if (!isIdShape(projectId)) throw new Error('projectId 不合法');
+  const dir = path.join(UPLOAD_DIR, `proj_${projectId}`);
+  fs.mkdirSync(dir, { recursive: true });
+  // 時間戳前綴防碰撞;原檔名另存 original_name 欄,下載時才能還原。
+  const safe = String(originalName || 'file').replace(/[\\/:*?"<>|]/g, '_');
+  const abs = path.join(dir, `${Date.now()}_${safe}`);
+  fs.writeFileSync(abs, buffer);
+  const rel = relToData(abs);
+  const { rows } = await query(
+    `INSERT INTO project_attachments (project_id, kind, file_path, original_name, uploaded_by)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, file_path`,
+    [projectId, kind, rel, originalName || null, userId || null]
+  );
+  return rows[0];
+}
+
+function registerRoutes(app) {
+  app.get('/api/projects/:id/attachments', verifyToken, async (req, res) => {
+    if (!isIdShape(req.params.id)) return res.json([]);
+    const { rows } = await query(
+      `SELECT id, kind, original_name, file_path, uploaded_at
+         FROM project_attachments WHERE project_id = $1 ORDER BY id DESC`,
+      [req.params.id]
+    );
+    res.json(rows);
+  });
+
+  app.get('/api/attachments/:id/download', verifyToken, async (req, res) => {
+    if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
+    const { rows } = await query(
+      'SELECT file_path, original_name FROM project_attachments WHERE id = $1',
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
+    const abs = safeResolve(rows[0].file_path);
+    // null = 相對路徑逃出 DATA_DIR。屬資料損毀或惡意寫入,回 400 而非 500:
+    // 這不是伺服器故障,且不該讓承辦人以為重試會有用。
+    if (!abs) return res.status(400).json({ error: '附件路徑不合法' });
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: '附件檔案已遺失' });
+    res.download(abs, rows[0].original_name || path.basename(abs));
+  });
+
+  app.delete('/api/attachments/:id', verifyToken, async (req, res) => {
+    if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
+    const { rows } = await query(
+      'SELECT file_path FROM project_attachments WHERE id = $1', [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
+    // 先 unlink 再刪列:順序反過來的話,unlink 失敗就再也找不到那個檔(孤兒)。
+    const abs = safeResolve(rows[0].file_path);
+    if (abs) { try { fs.rmSync(abs, { force: true }); } catch { /* 檔案已不在也算成功 */ } }
+    await query('DELETE FROM project_attachments WHERE id = $1', [req.params.id]);
+    res.json({ ok: true });
+  });
+}
+
+module.exports = { registerRoutes, saveAttachment };
