@@ -1,6 +1,15 @@
 // api.js — 原生 fetch 包裝 + token 管理
 const TOKEN_KEY = 'pmis_token';
 
+// 非 2xx 一律經由此處造 Error。硬擋回應除了訊息還帶一份出問題的欄位清單,
+// 只丟 message 會讓 view 沒辦法指出是哪幾欄;三條路徑共用同一個造法,
+// 免得日後只補其中一條而靜默分岔。
+function apiError(data, status) {
+  const err = new Error(data.error || `HTTP ${status}`);
+  if (Array.isArray(data.fields)) err.fields = data.fields;
+  return err;
+}
+
 const Api = {
   getToken() { return localStorage.getItem(TOKEN_KEY); },
   setToken(t) { localStorage.setItem(TOKEN_KEY, t); },
@@ -27,12 +36,7 @@ const Api = {
       throw new Error('Unauthorized');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const err = new Error(data.error || `HTTP ${res.status}`);
-      // 硬擋回應除了訊息還帶一份出問題的欄位清單,只丟 message 會讓 view 沒辦法指出是哪幾欄
-      if (Array.isArray(data.fields)) err.fields = data.fields;
-      throw err;
-    }
+    if (!res.ok) throw apiError(data, res.status);
     return data;
   },
 
@@ -58,7 +62,7 @@ const Api = {
       throw new Error('Unauthorized');
     }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw apiError(data, res.status);
     return data;
   },
 
@@ -80,7 +84,7 @@ const Api = {
     }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `HTTP ${res.status}`);
+      throw apiError(data, res.status);
     }
     const blob = await res.blob();
     const cd = res.headers.get('Content-Disposition') || '';
