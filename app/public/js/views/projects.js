@@ -67,10 +67,15 @@
   async function renderEdit(content, id) {
     const isNew = id === 'new';
     let p = { design_fee_type: 'lump_sum' };
-    let vendors = [], schools = [], insurers = [];
+    let vendors = [], schools = [], insurers = [], firms = {};
     try {
-      [vendors, schools, insurers] = await Promise.all([
-        Api.get('vendors'), Api.get('schools'), Api.get('insurers')
+      // 系統預設的監造/設計單位另外接 .catch:projects.supervisor_firm 在第一次成功
+      // 寫報表前恆為 NULL,少了這份 fallback 每個工程第一次寫監造報表都會被後端
+      // REQUIRED 擋下、逼承辦人手打;但「設定讀不到」不該嚴重到讓整頁進不去,
+      // 故取不到就退回 {},由下面的 || '' 收尾。
+      [vendors, schools, insurers, firms] = await Promise.all([
+        Api.get('vendors'), Api.get('schools'), Api.get('insurers'),
+        Api.get('settings/firms').catch(() => ({}))
       ]);
       if (!isNew) p = await Api.get('projects/' + id);
     } catch (e) { showToast(e.message, 'error'); window.location.hash = '/projects'; return; }
@@ -225,8 +230,9 @@
       const 工期I = el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
       const 開工I = el('input', { class: 'form-control', type: 'date',
         value: p.start_date ? String(p.start_date).slice(0, 10) : '' });
-      const supI = el('input', { class: 'form-control', type: 'text', value: p.supervisor_firm || '' });
-      const desI = el('input', { class: 'form-control', type: 'text', value: p.designer_firm || '' });
+      // 工程層的值優先,沒有才吊系統預設(沿用已刪的 project-basics.js 既有行為)
+      const supI = el('input', { class: 'form-control', type: 'text', value: p.supervisor_firm || firms.supervisor_firm || '' });
+      const desI = el('input', { class: 'form-control', type: 'text', value: p.designer_firm || firms.designer_firm || '' });
       const basicsErr = el('div', { class: 'error-msg', style: 'display:none' });
       const writeBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '寫入監造報表');
 
@@ -251,6 +257,11 @@
             開工日期: 開工I.value, 工程編號: noI.value.trim(),
           };
           const r = await Api.post('projects/' + id + '/basics', { values });
+          // 這支已經把開工日期與範本算出的完工期限寫進 DB 了。主表單的開工日/契約竣工日
+          // 若還停在舊值,承辦人接著按「儲存」時 PUT 會用陳舊值覆蓋回去,靜默抹掉剛算出
+          // 的完工期限——所以寫入成功後必須把畫面同步到 DB 現況。
+          startI.value = 開工I.value;
+          if (r.完工期限) contractI.value = String(r.完工期限).slice(0, 10);
           showToast(`已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
         } catch (e) {
           const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
@@ -293,7 +304,7 @@
           const dl = el('button', { class: 'btn', type: 'button' }, '下載');
           dl.addEventListener('click', () => Api.download('attachments/' + a.id + '/download')
             .catch((e) => showToast(e.message, 'error')));
-          const rm = el('button', { class: 'btn btn-danger', type: 'button' }, '刪除');
+          const rm = el('button', { class: 'btn btn-danger', type: 'button', style: 'margin-left:6px' }, '刪除');
           rm.addEventListener('click', async () => {
             const ok = await confirmDialog({
               title: '刪除附件', message: `確定刪除「${a.original_name || ''}」?`, danger: true,
@@ -323,6 +334,11 @@
     // 因為 vendors 只有 name 一欄、schools 只有 name + county,沒有其他要填的。
     function applyParsed(data) {
       const p = data.parsed || {};
+      // 先清空再填:連續解析兩份公告時,若第二份某欄解析失敗(回 null),「有值才覆蓋」
+      // 會讓第一份的殘值留在表單上——結果歸檔的是 B 的 PDF、存下的卻是 A 的欄位。
+      nameI.value = '';
+      noI.value = '';
+      awardI.value = '';
       if (p.工程名稱) nameI.value = p.工程名稱;
       if (p.工程編號) noI.value = p.工程編號;
       if (p.契約金額 != null) awardI.value = p.契約金額;

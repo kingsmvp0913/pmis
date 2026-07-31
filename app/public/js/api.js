@@ -88,7 +88,13 @@ const Api = {
     }
     const blob = await res.blob();
     const cd = res.headers.get('Content-Disposition') || '';
-    const m = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    // RFC 6266:非 ASCII 檔名一定同時帶 filename="????.pdf"(ASCII fallback,中文被
+    // 換成問號)與 filename*=UTF-8''<percent-encoded>。header 位元組只能是 Latin1,
+    // 所以中文原檔名只存在於 filename* 裡——必須先試它,先命中 fallback 的話
+    // 使用者拿到的就是「????.pdf」。後端測試斷言的是解碼後的 filename*,故此處
+    // 沒對齊時測試全綠而使用者實際下載到問號檔名。
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    const m = star || /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
     const filename = m ? decodeURIComponent(m[1].replace(/"$/, '')) : 'download';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
