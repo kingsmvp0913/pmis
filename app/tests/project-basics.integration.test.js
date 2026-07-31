@@ -61,13 +61,13 @@ d('工程基本資料寫入監造報表(Excel COM)', () => {
     expect(!!wb.vbaraw).toBe(true);       // 巨集保留
   }, 180000);
 
-  test('封面靠 INDEX/MATCH 自動帶出工程名稱,不需另外寫', async () => {
-    // 這是整條 pipeline 的核心假設:只填 9 值,其餘分頁由範本公式自算
+  test('封面工程名稱由 INDEX/MATCH 自算,公式未被壓成死值', async () => {
+    // 這是整條 pipeline 的核心假設:只填 9 值,其餘分頁由範本公式自算。
+    // 值與公式要一起釘:只驗值的話,公式一旦被壓成死值這條仍會綠,
+    // 但之後 SP2/SP3 改了工程基本資料,封面就不會跟著更新。
     const wb = XLSX.readFile(ensureWorkbook(PROJECT_ID));
     const cover = wb.Sheets['封面'];
-    const hit = Object.keys(cover)
-      .filter((k) => !k.startsWith('!'))
-      .some((k) => String(cover[k].v || '').includes('宜梧國中老舊廁所整修工程'));
-    expect(hit).toBe(true);
+    expect(cover.A4.v).toBe('115年度宜梧國中老舊廁所整修工程');
+    expect(cover.A4.f).toContain('INDEX');
   }, 60000);
 });
