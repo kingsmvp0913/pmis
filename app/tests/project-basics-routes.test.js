@@ -57,9 +57,11 @@ async function makeApp() {
 async function addProject(baseId) {
   const base = (await db.query('SELECT * FROM projects WHERE id = $1', [baseId])).rows[0];
   const { rows } = await db.query(
+    // award_amount 刻意不等於 FULL.契約金額:兩者相同的話,把 award_amount 從 UPDATE 的
+    // SET 拿掉,成功路徑測試仍會綠(before/after 看不出差別),這欄就等於沒有測試守著。
     `INSERT INTO projects (project_no, name, vendor_id, school_id, award_amount)
      VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    ['ywjh11504b', '第二件工程', base.vendor_id, base.school_id, 3057698]
+    ['ywjh11504b', '第二件工程', base.vendor_id, base.school_id, 1]
   );
   return rows[0].id;
 }
@@ -194,6 +196,19 @@ describe('POST /api/projects/:id/basics — 值的格式', () => {
     expect(res.status).toBe(400);
     expect(res.body.fields.sort()).toEqual(['契約工期', '契約金額', '開工日期'].sort());
   });
+
+  // Number(' ') 與 Number([]) 都是 0(有限數)會被放行,但 pg 的 prepareValue 送出的是
+  // ' ' / '{}',PostgreSQL 對 numeric 欄位丟 22P02 —— 而那發生在 renameSync 之後,
+  // 又是一次「報表已改、主檔沒改」。空白與空陣列必須跟千分位一樣在落檔前擋下。
+  test.each([[' '], [[]], ['3,057,698'], ['']])(
+    '契約金額 %j 一律擋進 fields,不得走到 UPDATE 才炸',
+    async (bad) => {
+      const { app, token, projectId } = await makeApp();
+      const res = await request(app).post(`/api/projects/${projectId}/basics`)
+        .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL, 契約金額: bad } });
+      expect(res.status).toBe(400);
+      expect(res.body.fields).toEqual(['契約金額']);
+    });
 });
 
 describe('POST /api/projects/:id/basics — 成功路徑', () => {
@@ -239,6 +254,28 @@ describe('POST /api/projects/:id/basics — 成功路徑', () => {
       const after = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
       expect(after.contract_completion_date == null).toBe(true);
       expect(after.name).toBe(before.name);
+    } finally { restore(); }
+  });
+
+  test('每個請求的暫存檔名必須唯一 —— finally 的清除是跨請求可見的副作用', async () => {
+    // 同專案的兩個請求若共用同一個 tmp 路徑:A 的 finally 在 await UPDATE 之後才跑,
+    // 會刪掉 B 已寫完、還沒 rename 的 tmp,讓 B 的 renameSync ENOENT → 無辜的 500。
+    // 真正的競態要靠 UPDATE 卡住才重現(單元測沒有那個掛鉤),故直接驗不變量本身:
+    // 兩次請求拿到的 tmp 路徑不得相同。
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const { fillTemplate } = require('../server/template-engine');
+    const seen = [];
+    const capture = async (dest, tmp) => { seen.push(tmp); fs.writeFileSync(tmp, 'x'); };
+    fillTemplate.mockImplementationOnce(capture).mockImplementationOnce(capture);
+    const restore = mockWorkbookIO({ t: 'n', v: 46311 });
+    try {
+      const send = () => request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL } });
+      await send();
+      await send();
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).not.toBe(seen[1]);
     } finally { restore(); }
   });
 

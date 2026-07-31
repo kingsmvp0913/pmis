@@ -35,8 +35,19 @@ const REQUIRED = Object.keys(CELL_OF);
 const FORMAT_OK = {
   契約工期: (v) => Number.isInteger(Number(v)) && Number(v) >= 1,
   開工日期: (v) => isoToExcelSerial(v) != null, // 已含日曆合法性(2/30 這種不放行)
-  契約金額: (v) => Number.isFinite(Number(v)),  // '3,057,698' 這類千分位會被擋下
+  // '3,057,698' 這類千分位會被擋下。先 trim 再判空是必要的:Number(' ')、Number([]) 都是 0
+  // (有限數)會被放行,但 pg 的 prepareValue 送出的是 ' ' / '{}',PostgreSQL 對 numeric
+  // 欄位丟 22P02 —— 而那發生在 renameSync 之後,又是一次「報表已改、主檔沒改」。
+  契約金額: (v) => {
+    const s = String(v).trim();
+    return s !== '' && Number.isFinite(Number(s));
+  },
 };
+
+// tmp 檔名必須每個請求唯一。finally 裡的 rmSync 是**跨請求可見的副作用**:成功路徑的
+// finally 在 await query(UPDATE) 之後才跑,若共用檔名,A 的清除會刪掉 B 已寫完、還沒
+// rename 的 tmp,讓 B 的 renameSync ENOENT。用單調遞增計數器而非亂數,同 process 內保證不撞。
+let tmpSeq = 0;
 
 // projects.id 是 SERIAL(int4),非此形狀的 :id 永遠比不到任何一列。
 // 不先擋掉的話有兩個後果:PostgreSQL 會以型別錯誤(22P02/22003)中斷這句 SQL、
@@ -127,7 +138,7 @@ function registerRoutes(app) {
 
       const dest = ensureWorkbook(req.params.id);
       // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
-      tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}.xlsm`);
+      tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
       await fillTemplate(dest, tmp, basicsToOperations(values));
       // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await:並行安全靠 fillTemplate 內部的
       // _chain 全域序列化,加上 renameSync 在同一個 microtask 續行中同步跑完 —— 這是隱性不變量。
