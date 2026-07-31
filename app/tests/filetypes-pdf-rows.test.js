@@ -48,6 +48,18 @@ describe('rowsFromItems — 決標公告兩欄表座標分欄(純函式)', () =>
     expect(rowsFromItems(items)).toEqual([{ label: '', value: '有值' }]);
   });
 
+  test('整列所有 item 皆為空白 → 該列完全不輸出(而非輸出一列空字串)', () => {
+    // 上一個測試就算把「略過空白 item」那行整個刪掉也會通過——因為 join() 結尾有
+    // .trim(),就算空白 item 沒被跳過,拼接後一樣是 ''。這個測試才會真的因為那行
+    // 被刪而變紅:少了 skip,空白 item 仍會被塞進 bucket,產生一列 {label:'',value:''}
+    // 而非「該列消失」,污染下游以列數判斷是否有資料的邏輯。
+    const items = [
+      { x: 49, y: 100, s: '   ' },
+      { x: 166, y: 100, s: '  ' },
+    ];
+    expect(rowsFromItems(items)).toEqual([]);
+  });
+
   test('全形數字等相容字元做 NFKC 正規化', () => {
     // 部分 PDF 字型把字元映到相容區,不正規化下游錨點比對會落空
     const items = [

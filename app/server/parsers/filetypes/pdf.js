@@ -68,7 +68,11 @@ const Y_TOLERANCE = 3;
  */
 function rowsFromItems(items) {
   const buckets = [];
-  for (const it of items || []) {
+  // 先依 y 由大到小排序再分組:bucket 錨點取自「第一個放入的 item」,
+  // 若不先排序,items 原始順序不同(如 y 鏈狀相近的 415/413/411/409,
+  // 兩兩在容差內但總跨距超過容差)會導致分出不同列數,結果不穩定。
+  const ordered = (items || []).slice().sort((a, b) => b.y - a.y);
+  for (const it of ordered) {
     if (!String(it.s == null ? '' : it.s).trim()) continue;
     let b = buckets.find((k) => Math.abs(k.y - it.y) <= Y_TOLERANCE);
     if (!b) {
