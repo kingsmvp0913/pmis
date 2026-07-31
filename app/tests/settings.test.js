@@ -68,6 +68,15 @@ describe('監造/設計單位系統預設', () => {
   });
   afterEach(() => db._setPoolForTesting(null));
 
+  // 這兩支是決標公告比對時帶入監造/設計單位預設的來源,且 PUT 會改動全系統預設值;
+  // verifyToken 是唯一的門,沒有測試釘住的話重排 middleware 就會靜默開洞。
+  test('未帶 token 回 401', async () => {
+    const { app } = await makeAppWithToken();
+    expect((await request(app).get('/api/settings/firms')).status).toBe(401);
+    expect((await request(app).put('/api/settings/firms')
+      .send({ supervisor_firm: '甲事務所' })).status).toBe(401);
+  });
+
   test('未設定時兩者皆 null(不假設等於某家事務所)', async () => {
     const { app } = await makeAppWithToken();
     expect(app).toBeDefined();

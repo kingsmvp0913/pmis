@@ -135,6 +135,25 @@ describe('POST /api/projects/:id/award-notice', () => {
   });
 });
 
+describe('SP1 兩支端點的 verifyToken', () => {
+  // 這兩支是 repo 裡唯一同時會寫檔案系統(監造報表 .xlsm)又會回寫工程主檔的端點,
+  // verifyToken 是它們唯一的門。掛法目前正確(verifyToken 排在 multer 之前,未帶 token
+  // 連檔案都不會被收下),但沒有測試釘住的話,任何人重排 middleware 都會靜默開洞。
+  test('award-notice 未帶 token 回 401', async () => {
+    const { app, projectId } = await makeApp();
+    const res = await request(app).post(`/api/projects/${projectId}/award-notice`)
+      .attach('award_notice', Buffer.from('%PDF-1.4 fake'), 'a.pdf');
+    expect(res.status).toBe(401);
+  });
+
+  test('basics 未帶 token 回 401', async () => {
+    const { app, projectId } = await makeApp();
+    const res = await request(app).post(`/api/projects/${projectId}/basics`)
+      .send({ values: { ...FULL } });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('POST /api/projects/:id/basics — 硬擋', () => {
   test('有欄位未裁決/未填時 400,並列出全部缺項而非只報第一個', async () => {
     // 只報第一個會讓承辦人來回送好幾次;spec §9 要求一次列全
@@ -208,6 +227,32 @@ describe('POST /api/projects/:id/basics — 值的格式', () => {
         .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL, 契約金額: bad } });
       expect(res.status).toBe(400);
       expect(res.body.fields).toEqual(['契約金額']);
+    });
+
+  // 型別穿透:驗證器若只看「值轉成數字/字串之後是什麼」,非純量會整個穿過去 ——
+  // String(['3057698']) 是 '3057698'、Number(true) 是 1,兩者都「看起來合法」。
+  // 後果分兩種,都在 renameSync 之後才發作,也就是「報表已改、主檔沒改」的半套狀態:
+  //   ① 陣列:pg 的 prepareValue 送出 '{3057698}',numeric/date 欄位丟 22P02 → 500。
+  //   ② true:契約工期寫進 B7,B9 算出「開工日 + 1 - 1」剛好過下界檢查 → 回 200,
+  //      承辦人以為成功,主檔的完工期限卻是錯的(比 500 更難察覺)。
+  // 故三個型別化欄位必須先驗「值本身是不是純量」,而不是驗它轉完長什麼樣。
+  test.each([
+    ['契約金額', ['3057698']],
+    ['契約金額', true],
+    ['契約金額', {}],
+    ['契約工期', ['120']],
+    ['契約工期', true],
+    ['契約工期', {}],
+    ['開工日期', ['2026-06-19']],
+    ['開工日期', true],
+    ['開工日期', {}],
+  ])('%s 收到非純量 %j 必須擋進 fields(型別穿透會在 renameSync 之後才炸)',
+    async (欄位, bad) => {
+      const { app, token, projectId } = await makeApp();
+      const res = await request(app).post(`/api/projects/${projectId}/basics`)
+        .set('Authorization', `Bearer ${token}`).send({ values: { ...FULL, [欄位]: bad } });
+      expect(res.status).toBe(400);
+      expect(res.body.fields).toEqual([欄位]);
     });
 });
 

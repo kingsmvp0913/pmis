@@ -32,13 +32,22 @@ const REQUIRED = Object.keys(CELL_OF);
 // 就會留下「報表已改、主檔沒改」的半套狀態,而且沒有補償機制。
 // 驗證結果併進硬擋的同一份 fields ——「這欄要回頭改」對承辦人是同一件事,
 // 分成兩種回應形狀只會讓前端各寫一套。
+// 純量守門必須排在格式判斷之前:格式判斷看的是「值轉成數字/字串之後是什麼」,
+// 非純量會整個穿透過去 —— String(['3057698']) 是 '3057698'、Number(true) 是 1,
+// 但 pg 的 prepareValue 送出的是 '{3057698}' / 'true',numeric/date 欄位丟 22P02;
+// true 更陰險:寫進 B7 後 B9 算出「開工日 + 1 - 1」剛好通過下界檢查而回 200,
+// 主檔的完工期限卻是錯的。兩者都發作在 renameSync 之後,即「報表已改、主檔沒改」。
+const isScalar = (v) => typeof v === 'number' || typeof v === 'string';
+
 const FORMAT_OK = {
-  契約工期: (v) => Number.isInteger(Number(v)) && Number(v) >= 1,
-  開工日期: (v) => isoToExcelSerial(v) != null, // 已含日曆合法性(2/30 這種不放行)
+  契約工期: (v) => isScalar(v) && Number.isInteger(Number(v)) && Number(v) >= 1,
+  // 已含日曆合法性(2/30 這種不放行)
+  開工日期: (v) => isScalar(v) && isoToExcelSerial(v) != null,
   // '3,057,698' 這類千分位會被擋下。先 trim 再判空是必要的:Number(' ')、Number([]) 都是 0
   // (有限數)會被放行,但 pg 的 prepareValue 送出的是 ' ' / '{}',PostgreSQL 對 numeric
   // 欄位丟 22P02 —— 而那發生在 renameSync 之後,又是一次「報表已改、主檔沒改」。
   契約金額: (v) => {
+    if (!isScalar(v)) return false;
     const s = String(v).trim();
     return s !== '' && Number.isFinite(Number(s));
   },
