@@ -1,4 +1,4 @@
-const { compareBasics, COMPARABLE } = require('../server/project-basics');
+const { compareBasics, COMPARABLE, basicsToOperations, CELL_OF } = require('../server/project-basics');
 
 describe('compareBasics — 決標公告值 vs PMIS 專案主檔', () => {
   const award = {
@@ -70,5 +70,51 @@ describe('compareBasics — 決標公告值 vs PMIS 專案主檔', () => {
     const hit = compareBasics(award, project).find((r) => r.欄位 === '契約金額');
     expect(hit.狀態).toBe('match');
     expect(hit.主檔值).toBe('3057698.00');
+  });
+});
+
+describe('basicsToOperations — 組出 SP0 的 setCell 指令', () => {
+  const values = {
+    工程名稱: '115年度宜梧國中老舊廁所整修工程',
+    監造單位: '呂罡銘建築師事務所',
+    主辦機關: '雲林縣立宜梧國民中學',
+    設計單位: '呂罡銘建築師事務所',
+    承包廠商: '玉森土木包工業',
+    契約金額: 3057698,
+    契約工期: 120,
+    開工日期: '2026-06-19',
+    工程編號: 'ywjh11504',
+  };
+
+  test('絕不寫 B9 — 那是範本公式 =B8+B7-1,寫進去等於把公式換成死值', () => {
+    const ops = basicsToOperations(values);
+    expect(ops.some((o) => o.addr === 'B9')).toBe(false);
+  });
+
+  test('9 值對應 B1..B8 與 B10,全部落在「工程基本資料」分頁', () => {
+    const ops = basicsToOperations(values);
+    expect(ops.map((o) => o.addr).sort()).toEqual(
+      ['B1', 'B10', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8']
+    );
+    expect(ops.every((o) => o.type === 'setCell' && o.sheet === '工程基本資料')).toBe(true);
+  });
+
+  test('開工日期寫 Excel 序號而非 ISO 字串,否則 B9 無法做日期算術', () => {
+    const b8 = basicsToOperations(values).find((o) => o.addr === 'B8');
+    expect(b8.value).toBe(46192);
+  });
+
+  test('未提供的欄位不產生指令,以免把既有值清空', () => {
+    // SP2/SP3 之後也會往同一份寫;只補一欄時不該連帶把別欄清空
+    const ops = basicsToOperations({ 工程名稱: '甲工程' });
+    expect(ops).toEqual([
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B1', value: '甲工程' },
+    ]);
+  });
+
+  test('開工日期格式不合法 → 該格寫 null(清空),不寫 NaN', () => {
+    const b8 = basicsToOperations({ ...values, 開工日期: '115/06/19' })
+      .find((o) => o.addr === 'B8');
+    expect(b8.value).toBe(null);
   });
 });

@@ -6,7 +6,11 @@
  * Exports:
  *   COMPARABLE                    可與決標公告比對的欄位(順序即畫面顯示順序)
  *   compareBasics(award, project) 逐欄比對 → [{欄位, 決標公告值, 主檔值, 狀態}]
+ *   CELL_OF                       欄位 → 「工程基本資料」分頁儲存格對照表
+ *   basicsToOperations(values)    9 值 → SP0 template-engine 的 setCell 指令
  */
+
+const { isoToExcelSerial } = require('./parsers/filetypes/xlsx');
 
 // 決標公告能提供、且主檔也有對應值的欄位。契約工期/開工日期不在此列
 // (決標公告推不出,見 spec §4.3);監造單位/設計單位來自系統設定,無從比對。
@@ -70,4 +74,40 @@ function compareBasics(award, project) {
   });
 }
 
-module.exports = { COMPARABLE, compareBasics };
+// 欄位 → 「工程基本資料」分頁儲存格。
+// B9 完工期限是範本公式 =B8+B7-1,**任何情況都不得寫入**,否則公式被換成死值,
+// 之後 SP2/SP3 改了工期或開工日,完工期限不會跟著動。
+const CELL_OF = {
+  工程名稱: 'B1',
+  監造單位: 'B2',
+  主辦機關: 'B3',
+  設計單位: 'B4',
+  承包廠商: 'B5',
+  契約金額: 'B6',
+  契約工期: 'B7',
+  開工日期: 'B8',
+  工程編號: 'B10',
+};
+
+/**
+ * 把 9 值組成 SP0 template-engine 的 setCell 指令。
+ *
+ * 未提供(undefined)的欄位**不產生指令**——專案報表是常駐檔,SP2/SP3 之後也往
+ * 同一份寫,只補一欄時不該連帶清空別欄。明確傳 null 才會清該格。
+ *
+ * @param {object} values 鍵為 CELL_OF 的欄位名
+ * @returns {Array<{type:'setCell', sheet:string, addr:string, value:any}>}
+ */
+function basicsToOperations(values) {
+  const v = values || {};
+  const ops = [];
+  for (const [欄位, addr] of Object.entries(CELL_OF)) {
+    if (v[欄位] === undefined) continue;
+    // 開工日期須以 Excel 序號寫入,B9 的 =B8+B7-1 才算得出完工期限
+    const value = 欄位 === '開工日期' ? isoToExcelSerial(v[欄位]) : v[欄位];
+    ops.push({ type: 'setCell', sheet: '工程基本資料', addr, value: value == null ? null : value });
+  }
+  return ops;
+}
+
+module.exports = { COMPARABLE, compareBasics, CELL_OF, basicsToOperations };
