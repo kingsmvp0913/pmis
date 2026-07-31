@@ -1,5 +1,13 @@
 process.env.JWT_SECRET = 'test-secret';
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-proj-'));
+// ⚠️ 必須在 require 之前設定:history-routes 在 module load 時就把 UPLOAD_DIR 算好,
+// 晚一步設定的話測試會把附件寫進正式的 data/ 目錄。
+process.env.PMIS_DATA_DIR = TMP;
+
 const express = require('express');
 const request = require('supertest');
 const { newDb } = require('pg-mem');
@@ -152,3 +160,69 @@ describe('project routes', () => {
     expect(get.status).toBe(404);
   });
 });
+
+describe('POST /api/projects 決標公告路徑', () => {
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  // 手動新增是給沒有決標公告的案子(自辦、舊案補登)。提高門檻會擋住補登,
+  // 所以必填規則必須依「本次請求有沒有決標公告」分岔,不能一律套五欄。
+  test('無決標公告時仍只要求工程名稱', async () => {
+    const { app, token } = await makeAppWithToken();
+    await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: '手動建立的工程' })
+      .expect(201);
+  });
+
+  // 半套工程會讓後續 SP2/SP3 全部落空,且承辦人不會回頭檢查一個已顯示「建立成功」的工程。
+  test('含決標公告但缺欄位時 400,且一次列全缺項', async () => {
+    const { app, token } = await makeAppWithToken();
+    const res = await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .field('name', '南陽國小廁所工程')
+      .attach('award_notice', Buffer.from('%PDF-1.4'), 'a.pdf')
+      .expect(400);
+    expect(res.body.fields.sort()).toEqual(
+      ['award_amount', 'project_no', 'school_id', 'vendor_id'].sort()
+    );
+  });
+
+  // 停在「找不到○○」狀態就送出,會產生沒有廠商/學校的無主工程。
+  test('廠商或學校未綁定視同未填', async () => {
+    const { app, token } = await makeAppWithToken();
+    const res = await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .field('name', '南陽').field('project_no', '1150113')
+      .field('award_amount', '3122168').field('school_id', '')
+      .field('vendor_id', '')
+      .attach('award_notice', Buffer.from('%PDF-1.4'), 'a.pdf')
+      .expect(400);
+    expect(res.body.fields).toEqual(expect.arrayContaining(['school_id', 'vendor_id']));
+  });
+
+  test('齊全時建立工程並歸檔決標公告', async () => {
+    const { app, token } = await makeAppWithToken();
+    const { rows: v } = await db.query(`INSERT INTO vendors (name) VALUES ('晉林') RETURNING id`);
+    const { rows: s } = await db.query(`INSERT INTO schools (name) VALUES ('南陽國小') RETURNING id`);
+    const res = await request(app).post('/api/projects')
+      .set('Authorization', `Bearer ${token}`)
+      .field('name', '南陽國小廁所工程').field('project_no', '1150113')
+      .field('award_amount', '3122168')
+      .field('school_id', String(s[0].id)).field('vendor_id', String(v[0].id))
+      .attach('award_notice', Buffer.from('%PDF-1.4'), '決標公告.pdf')
+      .expect(201);
+    expect(res.body.id).toEqual(expect.any(Number));
+    const { rows } = await db.query(
+      'SELECT * FROM project_attachments WHERE project_id = $1', [res.body.id]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe('award_notice');
+    expect(rows[0].original_name).toBe('決標公告.pdf');
+  });
+});
+
+afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ } });
