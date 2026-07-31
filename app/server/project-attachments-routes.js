@@ -45,42 +45,61 @@ async function saveAttachment({ projectId, kind, buffer, originalName, userId })
 }
 
 function registerRoutes(app) {
+  // 三支路由都必須有 try/catch:Express 4 不接 async handler 的 rejection,
+  // DB 一斷線就變成 unhandled rejection 讓整個 process exit,而清單這支是每次
+  // 開工程編輯頁都會打的——等於一次 DB 抖動就拖垮全站,而非只失敗一個請求。
+  // 錯誤細節只進 console,回應維持固定字串,不把 SQL/路徑洩給前端。
   app.get('/api/projects/:id/attachments', verifyToken, async (req, res) => {
-    if (!isIdShape(req.params.id)) return res.json([]);
-    const { rows } = await query(
-      `SELECT id, kind, original_name, file_path, uploaded_at
-         FROM project_attachments WHERE project_id = $1 ORDER BY id DESC`,
-      [req.params.id]
-    );
-    res.json(rows);
+    try {
+      if (!isIdShape(req.params.id)) return res.json([]);
+      const { rows } = await query(
+        `SELECT id, kind, original_name, file_path, uploaded_at
+           FROM project_attachments WHERE project_id = $1 ORDER BY id DESC`,
+        [req.params.id]
+      );
+      res.json(rows);
+    } catch (err) {
+      console.error('[attachments] 讀取附件清單失敗:', err);
+      res.status(500).json({ error: '讀取附件清單失敗' });
+    }
   });
 
   app.get('/api/attachments/:id/download', verifyToken, async (req, res) => {
-    if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
-    const { rows } = await query(
-      'SELECT file_path, original_name FROM project_attachments WHERE id = $1',
-      [req.params.id]
-    );
-    if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
-    const abs = safeResolve(rows[0].file_path);
-    // null = 相對路徑逃出 DATA_DIR。屬資料損毀或惡意寫入,回 400 而非 500:
-    // 這不是伺服器故障,且不該讓承辦人以為重試會有用。
-    if (!abs) return res.status(400).json({ error: '附件路徑不合法' });
-    if (!fs.existsSync(abs)) return res.status(404).json({ error: '附件檔案已遺失' });
-    res.download(abs, rows[0].original_name || path.basename(abs));
+    try {
+      if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
+      const { rows } = await query(
+        'SELECT file_path, original_name FROM project_attachments WHERE id = $1',
+        [req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
+      const abs = safeResolve(rows[0].file_path);
+      // null = 相對路徑逃出 DATA_DIR。屬資料損毀或惡意寫入,回 400 而非 500:
+      // 這不是伺服器故障,且不該讓承辦人以為重試會有用。
+      if (!abs) return res.status(400).json({ error: '附件路徑不合法' });
+      if (!fs.existsSync(abs)) return res.status(404).json({ error: '附件檔案已遺失' });
+      res.download(abs, rows[0].original_name || path.basename(abs));
+    } catch (err) {
+      console.error('[attachments] 下載附件失敗:', err);
+      res.status(500).json({ error: '下載附件失敗' });
+    }
   });
 
   app.delete('/api/attachments/:id', verifyToken, async (req, res) => {
-    if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
-    const { rows } = await query(
-      'SELECT file_path FROM project_attachments WHERE id = $1', [req.params.id]
-    );
-    if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
-    // 先 unlink 再刪列:順序反過來的話,unlink 失敗就再也找不到那個檔(孤兒)。
-    const abs = safeResolve(rows[0].file_path);
-    if (abs) { try { fs.rmSync(abs, { force: true }); } catch { /* 檔案已不在也算成功 */ } }
-    await query('DELETE FROM project_attachments WHERE id = $1', [req.params.id]);
-    res.json({ ok: true });
+    try {
+      if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到附件' });
+      const { rows } = await query(
+        'SELECT file_path FROM project_attachments WHERE id = $1', [req.params.id]
+      );
+      if (!rows[0]) return res.status(404).json({ error: '找不到附件' });
+      // 先 unlink 再刪列:順序反過來的話,unlink 失敗就再也找不到那個檔(孤兒)。
+      const abs = safeResolve(rows[0].file_path);
+      if (abs) { try { fs.rmSync(abs, { force: true }); } catch { /* 檔案已不在也算成功 */ } }
+      await query('DELETE FROM project_attachments WHERE id = $1', [req.params.id]);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error('[attachments] 刪除附件失敗:', err);
+      res.status(500).json({ error: '刪除附件失敗' });
+    }
   });
 }
 

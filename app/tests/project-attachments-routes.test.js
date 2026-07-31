@@ -115,3 +115,38 @@ test('未帶 token 一律 401', async () => {
   const { app, projectId } = await makeApp();
   await request(app).get(`/api/projects/${projectId}/attachments`).expect(401);
 });
+
+// 為什麼這則重要:Express 4 不會接住 async handler 拋出的 rejection,少了 try/catch
+// 就是一個 unhandled rejection,Node 預設會讓「整個 process exit 1」——不是這一個請求
+// 失敗而已,是全站掛掉。而清單這支是每次開工程編輯頁 loadAttachments() 都會打的,
+// 等於一次 DB 抖動(連線池耗盡、DB 重啟)就足以打掉伺服器。這則測試釘住的是
+// 「DB 故障時降級成 500,伺服器還活著」,不是 500 這個數字本身。
+// 註:路由模組是以 const { query } = require('./db') 解構取得 function 參考的,
+// 對 db.query 做 spy 攔不到;要在底層的 pool 上動手才會真的生效。
+test('DB 故障時三支路由都回 500 而非讓 process 崩潰', async () => {
+  const { app, token, projectId } = await makeApp();
+  const r = await saveAttachment({
+    projectId, kind: 'award_notice',
+    buffer: Buffer.from('x'), originalName: 'a.pdf', userId: null,
+  });
+  const spy = jest.spyOn(db.getPool(), 'query');
+  const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    spy.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+    const list = await request(app).get(`/api/projects/${projectId}/attachments`)
+      .set('Authorization', `Bearer ${token}`).expect(500);
+    // 對外只給固定字串;SQL 片段、連線字串不該外洩給前端。
+    expect(list.body.error).not.toMatch(/connection terminated/);
+
+    spy.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+    await request(app).get(`/api/attachments/${r.id}/download`)
+      .set('Authorization', `Bearer ${token}`).expect(500);
+
+    spy.mockRejectedValueOnce(new Error('connection terminated unexpectedly'));
+    await request(app).delete(`/api/attachments/${r.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(500);
+  } finally {
+    spy.mockRestore();
+    err.mockRestore();
+  }
+});
