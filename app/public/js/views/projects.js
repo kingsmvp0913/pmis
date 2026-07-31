@@ -234,12 +234,20 @@
         basicsErr.style.display = 'none';
         writeBtn.disabled = true;
         try {
+          // 下拉的 value 是資料庫 id、placeholder(「(未選學校)」等)的 value 是空字串——
+          // 只有真的選了才取 textContent(名稱)當值,否則送空字串讓後端 REQUIRED 擋下,
+          // 不可用「selectedIndex 一定有值」判斷有沒有選,那樣永遠會拿到 placeholder 文字。
+          const 契約金額raw = awardI.value.trim();
+          const 契約工期raw = 工期I.value.trim();
           const values = {
             工程名稱: nameI.value.trim(), 監造單位: supI.value.trim(),
-            主辦機關: schoolI.options[schoolI.selectedIndex] ? schoolI.options[schoolI.selectedIndex].textContent : '',
+            主辦機關: schoolI.value ? schoolI.options[schoolI.selectedIndex].textContent : '',
             設計單位: desI.value.trim(),
-            承包廠商: vendorI.options[vendorI.selectedIndex] ? vendorI.options[vendorI.selectedIndex].textContent : '',
-            契約金額: awardI.value.trim(), 契約工期: 工期I.value.trim(),
+            承包廠商: vendorI.value ? vendorI.options[vendorI.selectedIndex].textContent : '',
+            // Excel COM 的 Value2 保留呼叫端傳入的原生型別,字串會讓儲存格存成文字而非數值,
+            // 故能轉數字就轉——空值/非數字仍留字串,讓後端 REQUIRED/FORMAT_OK 照常擋下並列出缺項。
+            契約金額: (契約金額raw !== '' && Number.isFinite(Number(契約金額raw))) ? Number(契約金額raw) : 契約金額raw,
+            契約工期: (契約工期raw !== '' && Number.isFinite(Number(契約工期raw))) ? Number(契約工期raw) : 契約工期raw,
             開工日期: 開工I.value, 工程編號: noI.value.trim(),
           };
           const r = await Api.post('projects/' + id + '/basics', { values });
