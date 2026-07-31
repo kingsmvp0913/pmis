@@ -46,7 +46,12 @@ try {
             'setCell' {
                 $cell = $ws.Range($op.addr)
                 if ($null -eq $op.value) { $cell.ClearContents() | Out-Null }
-                else { $cell.Value2 = $op.value }
+                # `$cell.Value2 = $op.value` cannot be used here: PowerShell 5.1 caches the
+                # COM property-setter binding per call site keyed on the first value's type,
+                # so a job that writes a string cell before a numeric one dies with
+                # "Unable to cast object of type 'System.Int32' to type 'System.String'".
+                # Going through IDispatch directly keeps the value's own type each time.
+                else { [void]$cell.GetType().InvokeMember('Value2', 'SetProperty', $null, $cell, @($op.value)) }
             }
             'setRange' {
                 $rows = $op.values.Count
