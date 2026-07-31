@@ -7,7 +7,7 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const { fillTemplate } = require('../server/template-engine');
 
-const FIX = path.join(__dirname, 'fixtures', 'sp0-template.xlsm');
+const FIX = path.join(__dirname, '..', 'templates', '監造報表_空白公版範本.xlsm');
 const OUT = path.join(__dirname, 'fixtures', '_sp0-out.xlsm');
 
 const d = process.env.SP0_SKIP_EXCEL ? describe.skip : describe;
