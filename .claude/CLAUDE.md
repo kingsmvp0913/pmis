@@ -72,3 +72,23 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 - **任務附件（平台內上傳）**：`app/uploads/task_<taskId>/<timestamp>_<檔名>`（env `UPLOAD_DIR`）；DB 只存相對 uploadRoot 的路徑。
 - **Odoo 內部 filestore（ir.attachment 二進位，如 asset bundle）**：`%LOCALAPPDATA%\OpenERP S.A\Odoo\filestore\test_<folder>\`（未指定 `--data-dir` 時 Odoo 的預設 data_dir）。
 <!-- /platform-only -->
+
+## 6. 跑測試（`app/` Node 專案）
+
+> 數字為 2026-08-01 在本機實測，非套用他案結論。
+
+**日常全跑**（跳過 Excel 整合測）：
+
+```bash
+cd app && SP0_SKIP_EXCEL=1 npx jest --runInBand --silent --noStackTrace --no-color
+```
+
+**含 Excel 整合測**（碰到 `template-engine.js` / `excel-com-driver.ps1` / 範本寫入時才需要）：把 `SP0_SKIP_EXCEL=1` 拿掉。
+
+- **這裡真正貴的是「時間」不是「token」**。全跑 272 秒，其中 **225 秒**全花在 `tests/template-engine.integration.test.js`（真的開 Excel）；跳過它剩約 47 秒。輸出量本身很小（預設 2,595 bytes / 66 行；加 `--silent --noStackTrace --no-color` 降到 1,749 bytes / 46 行），**沒到需要為省 token 而大動干戈的程度**——加旗標只是順手，別為此花力氣。
+- **兩段式**：全跑只求知道哪支紅；**紅了才對那一支單獨跑完整輸出**——log 在全綠時是噪音，在除錯時是線索。
+
+### 既有紅燈（乾淨 HEAD 也會紅，不要 debug）
+
+- **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅。** 實測連跑兩次紅的是不同子集（第一次 `copyRowDown`；第二次 `setCell` + `setRange`），錯誤都是「Excel 驅動重試 3 次仍失敗」＝ Excel COM 間歇回 null（見 memory `xlsm-excel-com-findings`）。**該檔紅了先重跑一次確認是否換一支紅；換了就是 flaky，不要追。**
+- 因此基線是 **213 個測試、其中 211–213 綠**，浮動來源只有上面這支。宣稱「全套綠」前先確認紅的是不是它。
