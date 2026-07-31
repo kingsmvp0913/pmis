@@ -10,6 +10,8 @@
  *
  * Exports:
  *   extractPages(filePath) -> Promise<Array<{ page:number, text:string }>>
+ *   rowsFromItems(items)   -> Array<{label,value}>(純函式,供兩欄表版面用)
+ *   extractRows(fileOrBuffer) -> Promise<Array<{page, rows:[{label,value}]}>>
  */
 const fs = require('fs');
 const pdf = require('pdf-parse');
@@ -51,4 +53,62 @@ async function extractPages(filePath) {
   }));
 }
 
-module.exports = { extractPages };
+// ── 兩欄表版面(如政府電子採購網決標公告「友善列印」)──
+// 版面固定:x<45 為區塊名直排字(機/關/資/料)、45≤x<130 為標籤欄、x≥130 為值欄。
+// 同一列的標籤與值 y 座標會差 1~3px,故以容差分組而非精確相等。
+const BLOCK_MAX_X = 45;
+const LABEL_MAX_X = 130;
+const Y_TOLERANCE = 3;
+
+/**
+ * 由單頁 text item 座標陣列建「標籤/值」列。純函式,不碰檔案系統。
+ *
+ * @param {Array<{x:number,y:number,s:string}>} items
+ * @returns {Array<{label:string,value:string}>} 由上而下
+ */
+function rowsFromItems(items) {
+  const buckets = [];
+  for (const it of items || []) {
+    if (!String(it.s == null ? '' : it.s).trim()) continue;
+    let b = buckets.find((k) => Math.abs(k.y - it.y) <= Y_TOLERANCE);
+    if (!b) {
+      b = { y: it.y, items: [] };
+      buckets.push(b);
+    }
+    b.items.push(it);
+  }
+  buckets.sort((a, b) => b.y - a.y);
+  return buckets.map((b) => {
+    const sorted = b.items.slice().sort((p, q) => p.x - q.x);
+    const join = (lo, hi) => sorted
+      .filter((i) => i.x >= lo && i.x < hi)
+      .map((i) => i.s)
+      .join('')
+      .normalize('NFKC')
+      .trim();
+    return { label: join(BLOCK_MAX_X, LABEL_MAX_X), value: join(LABEL_MAX_X, Infinity) };
+  });
+}
+
+/**
+ * 抽出 PDF 每頁的「標籤/值」列。僅適用版面為兩欄表的固定格式文件(決標公告);
+ * 自由文字 PDF 請用 extractPages。
+ *
+ * @param {string|Buffer} fileOrBuffer 檔案路徑或已讀入的內容(上傳走記憶體不落地)
+ * @returns {Promise<Array<{page:number, rows:Array<{label,value}>}>>}
+ */
+async function extractRows(fileOrBuffer) {
+  const buffer = Buffer.isBuffer(fileOrBuffer) ? fileOrBuffer : fs.readFileSync(fileOrBuffer);
+  const pages = [];
+  await pdf(buffer, {
+    pagerender: (pageData) => pageData
+      .getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false })
+      .then((tc) => {
+        pages.push(tc.items.map((it) => ({ x: it.transform[4], y: it.transform[5], s: it.str })));
+        return '';
+      }),
+  });
+  return pages.map((items, i) => ({ page: i + 1, rows: rowsFromItems(items) }));
+}
+
+module.exports = { extractPages, rowsFromItems, extractRows };

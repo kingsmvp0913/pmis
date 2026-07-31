@@ -8,11 +8,11 @@
  * 也能用,不依賴 app 原始碼佈局。
  *
  * re-export:
- *   來自 pdf.js  :extractPages
+ *   來自 pdf.js  :extractPages, rowsFromItems, extractRows
  *   來自 xlsx.js :readWorkbook, readSheet, gridFromWorksheet,
  *                 colToIndex, indexToCol, excelSerialToISO
  */
-const { extractPages } = require('./pdf');
+const { extractPages, rowsFromItems, extractRows } = require('./pdf');
 const {
   readWorkbook,
   readSheet,
@@ -24,6 +24,8 @@ const {
 
 module.exports = {
   extractPages,
+  rowsFromItems,
+  extractRows,
   readWorkbook,
   readSheet,
   gridFromWorksheet,
