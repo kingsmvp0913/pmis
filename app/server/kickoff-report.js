@@ -38,36 +38,140 @@ const ALL_LABELS = Object.values(LABELS).flat();
 const CORE_ANCHORS = ['工程名稱', '契約金額', '契約編號'];
 const DATE_FAMILY_LABELS = ['決標日期', ...LABELS.契約規定開工日, ...LABELS.契約規定竣工日];
 
-// 值前後常黏著冒號、全形冒號與定位符號,一併清掉再判空。
+// 這些是真實 OCR 常見、但不在我們 9 個欄位裡的「其他標題/標籤殘片」——
+// 2026-08-02 code review 追加實測(對照 5 份真實 OCR 輸出,見 task-5-report.md)發現
+// 表格常把好幾個標籤擠成一列、值又擠成另一列(如「監造單位/主辦機關/提報單位」
+// 三個標題連在一起,值另外一列),原本 `isAnyLabel` 只認自己 9 個欄位的標籤字串,
+// 遇到「提報單位」這種沒列進 LABELS 的標題會誤判成值——這正是「學校」欄位抽到
+// 「提報單位」四個字的根因。把這些已知的標題殘片也算進「不是值」的清單。
+const NON_VALUE_CAPTIONS = [
+  '監造單位', '提報單位', '承包廠商', '廠商名稱', '備註',
+  '檢附相關', '文件', '開工時程', '工期', '訂約日期',
+  '機關通知開工', '開工前協調會', '開工前協調', '之發文日期',
+  '會議日期', '議日期', '填表日期', '契約規定', '契約約定',
+];
+
+// 值前後常黏著冒號、全形冒號與定位符號,一併清掉再判空;整個值被「()」或「（）」
+// 包住是署名欄(如「(呂罡銘建築師事務所)」)的常見寫法,連括號一併拆掉。
 function cleanValue(s) {
-  const v = String(s == null ? '' : s).replace(/^[\s:：.、]+/, '').trim();
+  let v = String(s == null ? '' : s).replace(/^[\s:：.、]+/, '').trim();
+  const m = /^[（(](.*)[)）]$/.exec(v);
+  if (m) v = m[1].trim();
   return v === '' ? null : v;
 }
 
+// 工程名稱真正的值一定帶專案性質字眼;純機關/學校名稱(如「雲林縣元長鄉元長
+// 國民小學」)常常混在旁邊(它是工程地點或主辦機關的值),不能直接當工程名稱收下。
+const PROJECT_NAME_KEYWORDS = ['工程', '整修', '新建', '拆除', '改善', '修繕', '興建', '計畫'];
+// 主辦機關在這批樣本裡永遠是學校。
+const SCHOOL_NAME_MARKERS = ['國小', '國中', '小學', '中學'];
+
+// OCR 對中文會逐字插空格(「1 1 5 年」),比對日期形態前一律先清掉空白,
+// 否則「115 年 03 月 12 日」測不出是日期,型別把關就形同虛設。
+function looksLikeRocDate(s) {
+  const stripped = String(s).replace(/[\s　]/g, '');
+  return /(\d{1,3})[/年\-.](\d{1,2})[/月\-.](\d{1,2})/.test(stripped);
+}
+
+// 只有這 4 個欄位有型別把關,才允許往同方向跳過「已知非值標題」繼續找
+// (如元長的契約編號要跳過中間夾的契約金額值本身沒有標題可跳,但主辦機關
+// 要跳過「監造單位/提報單位」兩個標題才碰得到校名)。其餘欄位(決標日期、
+// 契約規定開工日/竣工日、工程地點、契約工期)沒有型別把關,同形態的候選值
+// (例如南陽「決標日期」隔壁跳過兩個標題後會先碰到的其實是「之發文日期」
+// 的值,兩者都是合法日期,型別測不出差別)一律只看緊鄰那一行,不跨標題找,
+// 避免抓到別的欄位的值卻沒有任何把關能擋下來(見 task-5-report.md)。
+const SKIPPABLE_FIELDS = new Set(['工程名稱', '契約編號', '契約金額', '主辦機關']);
+const MAX_LABEL_SKIP = 3;
+
 /**
- * 在一組文字行中找某標籤的值。先看同列(標籤之後的剩餘文字),
- * 同列無值再取下一列 —— OCR 會把表格的標籤欄與值欄打散成兩行。
+ * 型別把關:抽到的候選值形態明顯不對就當沒抽到,不硬收——錯值比空值傷害大
+ * (見 task-5-report.md 元長廁所實測:工程名稱被學校名稱頂替、契約編號被
+ * 契約金額頂替、主辦機關直接抽到隔壁標籤「提報單位」四個字)。
+ * 其餘欄位(工程地點、日期類、契約工期)交給下游 `extractCounty`／`rocToISO`／
+ * `parseDuration` 自然把關,這裡不重複判斷。
+ * @returns {boolean}
+ */
+function isPlausibleValue(fieldKey, s) {
+  switch (fieldKey) {
+    case '工程名稱':
+      return s.length >= 5 && PROJECT_NAME_KEYWORDS.some((k) => s.includes(k));
+    case '契約編號':
+      return !/[一-鿿]/.test(s) && /\d/.test(s) && s.length <= 20;
+    case '契約金額':
+      // 不能只看「有沒有連續數字」——契約編號(如「A1150608」)本身就有一長串
+      // 數字,單看數字長度會把契約編號誤收成金額(見 task-5-report.md 大美實測)。
+      // 金額一定有「元」、千分位逗號分組,或國字大寫數字這三種標記之一。
+      return !looksLikeRocDate(s)
+        && (/元/.test(s) || /\d{1,3}(,\d{3})+/.test(s)
+          || /[零〇一壹二貳兩三叁參四肆五伍六陸七柒八捌九玖十拾百佰千仟萬万億]/.test(s));
+    case '主辦機關':
+      return SCHOOL_NAME_MARKERS.some((k) => s.includes(k));
+    default:
+      return true;
+  }
+}
+
+/**
+ * 在一組文字行中找某標籤的值。先看同列(標籤之後的剩餘文字),同列無值再
+ * 往下一行找;只有 SKIPPABLE_FIELDS 這 4 個有型別把關的欄位才會再往上一行找
+ * (見 task-5-report.md 元長廁所:工程名稱/契約編號的值印在標籤「上面」那一列)。
+ * 其餘欄位不查上一行——「決標日期」與「契約規定開工日/竣工日」這類標籤常常
+ * 緊鄰成對(如元長的「竣工日期/開工日期」兩個標籤緊挨著),往上一行只會抓到
+ * 隔壁那個日期欄位自己的值,兩者形態相同,型別把關测不出來,查了反而更危險。
+ * 找到的候選只有通過型別檢查才收,型別不對就當這個方向沒找到——
+ * 不再繼續往同方向猜,猜錯比留白傷害更大。
  * @returns {string|null}
  */
-function findByLabels(lines, labels) {
+function findByLabels(lines, labels, fieldKey) {
+  const canGoBackward = SKIPPABLE_FIELDS.has(fieldKey);
   for (let i = 0; i < lines.length; i++) {
     const line = String(lines[i] || '');
     for (const label of labels) {
       const at = line.indexOf(label);
       if (at === -1) continue;
       const sameRow = cleanValue(line.slice(at + label.length));
-      if (sameRow) return sameRow;
-      // 同列無值:下一列若本身不是另一個標籤,即視為值
-      const next = cleanValue(lines[i + 1]);
-      if (next && !isAnyLabel(next)) return next;
+      if (sameRow && isPlausibleValue(fieldKey, sameRow)) return sameRow;
+      const forward = scanForValue(lines, i + 1, 1, fieldKey);
+      if (forward) return forward;
+      if (canGoBackward) {
+        const backward = scanForValue(lines, i - 1, -1, fieldKey);
+        if (backward) return backward;
+      }
     }
   }
   return null;
 }
 
-// 下一列若以任何已知標籤開頭,那是相鄰欄位而非本欄的值。
+// 往指定方向逐行找值:空白行一律跳過。遇到已知的「非值」標題
+// (本欄位與其他欄位的標籤、NON_VALUE_CAPTIONS 的標題殘片)時,
+// 只有 SKIPPABLE_FIELDS 這 4 個有型別把關的欄位才繼續往同方向跳過
+// (上限 MAX_LABEL_SKIP 行),其餘欄位遇到標題就直接判定這個方向找不到。
+// 停在第一個非標題行,只有通過型別檢查才採用,型別不合就視為找不到,
+// 不再繼續往同方向猜——猜錯比留白傷害更大。
+function scanForValue(lines, start, step, fieldKey) {
+  const canSkipLabels = SKIPPABLE_FIELDS.has(fieldKey);
+  let i = start;
+  let skipped = 0;
+  while (i >= 0 && i < lines.length) {
+    const s = cleanValue(lines[i]);
+    if (!s) { i += step; continue; }
+    if (isAnyLabel(s)) {
+      if (!canSkipLabels || skipped >= MAX_LABEL_SKIP) return null;
+      skipped += 1;
+      i += step;
+      continue;
+    }
+    return isPlausibleValue(fieldKey, s) ? s : null;
+  }
+  return null;
+}
+
+// 是否為「非值」的標題/標籤殘片:含本欄位與其他 8 個欄位的標籤,
+// 也含 NON_VALUE_CAPTIONS 這份從真實 OCR 收集來的其他標題清單。
 function isAnyLabel(s) {
-  return Object.values(LABELS).some((ls) => ls.some((l) => String(s).startsWith(l)));
+  const str = String(s);
+  if (ALL_LABELS.some((l) => str.startsWith(l))) return true;
+  return NON_VALUE_CAPTIONS.some((l) => str.startsWith(l));
 }
 
 // 幾乎每份都有「本工程定於中華民國○○○年○月○日正式開工」,
@@ -77,6 +181,21 @@ function startDateFallback(lines) {
     if (!/正式開工|開工典禮|開工日/.test(String(line))) continue;
     const iso = rocToISO(line);
     if (iso) return iso;
+  }
+  return null;
+}
+
+// 契約工期常埋在句子裡,不是乾淨的「標籤:數字」形態(大美是「機關通知日起
+// 90日曆天竣工」;台西/明禮則是「契約規定工期」標籤本身被 OCR 拆成
+// 「契約規定」/「工期」兩截,永遠對不上 LABELS.契約工期 的完整字串)。
+// 標籤路徑找不到時,退而在全文找含「日曆天」或「工作天」且能被 parseDuration
+// 解出天數的那一行——parseDuration 本身已有型別把關(如南陽的 `_J50_` 會被
+// 擋下),這裡不重複判斷,只借用它驗證候選行是否可信。
+function durationSentenceFallback(lines) {
+  for (const line of lines) {
+    const s = String(line);
+    if (!/日曆天|工作天/.test(s)) continue;
+    if (parseDuration(s).天數 != null) return s;
   }
   return null;
 }
@@ -167,10 +286,11 @@ function extractFields(ocrOutput) {
   for (const key of Object.keys(LABELS)) {
     for (const p of pages) {
       if (raw[key]) break;
-      raw[key] = findByLabels((p && p.lines) || [], LABELS[key]);
+      raw[key] = findByLabels((p && p.lines) || [], LABELS[key], key);
     }
     if (!raw[key]) raw[key] = null;
   }
+  if (!raw.契約工期) raw.契約工期 = durationSentenceFallback(allLines);
 
   const 開工日 = rocToISO(raw.契約規定開工日) || startDateFallback(allLines);
 
