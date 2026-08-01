@@ -12,9 +12,11 @@
  *   flattenRows(pages)        把 extractRows 的逐頁結構攤平成單一列陣列
  *   firstValue(rows, label)   取某標籤第一個「有值」的列(標籤換行續行無值,須跳過)
  *   parseAmount(v)            '3,122,168元' -> 3122168;非此格式回 null
+ *   parseVenue(v)             '雲林縣(非原住民地區)' -> '雲林縣';去括號註記供 SP1B 階段二比對
+ *   parsePeriod(v)            '115/06/16 - 115/11/12 (預估)' -> {起,迄};拆日期並去預估標記供 SP1B 階段二比對
  *   parseDirectFields(rows)   標籤與值同列的 4 個錨點
  *   winningVendor(rows)       由「投標廠商N」群組取「是否得標=是」那家
- *   parseAwardNotice(pages)   組合上述,純函式輸出 5 值;掃描件 throw
+ *   parseAwardNotice(pages)   組合上述,純函式輸出 8 值(原 5 值 + 決標日/地點/起迄供階段二比對);掃描件 throw
  *   readAwardNotice(fileOrBuffer)  讀檔(路徑或 Buffer)後解析,薄薄一層 IO
  */
 
@@ -126,13 +128,13 @@ function parseDirectFields(rows) {
 }
 
 /**
- * 解析決標公告 → 5 值。純函式,吃 extractRows 的輸出。
+ * 解析決標公告 → 8 值(原 5 值 + 3 個 SP1B 階段二比對錨點)。純函式,吃 extractRows 的輸出。
  *
  * 整份抽不到任何文字 = 掃描件。此時直接 throw(帶 code 'SCANNED_PDF')而非回滿滿 null,
  * 否則承辦人會誤以為「已解析、只是沒抓到」而放行。不做 OCR fallback。
  *
  * @param {Array<{page:number, rows:Array<{label,value}>}>} pages
- * @returns {{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號}}
+ * @returns {{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號, 決標日期, 履約地點, 履約起迄}}
  */
 function parseAwardNotice(pages) {
   const rows = flattenRows(pages);
@@ -158,7 +160,7 @@ function parseAwardNotice(pages) {
 /**
  * 讀檔並解析。上傳走記憶體時直接傳 Buffer,不落地暫存檔。
  * @param {string|Buffer} fileOrBuffer
- * @returns {Promise<{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號}>}
+ * @returns {Promise<{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號, 決標日期, 履約地點, 履約起迄}>}
  */
 async function readAwardNotice(fileOrBuffer) {
   return parseAwardNotice(await extractRows(fileOrBuffer));
