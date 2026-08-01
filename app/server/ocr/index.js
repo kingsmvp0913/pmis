@@ -8,7 +8,7 @@
  * Exports:
  *   DEFAULT_WIDTHS        [2200, 3400](spec §3.5 實測;不得加第三個)
  *   collapseCjkSpaces(s)  清掉 CJK 字元之間的空格(OCR 逐字插空格)
- *   ocrPdf(pdfPath, opts) → { pages: [{page, width, lines}] }
+ *   ocrPdf(pdfPath, opts) → { pages: [{page, width, lines}], failedPages: [{page, width, error}] }
  */
 const path = require('path');
 const { execFile } = require('child_process');
@@ -57,8 +57,10 @@ function spawnDriver(pdfPath, width) {
         let result;
         try { result = JSON.parse(lines[lines.length - 1]); }
         catch { return reject(new Error(`無法解析 OCR 驅動輸出:${stdout}\n${stderr}`)); }
+        // ok=false 代表這個解析度整趟沒有任何一頁成功(driver 端只在
+        // 「全部頁都失敗」時才會這樣回),對呼叫端而言等同這個解析度失敗。
         if (!result.ok) return reject(new Error(result.error || 'OCR 驅動未知錯誤'));
-        resolve(result.pages || []);
+        resolve({ pages: result.pages || [], failedPages: result.failedPages || [] });
       }
     );
   });
@@ -69,29 +71,32 @@ function spawnDriver(pdfPath, width) {
  * 合併規則(逐欄取聯集)屬業務層,基礎設施層不該決定。
  *
  * 單一解析度失敗不讓整趟失敗:兩個解析度本就是為了互補,少一個仍可用;
- * 全部失敗才 throw。
+ * 全部失敗才 throw。同理,單一頁在某個解析度下失敗(driver 端已逐頁 try/catch)
+ * 不會拖垮同一趟裡的其他頁——失敗頁的痕跡會出現在 failedPages,不會被靜默吞掉。
  *
  * @param {string} pdfPath 會轉成絕對路徑——WinRT 的 GetFileFromPathAsync 不吃相對路徑
  * @param {{widths?: number[]}} [opts]
- * @returns {Promise<{pages: Array<{page:number, width:number, lines:string[]}>}>}
+ * @returns {Promise<{pages: Array<{page:number, width:number, lines:string[]}>, failedPages: Array<{page:number, width:number, error:string}>}>}
  */
 async function ocrPdf(pdfPath, opts) {
   const widths = (opts && opts.widths) || DEFAULT_WIDTHS;
   const abs = path.resolve(pdfPath);
   const all = [];
+  const failedPages = [];
   const errors = [];
   for (const w of widths) {
     try {
-      const pages = await spawnDriver(abs, w);
+      const { pages, failedPages: failed } = await spawnDriver(abs, w);
       for (const p of pages) {
         all.push({ page: p.page, width: p.width, lines: (p.lines || []).map(collapseCjkSpaces) });
       }
+      failedPages.push(...failed);
     } catch (err) {
       errors.push(err.message);
     }
   }
   if (all.length === 0) throw new Error(`OCR 全部解析度皆失敗:${errors.join(' / ')}`);
-  return { pages: all };
+  return { pages: all, failedPages };
 }
 
 module.exports = { DEFAULT_WIDTHS, collapseCjkSpaces, ocrPdf };

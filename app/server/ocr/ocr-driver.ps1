@@ -66,8 +66,11 @@ try {
     $pdf = Await ([Windows.Data.Pdf.PdfDocument]::LoadFromFileAsync($file)) ([Windows.Data.Pdf.PdfDocument])
 
     $pages = @()
+    $failedPages = @()
     for ($i = 0; $i -lt $pdf.PageCount; $i++) {
         $page = $pdf.GetPage($i)
+        $stream = $null
+        $bitmap = $null
         try {
             $stream = New-Object Windows.Storage.Streams.InMemoryRandomAccessStream
             $opts = New-Object Windows.Data.Pdf.PdfPageRenderOptions
@@ -81,17 +84,30 @@ try {
             $lines = @()
             foreach ($ln in $result.Lines) { $lines += $ln.Text }
             $pages += @{ page = ($i + 1); width = $Width; lines = $lines }
-
-            $bitmap.Dispose()
-            $stream.Dispose()
+        }
+        catch {
+            # A single page failing (e.g. a corrupt embedded image) must not
+            # abort the whole document: record it and move on to the next
+            # page, so the other pages -- which the two-resolution union
+            # design depends on -- still come through.
+            $failedPages += @{ page = ($i + 1); width = $Width; error = $_.Exception.Message }
         }
         finally {
-            # PdfPage has Dispose(), NOT Close().
+            # $stream/$bitmap may be $null if the exception happened before
+            # they were created; PdfPage has Dispose(), NOT Close().
+            if ($null -ne $bitmap) { $bitmap.Dispose() }
+            if ($null -ne $stream) { $stream.Dispose() }
             $page.Dispose()
         }
     }
 
-    Emit @{ ok = $true; pages = $pages }
+    if ($pages.Count -eq 0 -and $failedPages.Count -gt 0) {
+        # Every page failed: nothing usable came out of this resolution.
+        Emit @{ ok = $false; error = 'All pages failed OCR'; failedPages = $failedPages }
+    }
+    else {
+        Emit @{ ok = $true; pages = $pages; failedPages = $failedPages }
+    }
 }
 catch {
     Emit @{ ok = $false; error = $_.Exception.Message }
