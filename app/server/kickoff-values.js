@@ -8,6 +8,8 @@
  *   rocToISO(v)       民國各種寫法 → 'YYYY-MM-DD';非法回 null
  *   cnNumToNumber(v)  國字大寫金額 → 數值;非國字回 null
  *   parseMoney(v)     阿拉伯數字與國字大寫都吃 → 數值
+ *   parseDuration(v)  契約工期字串 → {天數:number|null, 基準:string|null}
+ *   deriveDuration(startISO, endISO)  開工日→竣工日 → 日曆天數(含頭尾)
  */
 
 // OCR 對中文會逐字插空格(「1 1 5 年」),比對前一律先清掉所有空白。
@@ -101,4 +103,45 @@ function parseMoney(v) {
   return cnNumToNumber(s);
 }
 
-module.exports = { rocToISO, cnNumToNumber, parseMoney };
+/**
+ * 契約工期:取天數與基準。'150日曆天' / '160工作天' / '機關通知日起90日曆天竣工'。
+ *
+ * 基準必須分辨:由開工日→竣工日推導出的是**日曆天**,明禮那份是工作天,
+ * 不分基準就會對它產生一個必然的假警報(spec §5.4)。
+ * 讀壞的值(南陽 '_J50_'、豐榮 '一』一一')一律回 null,不從雜訊裡硬湊數字。
+ *
+ * @returns {{天數:number|null, 基準:'日曆天'|'工作天'|null}}
+ */
+function parseDuration(v) {
+  if (v == null) return { 天數: null, 基準: null };
+  const s = stripSpace(v);
+  const 基準 = /工作天/.test(s) ? '工作天' : (/日曆天/.test(s) ? '日曆天' : null);
+  // 只認連續的純數字。'_J50_' 裡的 50 也會被抓到,故要求數字前後不得緊鄰
+  // 英文字母或底線——那是 OCR 把字形讀壞的特徵,不是真的數字。
+  const m = /(?:^|[^0-9A-Za-z_])(\d{1,4})(?:[^0-9A-Za-z_]|$)/.exec(s);
+  const 天數 = m ? Number(m[1]) : null;
+  return { 天數: 天數 != null && 天數 > 0 ? 天數 : null, 基準 };
+}
+
+const MS_PER_DAY = 86400000;
+
+/**
+ * 由開工日、竣工日推導工期(**含頭尾**)。3/18→8/14 是 150 天,不是 149。
+ * 少算一天會讓 24 份全部判不符。
+ *
+ * 迄早於起是資料錯誤,回 null 而非負數:負數會與表上的正數比出「不符」,
+ * 看起來像是工期填錯,實際是日期填反,兩者要承辦人做的事不同。
+ *
+ * @param {string|null} startISO 'YYYY-MM-DD'
+ * @param {string|null} endISO   'YYYY-MM-DD'
+ * @returns {number|null}
+ */
+function deriveDuration(startISO, endISO) {
+  if (!startISO || !endISO) return null;
+  const a = Date.parse(`${startISO}T00:00:00Z`);
+  const b = Date.parse(`${endISO}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null;
+  return Math.round((b - a) / MS_PER_DAY) + 1;
+}
+
+module.exports = { rocToISO, cnNumToNumber, parseMoney, parseDuration, deriveDuration };

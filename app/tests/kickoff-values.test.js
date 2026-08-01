@@ -1,4 +1,4 @@
-const { rocToISO, cnNumToNumber, parseMoney } = require('../server/kickoff-values');
+const { rocToISO, cnNumToNumber, parseMoney, parseDuration, deriveDuration } = require('../server/kickoff-values');
 
 // 決標公告是 115/06/16,開工報告表是「中華民國115年6月16日」。
 // 兩種寫法必須落到同一個值,否則決標日這欄永遠判不符。
@@ -31,4 +31,31 @@ describe('parseMoney', () => {
   test('國字大寫', () => expect(parseMoney('貳佰肆拾伍萬陸仟元整')).toBe(2456000));
   test('純數值', () => expect(parseMoney(3122168)).toBe(3122168));
   test('讀不到回 null', () => expect(parseMoney('__J_?O_')).toBeNull());
+});
+
+describe('parseDuration', () => {
+  test('日曆天', () => expect(parseDuration('150日曆天')).toEqual({ 天數: 150, 基準: '日曆天' }));
+  // 明禮是全 24 份中唯一的工作天案例。由日期推導出的必然是日曆天,
+  // 不分基準就會對明禮產生一個必然的假警報。
+  test('工作天要辨識出來', () => expect(parseDuration('160工作天')).toEqual({ 天數: 160, 基準: '工作天' }));
+  // 大美:「機關通知日起 90 日曆天竣工」—— 數字埋在句子裡
+  test('埋在句子裡的天數', () => expect(parseDuration('機關通知日起90日曆天竣工')).toEqual({ 天數: 90, 基準: '日曆天' }));
+  // OCR 逐字空格
+  test('OCR 空格', () => expect(parseDuration('1 6 0 日 曆 天')).toEqual({ 天數: 160, 基準: '日曆天' }));
+  // 南陽 150→'_J50_'、石龜 120→'__J_?O_' :OCR 讀壞的值不得硬湊成數字
+  test('讀壞的值回 null 不硬湊', () => {
+    expect(parseDuration('_J50_')).toEqual({ 天數: null, 基準: null });
+    expect(parseDuration('一』一一')).toEqual({ 天數: null, 基準: null });
+  });
+  test('沒基準字樣也要取到天數', () => expect(parseDuration('150')).toEqual({ 天數: 150, 基準: null }));
+});
+
+describe('deriveDuration', () => {
+  // 含頭尾:3/18 到 8/14 是 150 天。少算一天則 24 份全部判不符。
+  test('含頭尾計算', () => expect(deriveDuration('2026-03-18', '2026-08-14')).toBe(150));
+  test('同一天為 1 天', () => expect(deriveDuration('2026-03-18', '2026-03-18')).toBe(1));
+  test('跨年', () => expect(deriveDuration('2026-07-15', '2027-01-10')).toBe(180));
+  test('缺值回 null', () => expect(deriveDuration(null, '2026-08-14')).toBeNull());
+  // 竣工早於開工是資料錯誤,不得回負數讓它靜默通過比對
+  test('迄早於起回 null', () => expect(deriveDuration('2026-08-14', '2026-03-18')).toBeNull());
 });
