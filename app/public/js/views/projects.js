@@ -444,6 +444,14 @@
           koErr.textContent = e.message;
           koErr.style.display = '';
           koConfirmBtn.style.display = 'none';
+          // 解析失敗時不能留著「上一份文件」的解析結果——沒清的話,承辦人看到
+          // 的會是一句「這個檔認不得」配一整張看起來屬於它的比對表,很容易
+          // 誤讀成「雖然有警告,但還是解析出東西了」。這裡清的都是「描述剛才
+          // 那份文件解析結果」的畫面元素;工期I/開工I 是承辦人自己的工作區
+          // (可能已經手動改過),解析失敗不該動它,故不在清空之列。
+          kickoffFile = null;
+          kickoffValues = null;
+          renderKickoffRows(null);
         } finally {
           koParseBtn.disabled = false;
           koParseBtn.textContent = '解析並比對';
