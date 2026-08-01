@@ -495,7 +495,14 @@
           if (e.fields && e.fields.length) {
             for (const f of e.fields) {
               const span = koResultCells[f];
-              if (span) { span.className = 'error-msg'; span.textContent = '與決標公告不符,請確認後修正'; }
+              if (!span) continue;
+              span.className = 'error-msg';
+              // 契約工期是開工報告表自身的內部自洽性檢查(表列工期 vs 開工/竣工日推導值),
+              // 不是跨文件比對,不可套用「與決標公告不符」——那會跟 koErr 頂部訊息自相矛盾
+              // (buildHardErrorMessage 已刻意分流,見 kickoff-routes.js)
+              span.textContent = f === '契約工期'
+                ? '仍不符,請確認表格填寫'
+                : '與決標公告不符,請確認後修正';
             }
           }
         } finally { koConfirmBtn.disabled = false; }
