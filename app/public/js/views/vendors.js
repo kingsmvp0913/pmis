@@ -149,16 +149,19 @@
   // ── 編輯 / 新增 ──
   async function renderEdit(content, id) {
     const isNew = id === 'new';
-    let vendor = { name: '', contacts: [] };
+    let vendor = { name: '', address: '', contacts: [] };
     if (!isNew) {
       try { vendor = await Api.get('vendors/' + id); }
       catch (e) { showToast(e.message, 'error'); window.location.hash = '/vendors'; return; }
     }
     content.appendChild(el('div', { class: 'page-title' }, isNew ? '新增廠商' : '編輯廠商'));
     const nameI = el('input', { class: 'form-control', type: 'text', value: vendor.name || '' });
+    // 地址由決標公告的「廠商地址」自動帶入,但仍可手改——公告是決標當下的快照。
+    const addressI = el('input', { class: 'form-control', type: 'text', value: vendor.address || '' });
     const contacts = contactsEditor(vendor.contacts);
     const card = el('div', { class: 'card' }, [
       el('div', { class: 'form-group' }, [el('label', {}, '廠商名稱'), nameI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '地址'), addressI]),
       el('div', { class: 'card-title', style: 'margin-top:8px' }, '聯絡人'),
       contacts,
       el('div', { class: 'form-actions' }, [
@@ -174,7 +177,7 @@
     async function save() {
       const name = nameI.value.trim();
       if (!name) { showToast('請輸入廠商名稱', 'warn'); return; }
-      const body = { name, contacts: contacts._read() };
+      const body = { name, address: addressI.value.trim(), contacts: contacts._read() };
       try {
         if (isNew) await Api.post('vendors', body);
         else await Api.put('vendors/' + id, body);

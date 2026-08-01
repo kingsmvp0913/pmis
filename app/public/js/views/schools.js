@@ -53,7 +53,7 @@
 
   async function renderEdit(content, id) {
     const isNew = id === 'new';
-    let school = { name: '', county: '', contacts: [] };
+    let school = { name: '', county: '', address: '', contacts: [] };
     if (!isNew) {
       try { school = await Api.get('schools/' + id); }
       catch (e) { showToast(e.message, 'error'); window.location.hash = '/schools'; return; }
@@ -61,12 +61,15 @@
     content.appendChild(el('div', { class: 'page-title' }, isNew ? '新增學校' : '編輯學校'));
     const nameI = el('input', { class: 'form-control', type: 'text', value: school.name || '' });
     const countyI = countySelect(school.county || '');
+    // 地址由決標公告的「機關地址」自動帶入,但仍可手改——公告是決標當下的快照。
+    const addressI = el('input', { class: 'form-control', type: 'text', value: school.address || '' });
     const contacts = contactsEditor(school.contacts);
     const card = el('div', { class: 'card' }, [
       el('div', { class: 'form-row' }, [
         el('div', { class: 'form-group' }, [el('label', {}, '學校名稱'), nameI]),
         el('div', { class: 'form-group' }, [el('label', {}, '學區(縣市)'), countyI])
       ]),
+      el('div', { class: 'form-group' }, [el('label', {}, '地址'), addressI]),
       el('div', { class: 'card-title', style: 'margin-top:8px' }, '聯絡人'),
       contacts,
       el('div', { class: 'form-actions' }, [
@@ -79,7 +82,9 @@
     async function save() {
       const name = nameI.value.trim();
       if (!name) { showToast('請輸入學校名稱', 'warn'); return; }
-      const body = { name, county: countyI.value, contacts: contacts._read() };
+      const body = {
+        name, county: countyI.value, address: addressI.value.trim(), contacts: contacts._read(),
+      };
       try {
         if (isNew) await Api.post('schools', body);
         else await Api.put('schools/' + id, body);

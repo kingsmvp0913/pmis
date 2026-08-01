@@ -578,18 +578,36 @@
       if (p.工程名稱) nameI.value = p.工程名稱;
       if (p.工程編號) noI.value = p.工程編號;
       if (p.契約金額 != null) awardI.value = p.契約金額;
-      bindOrCreate(vendorI, data.vendorMatch, 'vendors', '廠商', null);
-      bindOrCreate(schoolI, data.schoolMatch, 'schools', '學校', (data.schoolMatch || {}).county);
+      bindOrCreate(vendorI, data.vendorMatch, 'vendors', '廠商');
+      bindOrCreate(schoolI, data.schoolMatch, 'schools', '學校');
     }
 
-    // match.id 有值就直接選起來;沒有就長出一顆「建立並綁定」,
-    // 建立成功後把新選項插進下拉並選取。
-    function bindOrCreate(select, match, apiPath, label, county) {
+    // 決標公告帶回來的聯絡人。廠商側只有電話、沒有姓名(公告上就沒有這個欄位),
+    // 故兩者任一有值就成立,不能要求姓名必填。
+    function contactPayload(match) {
+      const c = (match && match.contact) || {};
+      const name = (c.name || '').trim();
+      const phone = (c.phone || '').trim();
+      if (!name && !phone) return null;
+      return { name: name || null, phone: phone || null, is_primary: true };
+    }
+
+    // match.id 有值就直接選起來,並補上公告帶來的聯絡人/地址(只補空缺);
+    // 沒有就長出一顆「建立並綁定」,建立時一併寫入聯絡人與地址。
+    function bindOrCreate(select, match, apiPath, label) {
       const holder = select.parentNode;
       const old = holder.querySelector('.org-create');
       if (old) old.remove();
       if (!match || !match.name) return;
-      if (match.id) { select.value = String(match.id); return; }
+
+      const contact = contactPayload(match);
+      const address = (match.address || '').trim() || null;
+
+      if (match.id) {
+        select.value = String(match.id);
+        seedExisting(match.id, apiPath, label, contact, address);
+        return;
+      }
 
       select.value = '';
       const btn = el('button', { class: 'btn', type: 'button' }, `建立「${match.name}」並綁定`);
@@ -599,16 +617,38 @@
       btn.addEventListener('click', async () => {
         btn.disabled = true;
         try {
-          const body = county ? { name: match.name, county } : { name: match.name };
+          const body = { name: match.name };
+          if (match.county) body.county = match.county;
+          if (address) body.address = address;
+          if (contact) body.contacts = [contact];
           const created = await Api.post(apiPath, body);
           const opt = el('option', { value: String(created.id) }, created.name);
           select.appendChild(opt);
           select.value = String(created.id);
           box.remove();
-          showToast(`已建立${label}「${created.name}」`, 'success');
+          showToast(`已建立${label}「${created.name}」${contact ? '(含聯絡人)' : ''}`, 'success');
         } catch (e) { showToast(e.message, 'error'); btn.disabled = false; }
       });
       holder.appendChild(box);
+    }
+
+    // 既有學校/廠商:只補「一筆聯絡人都沒有」與「地址是空的」這兩種空缺,
+    // 承辦人維護過的值一律不動(公告是決標當下的快照,可能已經過時)。
+    // 補不成不該打斷建檔流程,故只提示不 throw;但也不靜默吞掉。
+    async function seedExisting(id, apiPath, label, contact, address) {
+      if (!contact && !address) return;
+      try {
+        const body = {};
+        if (contact) body.contact = contact;
+        if (address) body.address = address;
+        const r = await Api.post(`${apiPath}/${id}/seed`, body);
+        const done = [];
+        if (r.seeded && r.seeded.contact) done.push('聯絡人');
+        if (r.seeded && r.seeded.address) done.push('地址');
+        if (done.length) showToast(`已為既有${label}補上${done.join('與')}`, 'success');
+      } catch (e) {
+        showToast(`${label}聯絡人補寫失敗:${e.message}`, 'warn');
+      }
     }
 
     async function save() {
