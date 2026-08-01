@@ -153,6 +153,9 @@ describe('parseAwardNotice — 組合輸出 5 值', () => {
       承包廠商: '展翔營造股份有限公司',
       契約金額: 2406478,
       工程編號: 'A1150519',
+      決標日期: null,
+      履約地點: null,
+      履約起迄: { 起: null, 迄: null },
     });
     expect(out).not.toHaveProperty('契約工期');
   });
@@ -164,4 +167,43 @@ describe('parseAwardNotice — 組合輸出 5 值', () => {
     expect(err.code).toBe('SCANNED_PDF');
     expect(err.message).toMatch(/掃描件/);
   });
+});
+
+const { parseVenue, parsePeriod, parseAwardNotice: parseAwardNotice2 } = require('../server/award-notice');
+
+// 履約地點是行政區級距(27/27 都是這種形態),開工報告表寫的是實際地址。
+// 只能比開頭縣市,故解析時就把括號註記去掉,不讓比對層再處理一次。
+test('parseVenue 去掉括號註記只留縣市', () => {
+  expect(parseVenue('雲林縣(非原住民地區)')).toBe('雲林縣');
+  expect(parseVenue('嘉義縣（非原住民地區）')).toBe('嘉義縣');
+  expect(parseVenue(null)).toBeNull();
+});
+
+// '115/06/16 - 115/11/12 (預估)' → 起迄兩值。(預估) 三字必須去掉,
+// 否則迄日永遠帶著它、與開工報告表逐字比必然不符。
+test('parsePeriod 拆出起迄並去除 (預估)', () => {
+  expect(parsePeriod('115/06/16 - 115/11/12 (預估)')).toEqual({ 起: '115/06/16', 迄: '115/11/12' });
+  expect(parsePeriod('115/03/18 - 115/08/14')).toEqual({ 起: '115/03/18', 迄: '115/08/14' });
+});
+
+// 鹿場 B1150513 整份沒有履約起迄日期欄。缺值必須是 {起:null,迄:null} 而非 throw,
+// 否則一份缺欄的公告會讓整個解析失敗、連其他 7 欄都拿不到。
+test('parsePeriod 缺值回兩個 null', () => {
+  expect(parsePeriod(null)).toEqual({ 起: null, 迄: null });
+  expect(parsePeriod('')).toEqual({ 起: null, 迄: null });
+});
+
+test('parseAwardNotice 一併回三個新錨點', () => {
+  const pages = [{ page: 1, rows: [
+    { label: '標案名稱', value: '測試工程' },
+    { label: '決標日期', value: '115/06/16' },
+    { label: '履約地點', value: '雲林縣(非原住民地區)' },
+    { label: '履約地點(含地區)', value: '雲林縣-全區' },
+    { label: '履約起迄日期', value: '115/06/16 - 115/11/12 (預估)' },
+  ] }];
+  const r = parseAwardNotice2(pages);
+  expect(r.決標日期).toBe('115/06/16');
+  // 「履約地點(含地區)」是另一個標籤,firstValue 逐字相等故不會誤取
+  expect(r.履約地點).toBe('雲林縣');
+  expect(r.履約起迄).toEqual({ 起: '115/06/16', 迄: '115/11/12' });
 });

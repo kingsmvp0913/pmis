@@ -63,6 +63,33 @@ function parseAmount(v) {
 }
 
 /**
+ * '雲林縣(非原住民地區)' → '雲林縣'。27/27 份的履約地點都是這種「行政區級距 + 括號註記」
+ * 形態,與開工報告表的實際地址不是同一種資料,只能比開頭縣市(spec §5.2)。
+ * 全形括號也要處理:同一份公告內半形全形混用。
+ * @returns {string|null}
+ */
+function parseVenue(v) {
+  if (v == null) return null;
+  const s = String(v).replace(/[（(].*$/, '').trim();
+  return s === '' ? null : s;
+}
+
+/**
+ * '115/06/16 - 115/11/12 (預估)' → { 起, 迄 }。
+ * 「(預估)」必須去掉——它是決標公告自己標明的不確定性(spec §5.3),
+ * 留著會讓迄日與開工報告表逐字比永遠不符。
+ * 鹿場 B1150513 整份無此欄,缺值回兩個 null 而非 throw:
+ * 一份缺欄不該讓其餘 7 欄一起拿不到。
+ * @returns {{起:string|null, 迄:string|null}}
+ */
+function parsePeriod(v) {
+  if (v == null) return { 起: null, 迄: null };
+  const s = String(v).replace(/[（(].*$/, '').trim();
+  const m = /^(\d{2,3}\/\d{1,2}\/\d{1,2})\s*[-–~]\s*(\d{2,3}\/\d{1,2}\/\d{1,2})$/.exec(s);
+  return m ? { 起: m[1], 迄: m[2] } : { 起: null, 迄: null };
+}
+
+/**
  * 由「投標廠商N」群組取得標廠商名稱。
  *
  * 決標公告會列出所有投標廠商,**得標的不必然是第一家**——28 份樣本中有 4 份不是
@@ -121,6 +148,10 @@ function parseAwardNotice(pages) {
     承包廠商: winningVendor(rows),
     契約金額: direct.契約金額,
     工程編號: direct.工程編號,
+    // 以下三欄只供 SP1B 階段二比對,不進 SP1 的 5 值裁決流程
+    決標日期: firstValue(rows, '決標日期'),
+    履約地點: parseVenue(firstValue(rows, '履約地點')),
+    履約起迄: parsePeriod(firstValue(rows, '履約起迄日期')),
   };
 }
 
@@ -134,5 +165,5 @@ async function readAwardNotice(fileOrBuffer) {
 }
 
 module.exports = {
-  flattenRows, firstValue, parseAmount, parseDirectFields, winningVendor, parseAwardNotice, readAwardNotice,
+  flattenRows, firstValue, parseAmount, parseVenue, parsePeriod, parseDirectFields, winningVendor, parseAwardNotice, readAwardNotice,
 };
