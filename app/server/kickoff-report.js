@@ -13,7 +13,7 @@
  *   readKickoffReport(path)  跑 OCR 後抽欄位(薄 IO 層)
  */
 const { rocToISO, parseMoney, parseDuration } = require('./kickoff-values');
-const { normalizeOrgName, extractCounty } = require('./org-match');
+const { extractCounty } = require('./org-match');
 const { ocrPdf } = require('./ocr');
 
 // 標籤候選。變體只有元長廁所一份使用(`契約約定工期`/`開工日期`),
@@ -30,11 +30,13 @@ const LABELS = {
   契約規定竣工日: ['契約規定竣工日', '竣工日期'],
 };
 
-// 判斷一份文件「是不是開工報告表」:只要命中任一已知標籤(不分欄位),
-// 或「正式開工」退路句本身可解出日期,即視為開工報告表——24 份實測中
-// 3 份公文體/他縣市格式兩者皆無,其餘每份至少命中其中一種。
-// 兩者皆無才 throw,硬湊欄位會讓承辦人以為系統看懂了,實際比對的是別份文件的內容。
 const ALL_LABELS = Object.values(LABELS).flat();
+
+// 只挑「工程名稱/契約金額/契約編號」與「決標/開工/竣工日」這兩組標籤出來獨立判斷,
+// 是 2026-08-01 code review 追加實測(對照 docs/samples/開工報告表/ 7 份真實 OCR 輸出、
+// 見 task-5-report.md)找出的兩個判別特徵,而非憑空猜的門檻。
+const CORE_ANCHORS = ['工程名稱', '契約金額', '契約編號'];
+const DATE_FAMILY_LABELS = ['決標日期', ...LABELS.契約規定開工日, ...LABELS.契約規定竣工日];
 
 // 值前後常黏著冒號、全形冒號與定位符號,一併清掉再判空。
 function cleanValue(s) {
@@ -79,10 +81,64 @@ function startDateFallback(lines) {
   return null;
 }
 
-// 是否具備開工報告表的痕跡:命中任一已知標籤,或退路句可解出日期。
-function looksLikeKickoffReport(allLines) {
-  if (allLines.some((l) => ALL_LABELS.some((label) => l.includes(label)))) return true;
-  return startDateFallback(allLines) != null;
+// 判定「是不是開工報告表」只看第 1 頁:24 份實測中,除了不合規格的那幾份,
+// 其餘每份的關鍵欄位都落在第 1 頁(後續頁是品管人員登錄表、證書等附件)。
+// 若把附件頁也算進來,像「公誠國小-開工資料+公文.pdf」這種公文封面+附件合併
+// 上傳的 8 頁 PDF,附件裡剛好也有乾淨的「工程名稱」等標籤,會被誤判成開工報告表
+// 本身,反而放過真正該擋下的封面公文(該公文的第 1 頁沒有任何一個已知標籤,
+// 也沒有退路句)。
+function firstPageLines(pages) {
+  const p1 = pages.filter((p) => p && p.page === 1);
+  const src = p1.length ? p1 : pages;
+  const out = [];
+  for (const p of src) for (const l of (p && p.lines) || []) out.push(String(l));
+  return out;
+}
+
+// 只認「行首」命中,不認整行任意位置命中:「公誠國小」封面公文裡有一句
+// 「...契約編號A1150506,依合約...」,契約編號三字埋在句子中間,若整行任意
+// 位置都算命中,這種公文夾雜的巧合字串會被誤判成真的表格欄位。
+function hasLabelAtLineStart(lines) {
+  return lines.some((l) => {
+    const s = String(l).trim();
+    return ALL_LABELS.some((label) => s.startsWith(label));
+  });
+}
+
+// 「校園中庭紅磚道路面修復及排水溝設置工程_開工報告表.pdf」(臺中市格式)實測:
+// 工程名稱/契約金額/契約編號、署名欄「主辦機關」、「工程地點」全部命中且版面完整,
+// 但整份文件沒有「決標日期」,也沒有任何「開工日/竣工日」標籤(連變體都沒有)——
+// 這是臺中市簡化格式特有的缺口,不是元長那種只是換了標籤名稱
+// (元長仍命中變體標籤「開工日期」)。只在版面看起來完整時才用這條擋,
+// 避免誤傷本來就只填了 1、2 個欄位的正常案例或最小化的測試 fixture。
+function looksComplete(lines) {
+  const anchorHits = CORE_ANCHORS.filter((label) => lines.some((l) => l.includes(label))).length;
+  return anchorHits >= 2
+    && lines.some((l) => l.includes('主辦機關'))
+    && lines.some((l) => l.includes('工程地點'));
+}
+
+function missingDateFamily(lines) {
+  return !DATE_FAMILY_LABELS.some((label) => lines.some((l) => l.includes(label)));
+}
+
+/**
+ * 是否具備開工報告表的痕跡(只看第 1 頁):版面完整卻整組決標/開工/竣工日標籤
+ * 缺席 → 直接判定不是;否則命中任一已知標籤(行首),或退路句本身可解出日期,
+ * 即視為開工報告表。
+ *
+ * **已知殘留缺口**(2026-08-01 code review 追加實測,見 task-5-report.md):
+ * 「大勇廁所開工報告及相關文件.pdf」第 1 頁整份 OCR 只剩一句退路句
+ * 「...上項工程於民國115年1月26日正式開工」,沒有任何一個標籤命中——這與
+ * 「敘述句 fallback 可命中開工日」測試的 fixture 是完全同型的輸入(純退路句、
+ * 無任何標籤),而退路句依規格必須單獨足以放行,故無法僅憑文字內容把兩者分開。
+ * 目前仍會放行;因為沒有任何欄位標籤命中,除了「契約規定開工日」外其餘欄位會
+ * 全部是 null,不會有「硬湊出一個看似正確實則錯誤的值」的風險,但仍是已知限制。
+ */
+function looksLikeKickoffReport(page1Lines) {
+  if (looksComplete(page1Lines) && missingDateFamily(page1Lines)) return false;
+  if (hasLabelAtLineStart(page1Lines)) return true;
+  return startDateFallback(page1Lines) != null;
 }
 
 /**
@@ -91,14 +147,15 @@ function looksLikeKickoffReport(allLines) {
  *
  * @param {{pages: Array<{page:number,width:number,lines:string[]}>}} ocrOutput
  * @returns {object} 8 欄;讀不到的一律 null
- * @throws {Error} code 'NOT_KICKOFF_REPORT' —— 完全沒有已知標籤,也沒有退路句可解出日期
+ * @throws {Error} code 'NOT_KICKOFF_REPORT' —— 第 1 頁缺少任何已知欄位標籤與退路句,
+ *   或版面完整卻整組決標/開工/竣工日標籤缺席(臺中市簡化格式的已知樣態)
  */
 function extractFields(ocrOutput) {
   const pages = (ocrOutput && ocrOutput.pages) || [];
   const allLines = [];
   for (const p of pages) for (const l of (p && p.lines) || []) allLines.push(String(l));
 
-  if (!looksLikeKickoffReport(allLines)) {
+  if (!looksLikeKickoffReport(firstPageLines(pages))) {
     const err = new Error('此檔無法辨識為開工報告表(缺少任何已知欄位標籤與退路句),請確認上傳的是開工報告表');
     err.code = 'NOT_KICKOFF_REPORT';
     throw err;
