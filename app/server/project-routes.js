@@ -19,6 +19,23 @@
  */
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const multer = require('multer');
+const { saveAttachment } = require('./project-attachments-routes');
+
+// 決標公告先進記憶體:落檔目錄需要 project id,而 id 要 INSERT 之後才有。
+const upload = multer({ storage: multer.memoryStorage() });
+
+// 走決標公告路徑時的必填集合(spec §4.5)。手動新增仍只要求 name——
+// 提高手動路徑的門檻會擋住沒有決標公告的舊案補登。
+const AWARD_REQUIRED = ['project_no', 'name', 'award_amount', 'school_id', 'vendor_id'];
+
+// 未填的判定:null/undefined/空字串/純空白/非純量一律視同未填(spec §4.5)。
+// 「停在找不到廠商的狀態就送出」在 body 裡表現為 vendor_id 空字串,必須擋下。
+// 陣列要另外擋:multipart 同名欄位重複出現時 body[k] 會是陣列,String(['a','b'])
+// 得到 'a,b' 就這樣穿透必填檢查,再被當成單一值寫進 DB。
+function isBlank(v) {
+  return v == null || !(typeof v === 'number' || typeof v === 'string') || String(v).trim() === '';
+}
 
 // 台灣四捨五入(half-up),避免 JS Math.round 對負數/浮點誤差的偏差。
 // 以字串處理小數第一位進位到整數,杜絕 IEEE754 誤差(如 0.5 邊界)。
@@ -105,20 +122,55 @@ function registerRoutes(app) {
     }
   });
 
-  app.post('/api/projects', verifyToken, async (req, res) => {
+  app.post('/api/projects', verifyToken, upload.single('award_notice'), async (req, res) => {
     try {
-      const name = (req.body.name || '').trim();
-      if (!name) return res.status(400).json({ error: '工程名稱為必填' });
-      const data = normalize({ ...req.body, name });
-      const placeholders = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
-      const values = COLUMNS.map(c => data[c]);
+      const hasAward = !!(req.file && req.file.buffer && req.file.buffer.length);
+      const body = req.body || {};
+
+      // 一次列全,不在第一個問題就中斷——只報第一個會讓承辦人來回送好幾次。
+      const required = hasAward ? AWARD_REQUIRED : ['name'];
+      const fields = required.filter((k) => isBlank(body[k]));
+      if (fields.length) {
+        return res.status(400).json({
+          error: hasAward ? '以下欄位尚未填寫或尚未綁定' : '工程名稱為必填',
+          fields,
+        });
+      }
+
+      // name 此時已通過必填檢查(非 blank),trim 前後空白後才寫入——
+      // 舊版 JSON 路徑本就會 trim,拆成兩條路徑不能讓這行為悄悄漂走。
+      const data = normalize({ ...body, name: String(body.name).trim() });
+      const cols = COLUMNS.join(', ');
+      const params = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
       const { rows } = await query(
-        `INSERT INTO projects (${COLUMNS.join(', ')}) VALUES (${placeholders}) RETURNING *`,
-        values
+        `INSERT INTO projects (${cols}) VALUES (${params}) RETURNING *`,
+        COLUMNS.map((c) => data[c])
       );
-      res.status(201).json(withComputed(rows[0]));
+      const project = withComputed(rows[0]);
+
+      if (hasAward) {
+        // 落檔失敗不 rollback 工程:工程本身已建立成功,砍掉是更差的狀態
+        // (承辦人剛填完一整份表單)。附件可後補,故只帶 warning。
+        try {
+          await saveAttachment({
+            projectId: rows[0].id,
+            kind: 'award_notice',
+            buffer: req.file.buffer,
+            originalName: Buffer.from(req.file.originalname, 'latin1').toString('utf8'),
+            userId: req.userId || null,
+          });
+        } catch (err) {
+          console.error('[projects] 決標公告歸檔失敗:', err);
+          // 不寫「請稍後於工程頁重新上傳」:編輯模式沒有任何上傳決標公告的入口,
+          // 叫承辦人去做一件做不到的事,只會讓他反覆找不到而懷疑自己。
+          project.attachment_warning = '工程已建立,但決標公告歸檔失敗,請聯絡系統管理員';
+        }
+      }
+
+      res.status(201).json(project);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      console.error('[projects] 建立工程失敗:', err);
+      res.status(500).json({ error: '建立工程失敗' });
     }
   });
 

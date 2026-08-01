@@ -374,6 +374,7 @@ module.exports = {
   computeDeadline,
   buildSubmissionStatus,
   safeResolve,
+  relToData,
   DATA_DIR,
   UPLOAD_DIR,
   OUTPUT_DIR,
