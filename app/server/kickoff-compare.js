@@ -7,11 +7,10 @@
  *               判硬錯會逼承辦人去請廠商修正一份正確的文件(古坑案)
  *
  * 契約工期比對是**開工報告表的內部自洽性檢查**(表上明載工期 vs 表上開工/竣工日
- * 推導工期),不是跨文件比對,故不落入「兩份文件對同一事實記載不同」的硬錯定義,
- * 級別同樣歸 hint——狀態仍會顯示 diff/missing 供承辦人核對,但不進 hardErrors()
- * 擋流程(見 task-6-report.md 矛盾點記錄:brief 原範例把此欄位標成 hard,
- * 會讓「開工日/竣工日只是提示」測試案例中,古坑式的整體平移連帶讓契約工期
- * 自洽性也不吻合,而被誤列進硬錯清單)。
+ * 推導工期),不是跨文件比對,但級別仍是 hard(spec §5.2 明訂):表上兩個數字互相
+ * 矛盾就是這份文件自己填錯,不像開工/竣工日兩欄有「決標公告寫的是預估值」這種
+ * 正常解釋可以開脫。這是唯一能抓出「文件自己填錯」的檢查,降成 hint 等於让這種
+ * 錯誤被當成可忽略的提示放行、照常歸檔(見 task-6-report.md 修正記錄)。
  *
  * 狀態四態,不可壓成布林:
  *   match / diff / missing(有一邊沒值,沒得比) / no_award(該工程未歸檔決標公告)
@@ -82,21 +81,22 @@ function compareKickoff(kickoff, award) {
   rows.push(cmp('學校', k.主辦機關, a.主辦機關, hasAward, eqText(k.主辦機關, a.主辦機關) === true));
   rows.push(cmp('縣市', k.縣市, a.履約地點, hasAward, eqText(k.縣市, a.履約地點) === true));
 
-  // ── 契約工期:開工報告表的**內部自洽性檢查**,不與決標公告比 ──
+  // ── 契約工期:開工報告表的**內部自洽性檢查**,不與決標公告比,但仍是硬錯 ──
   // 表上明載的工期 vs 表上開工日→竣工日推導值。SP1 §4.3 已用 27 組全量驗證
-  // 推翻「以履約起迄推導契約工期」(僅 14 組相符)。不是跨文件比對,級別 hint
-  // (見檔頭說明的矛盾點記錄)。
+  // 推翻「以履約起迄推導契約工期」(僅 14 組相符),故不拿決標公告當比對基準;
+  // 但表上兩個數字互相矛盾就是這份文件自己填錯,沒有「預估值」這種正常解釋
+  // 可以開脫,級別維持 hard(spec §5.2)。
   const dur = k.契約工期 || { 天數: null, 基準: null };
   if (dur.基準 === '工作天') {
     // 由日期推導出的是日曆天,工作天案例必然對不上(明禮)。只取表上數字、不推導。
-    rows.push(row('契約工期', `${dur.天數} 工作天`, '（工作天不推導）', 'missing', 'hint'));
+    rows.push(row('契約工期', `${dur.天數} 工作天`, '（工作天不推導）', 'missing', 'hard'));
   } else {
     const derived = deriveDuration(k.契約規定開工日, k.契約規定竣工日);
     if (dur.天數 == null || derived == null) {
-      rows.push(row('契約工期', dur.天數, derived == null ? null : `（表內推導）${derived}`, 'missing', 'hint'));
+      rows.push(row('契約工期', dur.天數, derived == null ? null : `（表內推導）${derived}`, 'missing', 'hard'));
     } else {
       rows.push(row('契約工期', dur.天數, `（表內推導）${derived}`,
-        dur.天數 === derived ? 'match' : 'diff', 'hint'));
+        dur.天數 === derived ? 'match' : 'diff', 'hard'));
     }
   }
 
