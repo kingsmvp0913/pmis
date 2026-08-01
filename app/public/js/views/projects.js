@@ -282,6 +282,125 @@
         basicsErr,
       ]));
 
+      // ── 開工報告表(SP1B 階段二)────────────────────────────
+      // OCR 只作預填不作裁決:逐欄辨識率 77%、契約工期僅 46%,
+      // 讓 OCR 下裁決會每三欄產生一個假警報,承辦人幾次之後就學會忽略警告。
+      let kickoffFile = null;
+      let kickoffValues = null;
+      const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
+      const koParseBtn = el('button', { class: 'btn', type: 'button' }, '解析並比對');
+      const koConfirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' }, '確認無誤並歸檔');
+      const koErr = el('div', { class: 'error-msg', style: 'display:none' });
+      const koHint = el('div', { class: 'hint' },
+        '上傳後系統以 OCR 預填候選值並與已歸檔的決標公告比對。讀不到的欄位留空,請對照 PDF 自行填寫。');
+      const koBox = el('div', { class: 'table-wrap' });
+
+      const 狀態文字 = { match: '相符', diff: '不符', missing: '未讀到', no_award: '無決標公告可比' };
+
+      function renderKickoffRows(rows) {
+        koBox.innerHTML = '';
+        if (!rows || !rows.length) return;
+        const trs = rows.map((r) => {
+          // 級別與狀態一起決定顯示:提示級的 diff 不是錯,是「決標公告寫的是預估值」
+          let 標記 = 狀態文字[r.狀態] || r.狀態;
+          if (r.狀態 === 'diff' && r.級別 === 'hint') {
+            標記 = `提示:差 ${r.差異天數 == null ? '?' : r.差異天數} 天`;
+          }
+          // 配色一律走 app.css 的 CSS 變數,不寫死淺色底(深色模式會讓文字翻白＝隱形)
+          const cls = r.狀態 === 'diff' && r.級別 === 'hard' ? 'error-msg' : 'hint';
+          return el('tr', {}, [
+            el('td', {}, r.欄位),
+            el('td', {}, r.開工報告表值 == null ? '—' : String(r.開工報告表值)),
+            el('td', {}, r.決標公告值 == null ? '—' : String(r.決標公告值)),
+            el('td', {}, el('span', { class: cls }, 標記)),
+          ]);
+        });
+        koBox.appendChild(el('table', { class: 'data' }, [
+          el('thead', {}, el('tr', {}, [
+            el('th', {}, '欄位'), el('th', {}, '開工報告表'),
+            el('th', {}, '決標公告'), el('th', {}, '結果'),
+          ])),
+          el('tbody', {}, trs),
+        ]));
+      }
+
+      koParseBtn.addEventListener('click', async () => {
+        koErr.style.display = 'none';
+        if (!koFileI.files[0]) {
+          koErr.textContent = '請先選擇開工報告表 PDF';
+          koErr.style.display = '';
+          return;
+        }
+        koParseBtn.disabled = true;
+        koParseBtn.textContent = '解析中(OCR 需數秒)…';
+        try {
+          const fd = new FormData();
+          fd.append('kickoff_report', koFileI.files[0]);
+          const data = await Api.upload('projects/' + id + '/kickoff-report/parse', fd);
+          kickoffFile = koFileI.files[0];
+          kickoffValues = data.kickoff;
+          renderKickoffRows(data.rows);
+          // 預填既有的兩格。**只在讀到值時覆蓋**——讀不到就留著承辦人已填的內容,
+          // 用 null 蓋掉會把他剛打好的字清空。
+          if (data.kickoff.契約工期 && data.kickoff.契約工期.天數 != null) {
+            工期I.value = data.kickoff.契約工期.天數;
+          }
+          if (data.kickoff.契約規定開工日) 開工I.value = data.kickoff.契約規定開工日;
+          if (!data.hasAward) {
+            showToast('此工程未歸檔決標公告,僅做預填、未進行比對', 'success');
+          }
+          koConfirmBtn.style.display = '';
+        } catch (e) {
+          koErr.textContent = e.message;
+          koErr.style.display = '';
+          koConfirmBtn.style.display = 'none';
+        } finally {
+          koParseBtn.disabled = false;
+          koParseBtn.textContent = '解析並比對';
+        }
+      });
+
+      koConfirmBtn.addEventListener('click', async () => {
+        koErr.style.display = 'none';
+        if (!kickoffFile || !kickoffValues) return;
+        koConfirmBtn.disabled = true;
+        try {
+          // 送出承辦人確認後的值:工期與開工日以畫面上的為準(他可能修正過 OCR 的錯讀),
+          // 其餘欄位沿用解析值。
+          const 工期raw = 工期I.value.trim();
+          const values = {
+            ...kickoffValues,
+            契約工期: {
+              天數: 工期raw !== '' && Number.isFinite(Number(工期raw)) ? Number(工期raw) : null,
+              基準: (kickoffValues.契約工期 && kickoffValues.契約工期.基準) || null,
+            },
+            契約規定開工日: 開工I.value || null,
+          };
+          const fd = new FormData();
+          fd.append('kickoff_report', kickoffFile);
+          fd.append('values', JSON.stringify(values));
+          const r = await Api.upload('projects/' + id + '/kickoff-report/confirm', fd);
+          renderKickoffRows(r.rows);
+          showToast('開工報告表已核對並歸檔', 'success');
+          koConfirmBtn.style.display = 'none';
+          await loadAttachments();
+        } catch (e) {
+          // 硬錯清單一次列全,逐條修正會讓承辦人來回發文
+          const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
+          koErr.textContent = e.message + suffix;
+          koErr.style.display = '';
+        } finally { koConfirmBtn.disabled = false; }
+      });
+
+      content.appendChild(el('div', { class: 'card' }, [
+        el('div', { class: 'card-title' }, '開工報告表'),
+        koHint,
+        el('div', { class: 'form-group' }, [el('label', {}, '開工報告表 PDF'), koFileI]),
+        el('div', { class: 'form-actions' }, [koParseBtn, koConfirmBtn]),
+        koErr,
+        koBox,
+      ]));
+
       const attBox = el('div', { class: 'table-wrap' });
       const attCard = el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '附件'),
