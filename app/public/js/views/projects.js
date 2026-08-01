@@ -291,6 +291,9 @@
       const koParseBtn = el('button', { class: 'btn', type: 'button' }, '解析並比對');
       const koConfirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' }, '確認無誤並歸檔');
       const koErr = el('div', { class: 'error-msg', style: 'display:none' });
+      // 工作天案例的專屬警示:與 koErr 分開,因為 koErr 是「這次操作失敗」,
+      // 這個是「操作成功但有一格刻意不填」——同時顯示不衝突,語意也不同。
+      const koDurationWarn = el('div', { class: 'error-msg', style: 'display:none' });
       const koHint = el('div', { class: 'hint' },
         '上傳後系統以 OCR 預填候選值並與已歸檔的決標公告比對。讀不到的欄位留空,請對照 PDF 自行填寫。');
       const koBox = el('div', { class: 'table-wrap' });
@@ -303,11 +306,18 @@
         const trs = rows.map((r) => {
           // 級別與狀態一起決定顯示:提示級的 diff 不是錯,是「決標公告寫的是預估值」
           let 標記 = 狀態文字[r.狀態] || r.狀態;
+          // 配色一律走 app.css 的 CSS 變數,不寫死淺色底(深色模式會讓文字翻白＝隱形)
+          let cls = r.狀態 === 'diff' && r.級別 === 'hard' ? 'error-msg' : 'hint';
           if (r.狀態 === 'diff' && r.級別 === 'hint') {
             標記 = `提示:差 ${r.差異天數 == null ? '?' : r.差異天數} 天`;
+          } else if (r.欄位 === '契約工期' && r.狀態 === 'missing' &&
+            typeof r.開工報告表值 === 'string' && r.開工報告表值.includes('工作天')) {
+            // 這格「有讀到值」(如 160 工作天),只是工作天無法跟日曆天比較——
+            // 灰色「未讀到」會讓承辦人以為這格是空的而略過核對,實際上工期I
+            // 被刻意留空正是因為讀到了這個工作天數字,兩者要分開強調。
+            標記 = '工作天,單位不同無法比對,請自行核對填寫';
+            cls = 'error-msg';
           }
-          // 配色一律走 app.css 的 CSS 變數,不寫死淺色底(深色模式會讓文字翻白＝隱形)
-          const cls = r.狀態 === 'diff' && r.級別 === 'hard' ? 'error-msg' : 'hint';
           return el('tr', {}, [
             el('td', {}, r.欄位),
             el('td', {}, r.開工報告表值 == null ? '—' : String(r.開工報告表值)),
@@ -326,6 +336,7 @@
 
       koParseBtn.addEventListener('click', async () => {
         koErr.style.display = 'none';
+        koDurationWarn.style.display = 'none';
         if (!koFileI.files[0]) {
           koErr.textContent = '請先選擇開工報告表 PDF';
           koErr.style.display = '';
@@ -342,12 +353,24 @@
           renderKickoffRows(data.rows);
           // 預填既有的兩格。**只在讀到值時覆蓋**——讀不到就留著承辦人已填的內容,
           // 用 null 蓋掉會把他剛打好的字清空。
-          if (data.kickoff.契約工期 && data.kickoff.契約工期.天數 != null) {
-            工期I.value = data.kickoff.契約工期.天數;
+          const 工期 = data.kickoff.契約工期;
+          if (工期 && 工期.基準 === '工作天') {
+            // 「工期I」標示的是日曆天,工作天不是同一單位,不可直接互填——
+            // 硬塞會產生「數字看起來正常、單位卻是錯的」這種最難察覺的資料損壞。
+            // 寧可留空讓承辦人自己核對 PDF 換算,也要用明顯的警示說明「為什麼沒填」,
+            // 靜默跳過跟靜默填錯一樣糟。
+            koDurationWarn.textContent =
+              `開工報告表上的工期是「${工期.天數 == null ? '?' : 工期.天數} 工作天」,` +
+              '而此欄位要的是日曆天,兩者不可直接互填,請對照 PDF 自行換算後填入(系統不自動預填)。';
+            koDurationWarn.style.display = '';
+          } else if (工期 && 工期.天數 != null) {
+            工期I.value = 工期.天數;
           }
           if (data.kickoff.契約規定開工日) 開工I.value = data.kickoff.契約規定開工日;
           if (!data.hasAward) {
-            showToast('此工程未歸檔決標公告,僅做預填、未進行比對', 'success');
+            // 這是「未執行到比對」的限制提示,不是成功動作——用 success(綠)
+            // 會讓承辦人誤以為比對已經做完。
+            showToast('此工程未歸檔決標公告,僅做預填、未進行比對', 'warn');
           }
           koConfirmBtn.style.display = '';
         } catch (e) {
@@ -398,6 +421,7 @@
         el('div', { class: 'form-group' }, [el('label', {}, '開工報告表 PDF'), koFileI]),
         el('div', { class: 'form-actions' }, [koParseBtn, koConfirmBtn]),
         koErr,
+        koDurationWarn,
         koBox,
       ]));
 
