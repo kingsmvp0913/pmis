@@ -91,4 +91,5 @@ cd app && SP0_SKIP_EXCEL=1 npx jest --runInBand --silent --noStackTrace --no-col
 ### 既有紅燈（乾淨 HEAD 也會紅，不要 debug）
 
 - **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅。** 實測連跑兩次紅的是不同子集（第一次 `copyRowDown`；第二次 `setCell` + `setRange`），錯誤都是「Excel 驅動重試 3 次仍失敗」＝ Excel COM 間歇回 null（見 memory `xlsm-excel-com-findings`）。**該檔紅了先重跑一次確認是否換一支紅；換了就是 flaky，不要追。**
-- 因此基線是 **213 個測試、其中 211–213 綠**，浮動來源只有上面這支。宣稱「全套綠」前先確認紅的是不是它。
+- 用 `SP0_SKIP_EXCEL=1` 跑「日常全跑」指令時，這支連同其他被 `SP0_SKIP_EXCEL` 旗標跳過的測試會直接 skip（非執行後判定綠/紅），故輸出會固定看到 **5 skipped**——這是預期值，不是漏跑。
+- 基線是 **426 個測試、其中 424–426 綠、5 skipped**（2026-08-01 SP1B 階段二後實測，較先前 213 基線新增約 200 支），浮動來源只有上面這支 flaky 檔（僅在含 Excel 整合測、未設 `SP0_SKIP_EXCEL` 時才會真的執行到）。宣稱「全套綠」前先確認紅的是不是它。
