@@ -127,9 +127,47 @@ test('confirm 有硬錯回 400 並列出全部不符欄位', async () => {
     .field('values', JSON.stringify(bad))
     .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
   expect(res.body.fields.sort()).toEqual(['契約編號', '工程名稱']);
+  // 硬錯全是跨文件比對欄位:文案須維持指向決標公告,不得夾帶「表格」/「推導」字樣
+  // (那是契約工期專屬的自洽性檢查,與本案無關)
+  expect(res.body.error).toMatch(/決標公告/);
+  expect(res.body.error).not.toMatch(/表格|推導/);
   const { rows } = await db.query(
     `SELECT COUNT(*)::int AS n FROM project_attachments WHERE kind = 'kickoff_report'`);
   expect(rows[0].n).toBe(0);
+});
+
+// 契約工期比的是開工報告表自身(表列工期 vs 開工/竣工日推導值),不是決標公告——
+// 唯一硬錯是契約工期時,文案不得叫承辦人去對決標公告發文,那是不相干的動作。
+test('confirm 唯一硬錯是契約工期時,訊息指向表格自身而非決標公告', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  // 其餘欄位與 AWARD 一致(仍會 match),只讓契約工期的表列天數與推導值(150)兜不起來
+  const bad = { ...KICKOFF, 契約工期: { 天數: 999, 基準: '日曆天' } };
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify(bad))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.fields).toEqual(['契約工期']);
+  expect(res.body.error).toMatch(/表格|開工報告表/);
+  expect(res.body.error).not.toMatch(/決標公告/);
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS n FROM project_attachments WHERE kind = 'kickoff_report'`);
+  expect(rows[0].n).toBe(0);
+});
+
+// 混合案例:跨文件欄位與契約工期同時硬錯,兩種問題的處理方式不同,
+// 文案不得只講其中一邊而讓另一邊看起來像同一類問題。
+test('confirm 硬錯同時含跨文件欄位與契約工期時,訊息同時涵蓋兩種情況', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  const bad = { ...KICKOFF, 工程名稱: 'X', 契約工期: { 天數: 999, 基準: '日曆天' } };
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify(bad))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.fields.sort()).toEqual(['契約工期', '工程名稱']);
+  expect(res.body.error).toMatch(/決標公告/);
+  expect(res.body.error).toMatch(/表格|開工報告表/);
 });
 
 // 無硬錯 → 歸檔。歸檔即代表已核對(不另設狀態欄)。

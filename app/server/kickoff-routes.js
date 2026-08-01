@@ -38,6 +38,32 @@ function isIdShape(id) {
   return /^[1-9][0-9]*$/.test(String(id)) && Number(id) <= INT4_MAX;
 }
 
+// 契約工期比對的性質與其餘硬錯欄位不同:它是開工報告表**自身**的內部自洽性檢查
+// (表列工期 vs 表上開工/竣工日推導值),不是跨文件比對——kickoff-compare.js 的
+// 「決標公告值」欄此時顯示的是「（表內推導）N」,不是真的公告資料。
+// 若固定回「與決標公告不符,請發文更正」,唯一硬錯是契約工期時會叫承辦人
+// 拿決標公告去跟廠商發文,而實際上該做的是檢查開工報告表自己填的三個數字對不對。
+const DURATION_FIELD = '契約工期';
+
+/**
+ * 依硬錯欄位組成挑文案:跨文件欄位與契約工期(表內自洽)所需的下一步動作不同,
+ * 混在一起講會讓其中一種問題被誤讀成另一種。
+ * @param {string[]} fields hardErrors() 的欄位清單(不受此函式影響,原樣照列)
+ * @returns {string}
+ */
+function buildHardErrorMessage(fields) {
+  const hasDuration = fields.includes(DURATION_FIELD);
+  const hasOther = fields.some((f) => f !== DURATION_FIELD);
+  if (hasDuration && hasOther) {
+    return '以下欄位不得標記為已核對:契約工期是開工報告表自身數字兜不起來(表列工期與開工/竣工日推導值不符),' +
+      '請確認表格填寫;其餘欄位則與決標公告不符,請確認後發文更正';
+  }
+  if (hasDuration) {
+    return '開工報告表自身的契約工期與開工/竣工日推導值不符,請確認表格填寫,不得標記為已核對';
+  }
+  return '以下欄位與決標公告不符,請確認後發文更正,不得標記為已核對';
+}
+
 let tmpSeq = 0;
 
 // 把上傳的 buffer 落到暫存檔給 OCR 用,用完必刪。檔名含 pid 與遞增序號:
@@ -121,9 +147,10 @@ function registerRoutes(app) {
         const errs = hardErrors(compared);
         if (errs.length) {
           // 一次列全:逐條修正會讓承辦人來回發文好幾次
+          const fields = errs.map((r) => r.欄位);
           return res.status(400).json({
-            error: '以下欄位與決標公告不符,請確認後發文更正,不得標記為已核對',
-            fields: errs.map((r) => r.欄位),
+            error: buildHardErrorMessage(fields),
+            fields,
             rows: compared,
           });
         }
