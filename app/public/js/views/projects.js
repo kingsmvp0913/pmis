@@ -287,6 +287,9 @@
       // 讓 OCR 下裁決會每三欄產生一個假警報,承辦人幾次之後就學會忽略警告。
       let kickoffFile = null;
       let kickoffValues = null;
+      // r.欄位(比對表中文標籤)→ resultSpan 元素,供 confirm 失敗後用後端回傳的
+      // 最新 fields 清單回頭標紅——每次 renderKickoffRows 重繪時整批換新。
+      let koResultCells = {};
       const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
       const koParseBtn = el('button', { class: 'btn', type: 'button' }, '解析並比對');
       const koConfirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' }, '確認無誤並歸檔');
@@ -295,13 +298,25 @@
       // 這個是「操作成功但有一格刻意不填」——同時顯示不衝突,語意也不同。
       const koDurationWarn = el('div', { class: 'error-msg', style: 'display:none' });
       const koHint = el('div', { class: 'hint' },
-        '上傳後系統以 OCR 預填候選值並與已歸檔的決標公告比對。讀不到的欄位留空,請對照 PDF 自行填寫。');
+        '上傳後系統以 OCR 預填候選值並與已歸檔的決標公告比對。讀不到的欄位留空,請對照 PDF 自行填寫。' +
+        '「開工報告表」欄可直接編輯(如 OCR 讀錯字),改完按「確認無誤並歸檔」由後端重新比對。');
       const koBox = el('div', { class: 'table-wrap' });
 
       const 狀態文字 = { match: '相符', diff: '不符', missing: '未讀到', no_award: '無決標公告可比' };
 
+      // 比對表中文標籤 → extractFields 的實際鍵名(兩邊命名不完全相同,
+      // 如「決標日」對應 kickoffValues.決標日期、「學校」對應 .主辦機關)。
+      const FIELD_KEY = {
+        工程名稱: '工程名稱', 契約編號: '契約編號', 契約金額: '契約金額',
+        決標日: '決標日期', 學校: '主辦機關', 縣市: '縣市',
+        契約工期: '契約工期', 契約規定開工日: '契約規定開工日', 契約規定竣工日: '契約規定竣工日',
+      };
+      const DATE_FIELDS = new Set(['決標日', '契約規定開工日', '契約規定竣工日']);
+      const NUMBER_FIELDS = new Set(['契約金額', '契約工期']);
+
       function renderKickoffRows(rows) {
         koBox.innerHTML = '';
+        koResultCells = {};
         if (!rows || !rows.length) return;
         const trs = rows.map((r) => {
           // 級別與狀態一起決定顯示:提示級的 diff 不是錯,是「決標公告寫的是預估值」
@@ -318,16 +333,68 @@
             標記 = '工作天,單位不同無法比對,請自行核對填寫';
             cls = 'error-msg';
           }
+          const resultSpan = el('span', { class: cls }, 標記);
+          koResultCells[r.欄位] = resultSpan;
+
+          // 開工報告表值改為可編輯輸入框:元長案例(OCR 把「-」讀成「—」)證明
+          // 唯讀比對表在真的遇到 OCR 誤讀時,承辦人無計可施,合法文件永遠歸不了檔。
+          // 讀不到的欄位維持留空(不預先填東西進去),沿用 spec §5.1 的「確認或修正」。
+          const key = FIELD_KEY[r.欄位];
+          const isDate = DATE_FIELDS.has(r.欄位);
+          const isNumber = NUMBER_FIELDS.has(r.欄位);
+          const type = isDate ? 'date' : (isNumber ? 'number' : 'text');
+          const initVal = r.欄位 === '契約工期'
+            ? (kickoffValues.契約工期 && kickoffValues.契約工期.天數 != null ? kickoffValues.契約工期.天數 : '')
+            : (kickoffValues[key] == null ? '' : kickoffValues[key]);
+          const valInput = el('input', {
+            class: 'form-control', type, value: String(initVal),
+            ...(isNumber ? { step: '1' } : {}),
+          });
+          valInput.addEventListener('input', () => {
+            // 舊的 match/diff 是上一輪解析值的判定,編輯後繼續掛著會誤導承辦人
+            // 以為「還是原本那個結果」——改採中性提示,真正的裁決留給後端在
+            // 「確認無誤並歸檔」時用 kickoff-compare.js 重新決定(前端不重造一份
+            // 判斷邏輯,避免兩邊規則漂走)。
+            resultSpan.className = 'hint';
+            resultSpan.textContent = '已修改,尚未送出確認';
+
+            if (r.欄位 === '契約工期') {
+              const n = valInput.value.trim();
+              const 基準 = (kickoffValues.契約工期 && kickoffValues.契約工期.基準) || null;
+              kickoffValues.契約工期 = {
+                天數: n !== '' && Number.isFinite(Number(n)) ? Number(n) : null,
+                基準,
+              };
+              // 「工期I」是「寫入監造報表」實際會用的值,兩邊沒同步的話,承辦人
+              // 會以為改好了,結果寫進 Excel 的還是舊值(commit a0cef03 抓過的型態)。
+              // 工作天不是日曆天,不可互填,維持既有警示與空白,不同步。
+              if (基準 !== '工作天') {
+                工期I.value = kickoffValues.契約工期.天數 != null ? kickoffValues.契約工期.天數 : '';
+              }
+            } else if (r.欄位 === '契約規定開工日') {
+              kickoffValues.契約規定開工日 = valInput.value || null;
+              開工I.value = valInput.value || '';
+            } else if (isNumber) {
+              const n = valInput.value.trim();
+              kickoffValues[key] = n !== '' && Number.isFinite(Number(n)) ? Number(n) : null;
+            } else if (isDate) {
+              kickoffValues[key] = valInput.value || null;
+            } else {
+              const t = valInput.value.trim();
+              kickoffValues[key] = t === '' ? null : t;
+            }
+          });
+
           return el('tr', {}, [
             el('td', {}, r.欄位),
-            el('td', {}, r.開工報告表值 == null ? '—' : String(r.開工報告表值)),
+            el('td', {}, valInput),
             el('td', {}, r.決標公告值 == null ? '—' : String(r.決標公告值)),
-            el('td', {}, el('span', { class: cls }, 標記)),
+            el('td', {}, resultSpan),
           ]);
         });
         koBox.appendChild(el('table', { class: 'data' }, [
           el('thead', {}, el('tr', {}, [
-            el('th', {}, '欄位'), el('th', {}, '開工報告表'),
+            el('th', {}, '欄位'), el('th', {}, '開工報告表(可編輯)'),
             el('th', {}, '決標公告'), el('th', {}, '結果'),
           ])),
           el('tbody', {}, trs),
@@ -412,6 +479,17 @@
           const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
           koErr.textContent = e.message + suffix;
           koErr.style.display = '';
+          // 後端已用這次送出的 values 重新跑過 compareKickoff,e.fields 就是
+          // 最新的硬錯清單——藉此把表格上「這次仍不符」的那幾列標紅,不讓
+          // 承辦人誤以為畫面上的中性提示代表已經沒事。api.js 的 apiError()
+          // 只透傳 fields、不傳 rows(跨檔案限制,見 task-8-report),故只能
+          // 標記出「哪幾欄還錯」,無法整表用新結果重繪。
+          if (e.fields && e.fields.length) {
+            for (const f of e.fields) {
+              const span = koResultCells[f];
+              if (span) { span.className = 'error-msg'; span.textContent = '與決標公告不符,請確認後修正'; }
+            }
+          }
         } finally { koConfirmBtn.disabled = false; }
       });
 

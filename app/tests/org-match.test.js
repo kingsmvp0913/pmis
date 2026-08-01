@@ -14,6 +14,25 @@ describe('normalizeOrgName', () => {
     expect(normalizeOrgName('ＡＢＣ營造')).toBe('ABC營造');
   });
 
+  // 元長國小實測:OCR 把開工報告表上的半形連字號 '-' 讀成視覺相近的破折號,
+  // 決標公告與開工報告表因此在同一個編號/年度區間上出現不同字元、同一語意的
+  // 寫法,不正規化的話「工程名稱」一格會被判成不符,而 UI 讀不到硬錯的原因,
+  // 承辦人以為自己打錯字卻怎麼改都過不了。
+  test('破折號(em/en dash)正規化為半形連字號,不影響其餘內容', () => {
+    const 開工報告表值 = '元長國小辦理「114—116年公立國民中小學老舊廁所整修工程計畫」';
+    const 決標公告值 = '元長國小辦理「114-116年公立國民中小學老舊廁所整修工程計畫」';
+    expect(normalizeOrgName(開工報告表值)).toBe(normalizeOrgName(決標公告值));
+    expect(normalizeOrgName('A–B工程')).toBe('A-B工程');
+  });
+
+  // 中文數字「一」在「第一期工程」「一號橋」等語境下是合法中文字,不是連字號的
+  // 誤讀——若把「一」也當破折號正規化,會讓這類正常名稱被改寫成不同的字串,
+  // 這條測試就是為了擋住日後有人為了涵蓋更多案例而把範圍放寬到「一」。
+  test('中文數字「一」不當連字號處理,避免破壞正常語境', () => {
+    expect(normalizeOrgName('第一期工程')).toBe('第一期工程');
+    expect(normalizeOrgName('一號橋改建工程')).toBe('一號橋改建工程');
+  });
+
   test('空值回 null,不回空字串', () => {
     expect(normalizeOrgName('')).toBeNull();
     expect(normalizeOrgName('   ')).toBeNull();
