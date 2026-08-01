@@ -81,9 +81,36 @@ try {
             $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
             $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 
+            # Emit each line's bounding box alongside its text. A kickoff
+            # report is a 2D table; OcrResult.Lines is that table flattened
+            # into visual reading order, which tears labels away from the
+            # values sitting beside them. The box is what lets the extraction
+            # layer put the table back together (value = nearest box to the
+            # right within the label's vertical band). Text stays in `lines`
+            # so existing consumers keep working unchanged.
             $lines = @()
-            foreach ($ln in $result.Lines) { $lines += $ln.Text }
-            $pages += @{ page = ($i + 1); width = $Width; lines = $lines }
+            $boxes = @()
+            foreach ($ln in $result.Lines) {
+                $lines += $ln.Text
+                $x0 = $null; $y0 = $null; $x1 = $null; $y1 = $null
+                foreach ($wd in $ln.Words) {
+                    $r = $wd.BoundingRect
+                    if ($null -eq $x0 -or $r.X -lt $x0) { $x0 = $r.X }
+                    if ($null -eq $y0 -or $r.Y -lt $y0) { $y0 = $r.Y }
+                    if ($null -eq $x1 -or ($r.X + $r.Width) -gt $x1) { $x1 = $r.X + $r.Width }
+                    if ($null -eq $y1 -or ($r.Y + $r.Height) -gt $y1) { $y1 = $r.Y + $r.Height }
+                }
+                # A line with no words has no box; emit nulls rather than
+                # dropping the entry, so boxes stays index-aligned with lines.
+                if ($null -eq $x0) { $boxes += @{ x = $null; y = $null; w = $null; h = $null } }
+                else {
+                    $boxes += @{
+                        x = [int][Math]::Round($x0); y = [int][Math]::Round($y0)
+                        w = [int][Math]::Round($x1 - $x0); h = [int][Math]::Round($y1 - $y0)
+                    }
+                }
+            }
+            $pages += @{ page = ($i + 1); width = $Width; lines = $lines; boxes = $boxes }
         }
         catch {
             # A single page failing (e.g. a corrupt embedded image) must not

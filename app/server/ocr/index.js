@@ -8,7 +8,11 @@
  * Exports:
  *   DEFAULT_WIDTHS        [2200, 3400](spec §3.5 實測;不得加第三個)
  *   collapseCjkSpaces(s)  清掉 CJK 字元之間的空格(OCR 逐字插空格)
- *   ocrPdf(pdfPath, opts) → { pages: [{page, width, lines}], failedPages: [{page, width, error}] }
+ *   ocrPdf(pdfPath, opts) → { pages: [{page, width, lines, boxes}], failedPages: [{page, width, error}] }
+ *
+ * `boxes[i]` 是 `lines[i]` 的外接矩形 {x, y, w, h}(像素,原點左上)。開工報告表是
+ * 二維表格,而 OcrResult.Lines 是把它壓成視覺閱讀序的一維結果——同一列的標籤與值
+ * 因此被拆到不相鄰的位置。座標是把表格還原回二維的唯一依據。
  */
 const path = require('path');
 const { execFile } = require('child_process');
@@ -39,6 +43,11 @@ function powershell51() {
 function collapseCjkSpaces(s) {
   if (s == null) return '';
   return String(s).replace(/([一-鿿])[ \t　]+(?=[一-鿿])/g, '$1');
+}
+
+function toArray(v) {
+  if (v == null) return [];
+  return Array.isArray(v) ? v : [v];
 }
 
 // 單次 spawn:一個解析度跑一趟。失敗一律 reject,由呼叫端決定是否降級。
@@ -88,7 +97,14 @@ async function ocrPdf(pdfPath, opts) {
     try {
       const { pages, failedPages: failed } = await spawnDriver(abs, w);
       for (const p of pages) {
-        all.push({ page: p.page, width: p.width, lines: (p.lines || []).map(collapseCjkSpaces) });
+        // PS 5.1 的 ConvertTo-Json 會把單元素陣列塌成單一物件,故一律正規化成陣列,
+        // 否則只有一行文字的頁面會讓 .map 炸掉。
+        all.push({
+          page: p.page,
+          width: p.width,
+          lines: toArray(p.lines).map(collapseCjkSpaces),
+          boxes: toArray(p.boxes),
+        });
       }
       failedPages.push(...failed);
     } catch (err) {
