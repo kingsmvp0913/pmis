@@ -56,7 +56,12 @@ function normalizeOrgName(v) {
 function extractCounty(name) {
   const n = normalizeOrgName(name);
   if (n == null) return null;
-  return COUNTIES.find((c) => n.startsWith(c)) || null;
+  // 工程地點有兩種寫法(spec §3.3):街道地址有的帶郵遞區號(`638雲林縣...`)、
+  // 有的不帶,直接寫校名的也沒有。去空白已在 normalizeOrgName 內完成,故郵遞區號
+  // 此時緊貼在縣市前面,只需剝掉開頭的連續數字——只認開頭數字,不做模糊比對,
+  // 避免縣市抽錯污染後續比對。
+  const stripped = n.replace(/^\d+/, '');
+  return COUNTIES.find((c) => stripped.startsWith(c)) || null;
 }
 
 function findByName(list, name) {

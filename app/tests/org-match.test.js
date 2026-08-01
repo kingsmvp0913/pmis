@@ -91,6 +91,12 @@ describe('extractCounty', () => {
     expect(extractCounty('臺中市西區大勇國民小學')).toBe('台中市');
   });
 
+  // spec §3.3/§8:工程地點的街道式寫法有的帶郵遞區號。去空白後郵遞區號緊貼
+  // 縣市前面(見 org-match.js 註解),須先剝掉才抽得到。
+  test('帶郵遞區號的街道地址仍可抽出縣市', () => {
+    expect(extractCounty('638 雲林縣麥寮鄉橋頭村仁德路248號')).toBe('雲林縣');
+  });
+
   test('抽不到回 null,不猜測', () => {
     expect(extractCounty('某某國民小學')).toBeNull();
     expect(extractCounty('')).toBeNull();
