@@ -7,8 +7,9 @@
  * 路由:
  *   GET    /api/vendors           list(支援 ?q= 名稱搜尋)
  *   GET    /api/vendors/:id       單筆(含 contacts)
- *   POST   /api/vendors           建立(可帶 contacts[])
+ *   POST   /api/vendors           建立(name/address,可帶 contacts[])
  *   PUT    /api/vendors/:id       更新(可帶 contacts[],整批取代)
+ *   POST   /api/vendors/:id/seed  只補空缺(決標公告解析後自動呼叫)
  *   DELETE /api/vendors/:id       刪除
  *   POST   /api/vendors/import    批次匯入(多行文字,去空行/去重/跳過已存在)
  */
@@ -48,11 +49,11 @@ function registerRoutes(app) {
       let rows;
       if (q) {
         ({ rows } = await query(
-          'SELECT id, name, created_at FROM vendors WHERE name ILIKE $1 ORDER BY name',
+          'SELECT id, name, created_at, address FROM vendors WHERE name ILIKE $1 ORDER BY name',
           [`%${q}%`]
         ));
       } else {
-        ({ rows } = await query('SELECT id, name, created_at FROM vendors ORDER BY name'));
+        ({ rows } = await query('SELECT id, name, created_at, address FROM vendors ORDER BY name'));
       }
       res.json(rows);
     } catch (err) {
@@ -63,7 +64,7 @@ function registerRoutes(app) {
   // 單筆(含 contacts)
   app.get('/api/vendors/:id', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query('SELECT id, name, created_at FROM vendors WHERE id = $1', [req.params.id]);
+      const { rows } = await query('SELECT id, name, created_at, address FROM vendors WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '廠商不存在' });
       const vendor = rows[0];
       vendor.contacts = await loadContacts(vendor.id);
@@ -78,10 +79,13 @@ function registerRoutes(app) {
     try {
       const name = (req.body.name || '').trim();
       if (!name) return res.status(400).json({ error: '廠商名稱為必填' });
-      const { rows } = await query('INSERT INTO vendors (name) VALUES ($1) RETURNING id', [name]);
+      const address = (req.body.address || '').trim() || null;
+      const { rows } = await query(
+        'INSERT INTO vendors (name, address) VALUES ($1, $2) RETURNING id', [name, address]
+      );
       const id = rows[0].id;
       await replaceContacts(id, req.body.contacts);
-      const { rows: v } = await query('SELECT id, name, created_at FROM vendors WHERE id = $1', [id]);
+      const { rows: v } = await query('SELECT id, name, created_at, address FROM vendors WHERE id = $1', [id]);
       v[0].contacts = await loadContacts(id);
       res.status(201).json(v[0]);
     } catch (err) {
@@ -94,11 +98,59 @@ function registerRoutes(app) {
     try {
       const name = (req.body.name || '').trim();
       if (!name) return res.status(400).json({ error: '廠商名稱為必填' });
-      const { rows } = await query('UPDATE vendors SET name = $1 WHERE id = $2 RETURNING id', [name, req.params.id]);
+      const address = (req.body.address || '').trim() || null;
+      const { rows } = await query(
+        'UPDATE vendors SET name = $1, address = $2 WHERE id = $3 RETURNING id',
+        [name, address, req.params.id]
+      );
       if (!rows[0]) return res.status(404).json({ error: '廠商不存在' });
       await replaceContacts(req.params.id, req.body.contacts);
-      const { rows: v } = await query('SELECT id, name, created_at FROM vendors WHERE id = $1', [req.params.id]);
+      const { rows: v } = await query('SELECT id, name, created_at, address FROM vendors WHERE id = $1', [req.params.id]);
       v[0].contacts = await loadContacts(req.params.id);
+      res.json(v[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 決標公告解析後自動呼叫:**只補空缺,絕不覆蓋**(語意與 school-routes 的 /seed 相同)。
+  //
+  // 廠商側與學校側不對稱:**決標公告上沒有廠商聯絡人姓名**,只有電話。
+  // 因此這裡補出來的聯絡人 name 是 null、只有 phone,姓名由承辦人日後在廠商頁補。
+  // 這是資料來源的限制,不是漏抽——28 份樣本全部如此。
+  app.post('/api/vendors/:id/seed', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT id, address FROM vendors WHERE id = $1', [req.params.id]);
+      if (!rows[0]) return res.status(404).json({ error: '廠商不存在' });
+      const id = rows[0].id;
+      const seeded = { contact: false, address: false };
+
+      const c = req.body.contact || {};
+      const cname = (c.name || '').trim() || null;
+      const cphone = (c.phone || '').trim() || null;
+      if (cname || cphone) {
+        const { rows: has } = await query(
+          'SELECT id FROM vendor_contacts WHERE vendor_id = $1 LIMIT 1', [id]
+        );
+        if (!has[0]) {
+          await query(
+            `INSERT INTO vendor_contacts (vendor_id, name, phone, email, line_id, is_primary)
+             VALUES ($1, $2, $3, NULL, NULL, true)`,
+            [id, cname, cphone]
+          );
+          seeded.contact = true;
+        }
+      }
+
+      const address = (req.body.address || '').trim() || null;
+      if (address && !(rows[0].address || '').trim()) {
+        await query('UPDATE vendors SET address = $1 WHERE id = $2', [address, id]);
+        seeded.address = true;
+      }
+
+      const { rows: v } = await query('SELECT id, name, created_at, address FROM vendors WHERE id = $1', [id]);
+      v[0].contacts = await loadContacts(id);
+      v[0].seeded = seeded;
       res.json(v[0]);
     } catch (err) {
       res.status(500).json({ error: err.message });

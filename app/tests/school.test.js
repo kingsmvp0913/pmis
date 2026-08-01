@@ -86,6 +86,63 @@ describe('school routes', () => {
     expect(res.body[0].name).toBe('中正國小');
   });
 
+  // 決標公告 28/28 都有「機關地址」,原本無處可存
+  test('地址可存可改', async () => {
+    const created = await auth(request(app).post('/api/schools')).send({
+      name: '有址國小', county: '雲林縣', address: '655 雲林縣 元長鄉 元西路76號',
+    });
+    expect(created.body.address).toBe('655 雲林縣 元長鄉 元西路76號');
+    const upd = await auth(request(app).put(`/api/schools/${created.body.id}`)).send({
+      name: '有址國小', county: '雲林縣', address: '655 雲林縣 元長鄉 新址1號',
+    });
+    expect(upd.body.address).toBe('655 雲林縣 元長鄉 新址1號');
+  });
+
+  // /seed 的全部價值在於「不覆蓋」:公告是決標當下的快照,承辦人維護過的值較新。
+  // 若這條壞掉,每解析一次公告就把承辦人改過的聯絡人與地址打回舊值,而且沒人會發現。
+  test('seed 不覆蓋既有聯絡人與地址', async () => {
+    const created = await auth(request(app).post('/api/schools')).send({
+      name: '已維護國小', address: '承辦人填的地址',
+      contacts: [{ name: '承辦人填的聯絡人', phone: '0900', is_primary: true }],
+    });
+    const res = await auth(request(app).post(`/api/schools/${created.body.id}/seed`)).send({
+      address: '公告上的地址', contact: { name: '公告上的聯絡人', phone: '0800' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.seeded).toEqual({ contact: false, address: false });
+    expect(res.body.address).toBe('承辦人填的地址');
+    expect(res.body.contacts).toHaveLength(1);
+    expect(res.body.contacts[0].name).toBe('承辦人填的聯絡人');
+  });
+
+  test('seed 只補空缺:沒聯絡人就補、地址空就填', async () => {
+    const created = await auth(request(app).post('/api/schools')).send({ name: '空白國小' });
+    const res = await auth(request(app).post(`/api/schools/${created.body.id}/seed`)).send({
+      address: '公告上的地址', contact: { name: '李美奇', phone: '(05) 7882017 # 14' },
+    });
+    expect(res.body.seeded).toEqual({ contact: true, address: true });
+    expect(res.body.address).toBe('公告上的地址');
+    expect(res.body.contacts).toHaveLength(1);
+    expect(res.body.contacts[0]).toMatchObject({
+      name: '李美奇', phone: '(05) 7882017 # 14', is_primary: true,
+    });
+  });
+
+  // 同一所學校承接兩件工程時會解析兩次公告,不得長出第二筆聯絡人
+  test('seed 冪等:重複呼叫不會長出第二筆聯絡人', async () => {
+    const created = await auth(request(app).post('/api/schools')).send({ name: '兩案國小' });
+    const body = { address: 'A', contact: { name: '甲', phone: '1' } };
+    await auth(request(app).post(`/api/schools/${created.body.id}/seed`)).send(body);
+    const second = await auth(request(app).post(`/api/schools/${created.body.id}/seed`)).send(body);
+    expect(second.body.seeded).toEqual({ contact: false, address: false });
+    expect(second.body.contacts).toHaveLength(1);
+  });
+
+  test('seed 目標不存在回 404', async () => {
+    const res = await auth(request(app).post('/api/schools/99999/seed')).send({ address: 'x' });
+    expect(res.status).toBe(404);
+  });
+
   test('刪除學校連同聯絡人', async () => {
     const created = await auth(request(app).post('/api/schools')).send({
       name: '待刪校', contacts: [{ name: 'x' }]

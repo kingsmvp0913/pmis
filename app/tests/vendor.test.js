@@ -92,6 +92,59 @@ describe('vendor routes', () => {
     expect(res.body[0].name).toBe('大同營造');
   });
 
+  // 決標公告 28/28 都有「廠商地址」,原本無處可存
+  test('地址可存可改', async () => {
+    const created = await auth(request(app).post('/api/vendors')).send({
+      name: '玉森土木包工業', address: '647 雲林縣 莿桐鄉 興桐村振興路86之2號1F',
+    });
+    expect(created.body.address).toBe('647 雲林縣 莿桐鄉 興桐村振興路86之2號1F');
+    const upd = await auth(request(app).put(`/api/vendors/${created.body.id}`)).send({
+      name: '玉森土木包工業', address: '新址',
+    });
+    expect(upd.body.address).toBe('新址');
+  });
+
+  // **決標公告上沒有廠商聯絡人姓名**(28/28 皆無),只有電話。若 seed 要求姓名才肯寫,
+  // 廠商電話就會整個被丟掉——這是本功能對廠商側唯一能拿到的聯絡資訊。
+  test('seed 只有電話沒有姓名時仍要建立聯絡人', async () => {
+    const created = await auth(request(app).post('/api/vendors')).send({ name: '無名廠商' });
+    const res = await auth(request(app).post(`/api/vendors/${created.body.id}/seed`)).send({
+      address: '公告地址', contact: { name: null, phone: '(0985) 512724' },
+    });
+    expect(res.body.seeded).toEqual({ contact: true, address: true });
+    expect(res.body.contacts).toHaveLength(1);
+    expect(res.body.contacts[0].name).toBeNull();
+    expect(res.body.contacts[0].phone).toBe('(0985) 512724');
+  });
+
+  test('seed 不覆蓋既有聯絡人與地址', async () => {
+    const created = await auth(request(app).post('/api/vendors')).send({
+      name: '已維護廠商', address: '承辦人填的地址',
+      contacts: [{ name: '王先生', phone: '0900', is_primary: true }],
+    });
+    const res = await auth(request(app).post(`/api/vendors/${created.body.id}/seed`)).send({
+      address: '公告地址', contact: { name: null, phone: '0800' },
+    });
+    expect(res.body.seeded).toEqual({ contact: false, address: false });
+    expect(res.body.address).toBe('承辦人填的地址');
+    expect(res.body.contacts[0].name).toBe('王先生');
+  });
+
+  // 姓名與電話都空時不該長出一筆完全空白的聯絡人
+  test('seed 聯絡人全空時不建立', async () => {
+    const created = await auth(request(app).post('/api/vendors')).send({ name: '沒資料廠商' });
+    const res = await auth(request(app).post(`/api/vendors/${created.body.id}/seed`)).send({
+      contact: { name: null, phone: null },
+    });
+    expect(res.body.seeded.contact).toBe(false);
+    expect(res.body.contacts).toHaveLength(0);
+  });
+
+  test('seed 目標不存在回 404', async () => {
+    const res = await auth(request(app).post('/api/vendors/99999/seed')).send({ address: 'x' });
+    expect(res.status).toBe(404);
+  });
+
   test('刪除廠商連同聯絡人', async () => {
     const created = await auth(request(app).post('/api/vendors')).send({
       name: '待刪', contacts: [{ name: 'x' }]

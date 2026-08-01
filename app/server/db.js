@@ -179,6 +179,10 @@ async function migrate() {
   const ALTERS = [
     ['projects', 'supervisor_firm', 'TEXT'], // 監造單位,空則吊 settings 預設
     ['projects', 'designer_firm', 'TEXT'],   // 設計單位,空則吊 settings 預設
+    // 決標公告 28/28 都有「機關地址」與「廠商地址」,但原本無處可存。
+    // 放在主檔而非聯絡人表:地址屬於機構本身,同一機構的多個聯絡人共用一個地址。
+    ['schools', 'address', 'TEXT'],
+    ['vendors', 'address', 'TEXT'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
