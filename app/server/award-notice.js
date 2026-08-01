@@ -128,13 +128,41 @@ function parseDirectFields(rows) {
 }
 
 /**
- * 解析決標公告 → 8 值(原 5 值 + 3 個 SP1B 階段二比對錨點)。純函式,吃 extractRows 的輸出。
+ * 機關(學校)與廠商的聯絡資訊。28 份樣本實測:這 5 個標籤**每份都恰好出現一次**,
+ * 故用 firstValue(完全相等比對)即可,不需要像得標廠商那樣掃群組。
+ *
+ * **兩邊不對稱,不是漏抽**:機關側有「聯絡人」姓名,廠商側只有電話與地址——
+ * 決標公告上沒有廠商聯絡人姓名這個欄位。廠商聯絡人因此只有電話,姓名留空由承辦人補。
+ *
+ * 廠商電話/地址緊接在「是否得標=是」那家之後,得標廠商排第 2、第 3 家的樣本
+ * (仁德/四湖永慶/豐榮/鹿場)實測也正確,不會貼到落選廠商身上。
+ *
+ * 值一律照抄(只 trim):地址帶的空白來自 PDF 分欄,自行合併等於編造格式。
+ */
+function parseContacts(rows) {
+  const v = (label) => {
+    const s = firstValue(rows, label);
+    return s == null ? null : String(s).trim() || null;
+  };
+  return {
+    機關聯絡人: v('聯絡人'),
+    機關電話: v('聯絡電話'),
+    機關地址: v('機關地址'),
+    廠商電話: v('廠商電話'),
+    廠商地址: v('廠商地址'),
+  };
+}
+
+/**
+ * 解析決標公告 → 13 值(原 5 值 + 3 個 SP1B 階段二比對錨點 + 5 個聯絡資訊)。
+ * 純函式,吃 extractRows 的輸出。
  *
  * 整份抽不到任何文字 = 掃描件。此時直接 throw(帶 code 'SCANNED_PDF')而非回滿滿 null,
  * 否則承辦人會誤以為「已解析、只是沒抓到」而放行。不做 OCR fallback。
  *
  * @param {Array<{page:number, rows:Array<{label,value}>}>} pages
- * @returns {{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號, 決標日期, 履約地點, 履約起迄}}
+ * @returns {{工程名稱, 主辦機關, 承包廠商, 契約金額, 工程編號, 決標日期, 履約地點, 履約起迄,
+ *   機關聯絡人, 機關電話, 機關地址, 廠商電話, 廠商地址}}
  */
 function parseAwardNotice(pages) {
   const rows = flattenRows(pages);
@@ -154,6 +182,8 @@ function parseAwardNotice(pages) {
     決標日期: firstValue(rows, '決標日期'),
     履約地點: parseVenue(firstValue(rows, '履約地點')),
     履約起迄: parsePeriod(firstValue(rows, '履約起迄日期')),
+    // 聯絡資訊只供建立學校/廠商時預填,不進 SP1 的 5 值裁決,也不進 SP1B 的比對
+    ...parseContacts(rows),
   };
 }
 
@@ -167,5 +197,5 @@ async function readAwardNotice(fileOrBuffer) {
 }
 
 module.exports = {
-  flattenRows, firstValue, parseAmount, parseVenue, parsePeriod, parseDirectFields, winningVendor, parseAwardNotice, readAwardNotice,
+  flattenRows, firstValue, parseAmount, parseVenue, parsePeriod, parseDirectFields, winningVendor, parseContacts, parseAwardNotice, readAwardNotice,
 };

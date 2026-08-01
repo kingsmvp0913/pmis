@@ -71,7 +71,31 @@ test('學校不存在時 id 為 null 並附上抽出的縣市', async () => {
     .expect(200);
   expect(res.body.schoolMatch).toEqual({
     name: '雲林縣北港鎮南陽國民小學', id: null, county: '雲林縣',
+    address: null, contact: { name: null, phone: null },
   });
+});
+
+// 聯絡人與地址要跟著 match 一起回,前端才能在「建立並綁定」的同一次請求寫進去,
+// 或對既有學校/廠商呼叫 /seed。分兩次請求拿等於讓承辦人多等一趟。
+test('聯絡人與地址隨 match 一起回,廠商側的姓名為 null', async () => {
+  readAwardNotice.mockResolvedValue({
+    ...PARSED,
+    機關聯絡人: '楊豐安',
+    機關電話: '(05) 7832106 # 204',
+    機關地址: '651 雲林縣 北港鎮 光明路59號',
+    廠商電話: '(0978) 557892',
+    廠商地址: '630 雲林縣 斗南鎮 新興街322號1樓',
+  });
+  const { app, token } = await makeApp();
+  const res = await request(app).post('/api/award-notice/parse')
+    .set('Authorization', `Bearer ${token}`)
+    .attach('award_notice', Buffer.from('%PDF-1.4'), 'a.pdf')
+    .expect(200);
+  expect(res.body.schoolMatch.address).toBe('651 雲林縣 北港鎮 光明路59號');
+  expect(res.body.schoolMatch.contact).toEqual({ name: '楊豐安', phone: '(05) 7832106 # 204' });
+  expect(res.body.vendorMatch.address).toBe('630 雲林縣 斗南鎮 新興街322號1樓');
+  // 決標公告沒有廠商聯絡人姓名(28/28),不得為了「補齊」而拿廠商名稱去頂
+  expect(res.body.vendorMatch.contact).toEqual({ name: null, phone: '(0978) 557892' });
 });
 
 // 掃描件是「這份檔案不能用」,屬 400 且訊息本來就寫給承辦人看;

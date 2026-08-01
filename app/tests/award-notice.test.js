@@ -156,8 +156,42 @@ describe('parseAwardNotice — 組合輸出 5 值', () => {
       決標日期: null,
       履約地點: null,
       履約起迄: { 起: null, 迄: null },
+      // 這份 fixture 沒有聯絡資訊列,五欄一律 null——不編造
+      機關聯絡人: null,
+      機關電話: null,
+      機關地址: null,
+      廠商電話: null,
+      廠商地址: null,
     });
     expect(out).not.toHaveProperty('契約工期');
+  });
+
+  // 28 份樣本實測:這 5 個標籤每份都恰好出現一次。機關側有姓名、廠商側沒有,
+  // 是決標公告本身的欄位差異,不是抽取漏掉——寫成測試以免日後被當成 bug「補上」。
+  test('聯絡資訊五欄齊出,且廠商側本來就沒有聯絡人姓名', () => {
+    const out = parseAwardNotice([{ page: 1, rows: [
+      { label: '機關名稱', value: '雲林縣元長鄉元長國民小學' },
+      { label: '聯絡人', value: '李美奇' },
+      { label: '聯絡電話', value: '(05) 7882017 # 14' },
+      { label: '機關地址', value: '655 雲林縣 元長鄉 元西路76號' },
+      { label: '廠商電話', value: '(0978) 557892' },
+      { label: '廠商地址', value: '630 雲林縣 斗南鎮 明昌里新興街322號1樓' },
+    ] }]);
+    expect(out.機關聯絡人).toBe('李美奇');
+    expect(out.機關電話).toBe('(05) 7882017 # 14');
+    expect(out.機關地址).toBe('655 雲林縣 元長鄉 元西路76號');
+    expect(out.廠商電話).toBe('(0978) 557892');
+    expect(out.廠商地址).toBe('630 雲林縣 斗南鎮 明昌里新興街322號1樓');
+    expect(out).not.toHaveProperty('廠商聯絡人');
+  });
+
+  // 地址內的空白來自 PDF 分欄。自行合併等於編造格式,而承辦人本來就能手改。
+  test('地址照抄不重排空白,只去頭尾', () => {
+    const out = parseAwardNotice([{ page: 1, rows: [
+      { label: '機關名稱', value: 'X國小' },
+      { label: '機關地址', value: '  655 雲林縣 元長鄉 元西路76號  ' },
+    ] }]);
+    expect(out.機關地址).toBe('655 雲林縣 元長鄉 元西路76號');
   });
 
   test('整份抽不到任何文字視為掃描件,直接 throw 且帶 code', () => {

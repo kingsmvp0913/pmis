@@ -36,12 +36,21 @@ function registerRoutes(app) {
         res.json({
           parsed,
           // id 為 null 時前端顯示「建立並綁定」;name 照原樣帶回供建檔用。
-          vendorMatch: { name: parsed.承包廠商 || null, id: v ? v.id : null },
+          // address/contact 一起回:新建時當場寫入,已存在時交給 /seed 只補空缺。
+          // **廠商的 contact 沒有 name**——決標公告上沒有廠商聯絡人姓名(28/28)。
+          vendorMatch: {
+            name: parsed.承包廠商 || null,
+            id: v ? v.id : null,
+            address: parsed.廠商地址 || null,
+            contact: { name: null, phone: parsed.廠商電話 || null },
+          },
           // county 先抽好一起回:建立時不必再算,前端也能預選下拉。
           schoolMatch: {
             name: parsed.主辦機關 || null,
             id: s ? s.id : null,
             county: extractCounty(parsed.主辦機關),
+            address: parsed.機關地址 || null,
+            contact: { name: parsed.機關聯絡人 || null, phone: parsed.機關電話 || null },
           },
         });
       } catch (err) {
