@@ -92,6 +92,7 @@ cd app && SP0_SKIP_EXCEL=1 npx jest --runInBand --silent --noStackTrace --no-col
 
 - **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅。** 實測連跑兩次紅的是不同子集（第一次 `copyRowDown`；第二次 `setCell` + `setRange`），錯誤都是「Excel 驅動重試 3 次仍失敗」＝ Excel COM 間歇回 null（見 memory `xlsm-excel-com-findings`）。**該檔紅了先重跑一次確認是否換一支紅；換了就是 flaky，不要追。**
 - 用 `SP0_SKIP_EXCEL=1` 跑「日常全跑」指令時，`tests/template-engine.integration.test.js` 與 `tests/project-basics.integration.test.js` 這兩支整支被 `describe.skip` 跳過（非執行後判定綠/紅）。
-- **兩種模式的基線分開講，數字互斥不可相加**（2026-08-01 SP1B 階段二後實測，較先前 213 基線新增約 200 支）：
-  - **日常全跑（`SP0_SKIP_EXCEL=1`）**：固定 **426 綠、5 skipped、431 total**，無浮動——5 skipped 是上述兩支被跳過的預期值，不是漏跑。
-  - **完整模式（不設旗標，含 Excel 整合測）**：431 個測試全跑、0 skipped；浮動只來自 `tests/template-engine.integration.test.js` 那 3 支（Excel COM 間歇失敗），故綠燈數落在 **429–431** 之間。宣稱「全套綠」前先確認紅的是不是這支。
+- **不要在本檔記「確切通過數」。** 任何新增測試的 commit 都會讓它過期，下個 session 讀到過期數字反而要花一輪確認是不是有東西壞了——它製造的正是它想防止的困惑。（2026-08-01 記過 426，2026-08-02 就已經是 431。）要基線就當場跑一次。
+- **要記的是「哪些紅/跳過是預期的」**，這才不會隨 commit 漂移：
+  - **日常全跑（`SP0_SKIP_EXCEL=1`）**：應為 0 紅、**5 skipped**。那 5 支是上述兩個整檔被 `describe.skip` 跳過的預期值，**不是漏跑**——看到就別再診斷一輪。
+  - **完整模式（不設旗標，含 Excel 整合測）**：0 skipped。唯一的浮動來源是 `tests/template-engine.integration.test.js` 那 3 支（Excel COM 間歇失敗）。宣稱「全套綠」前先確認紅的是不是這支。
