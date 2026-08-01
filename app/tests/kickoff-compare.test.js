@@ -120,6 +120,19 @@ test('開工報告表讀不到的欄位是 missing 不是 diff', () => {
   expect(hardErrors(rows)).toEqual([]);
 });
 
+// 元長國小真實案例(工程名稱字串直接引用 kickoff-report.test.js:239 釘住的真值):
+// OCR 把開工報告表上「114-116年」的半形連字號讀成中文數字「一」,且前後夾著
+// 空白。只在 org-match.test.js 驗證 normalizeOrgName 不夠——compareKickoff 是
+// 承辦人實際會看到判定結果的那一層,如果日後有人在 eqText 或 cleanValue 動了
+// 手腳,只測 normalizeOrgName 不會抓到,要在這個端到端層級也釘住一次。
+test('元長國小真實案例:OCR 把連字號讀成「一」不影響工程名稱比對', () => {
+  const rows = compareKickoff(
+    { ...KICKOFF, 工程名稱: '元長國小辦理 「 114 一 116 年公立國民中小學老舊廁所整修工程計畫 」' },
+    { ...AWARD, 工程名稱: '元長國小辦理「114-116年公立國民中小學老舊廁所整修工程計畫」' }
+  );
+  expect(find(rows, '工程名稱').狀態).toBe('match');
+});
+
 // 逐條修正會讓承辦人來回發文好幾次
 test('硬錯一次列全', () => {
   const rows = compareKickoff(
