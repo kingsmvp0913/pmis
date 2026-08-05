@@ -7,6 +7,11 @@ const TOKEN_KEY = 'pmis_token';
 function apiError(data, status) {
   const err = new Error(data.error || `HTTP ${status}`);
   if (Array.isArray(data.fields)) err.fields = data.fields;
+  // 逐欄原因(欄位 → 訊息)。有些硬擋不是「這欄跟另一份文件不符」而是
+  // 「這欄沒填/填得不成立」,少了它 view 只能套一句通用文案而指錯方向。
+  if (data.fieldMessages && typeof data.fieldMessages === 'object') {
+    err.fieldMessages = data.fieldMessages;
+  }
   return err;
 }
 

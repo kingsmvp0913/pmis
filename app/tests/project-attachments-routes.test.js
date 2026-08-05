@@ -111,6 +111,44 @@ test('刪除連同磁碟檔一起清掉', async () => {
   expect(rows).toHaveLength(0);
 });
 
+// 開工報告表可以重傳修正版,舊的必須連磁碟檔一起消失:只刪 DB 列會留孤兒檔,
+// 只換 DB 列而不刪檔則是同一個坑的另一種寫法(見上一則)。
+test('replace 覆蓋同 kind 舊附件並清掉舊磁碟檔', async () => {
+  const { projectId } = await makeApp();
+  const old = await saveAttachment({
+    projectId, kind: 'kickoff_report',
+    buffer: Buffer.from('舊'), originalName: '舊版.pdf', userId: null,
+  });
+  const oldAbs = path.join(TMP, old.file_path);
+  const fresh = await saveAttachment({
+    projectId, kind: 'kickoff_report',
+    buffer: Buffer.from('新'), originalName: '修正版.pdf', userId: null, replace: true,
+  });
+  expect(fs.existsSync(oldAbs)).toBe(false);
+  expect(fs.existsSync(path.join(TMP, fresh.file_path))).toBe(true);
+  const { rows } = await db.query(
+    `SELECT original_name FROM project_attachments WHERE project_id = $1 AND kind = 'kickoff_report'`,
+    [projectId]);
+  expect(rows.map((r) => r.original_name)).toEqual(['修正版.pdf']);
+});
+
+// 覆蓋範圍必須限縮在同一個 kind:開工報告表重傳不該動到決標公告,
+// 那是建案依據,洗掉就再也對不回去了。
+test('replace 不動其他 kind 的附件', async () => {
+  const { projectId } = await makeApp();
+  await saveAttachment({
+    projectId, kind: 'award_notice',
+    buffer: Buffer.from('公告'), originalName: '決標公告.pdf', userId: null,
+  });
+  await saveAttachment({
+    projectId, kind: 'kickoff_report',
+    buffer: Buffer.from('開工'), originalName: 'k.pdf', userId: null, replace: true,
+  });
+  const { rows } = await db.query(
+    `SELECT kind FROM project_attachments WHERE project_id = $1 ORDER BY kind`, [projectId]);
+  expect(rows.map((r) => r.kind)).toEqual(['award_notice', 'kickoff_report']);
+});
+
 test('未帶 token 一律 401', async () => {
   const { app, projectId } = await makeApp();
   await request(app).get(`/api/projects/${projectId}/attachments`).expect(401);

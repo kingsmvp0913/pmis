@@ -67,6 +67,16 @@ try {
                 $bottom = $top + [int]$op.count
                 $ws.Range($ws.Rows.Item($top), $ws.Rows.Item($bottom)).FillDown() | Out-Null
             }
+            # Like copyRowDown, but pushes everything below down first instead of
+            # overwriting it. Needed where the formula block is followed by other
+            # content (the 監造報表 sheet has report body text right under the item
+            # rows); FillDown alone would silently destroy it.
+            'insertRowsBelow' {
+                $top = [int]$op.srcRow
+                $count = [int]$op.count
+                $ws.Range($ws.Rows.Item($top + 1), $ws.Rows.Item($top + $count)).Insert(-4121) | Out-Null
+                $ws.Range($ws.Rows.Item($top), $ws.Rows.Item($top + $count)).FillDown() | Out-Null
+            }
         }
     }
 

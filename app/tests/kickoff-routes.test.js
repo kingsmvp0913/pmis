@@ -84,15 +84,43 @@ test('parse 回比對結果且不落檔', async () => {
   expect(rows[0].n).toBe(0);
 });
 
-// 舊案補登只需工程名稱(spec §8),沒有決標公告不得阻擋
-test('無決標公告時仍可 parse,標記 hasAward false', async () => {
+// 2026-08-05 規格變更:原本「舊案補登只需工程名稱,沒有決標公告不得阻擋」已被
+// 推翻——建工程的唯一入口改成上傳決標公告,沒有公告的工程一律重建。擋在 parse
+// 而非 confirm:OCR 要跑數十秒,讓承辦人等完才說「這個工程不能歸檔」是白等。
+test('無決標公告時 parse 直接擋下並要求以決標公告重建工程', async () => {
   readKickoffReport.mockResolvedValue(KICKOFF);
   const { app, token, id } = await makeApp({ withAward: false });
   const res = await request(app).post(`/api/projects/${id}/kickoff-report/parse`)
     .set('Authorization', `Bearer ${token}`)
-    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
-  expect(res.body.hasAward).toBe(false);
-  expect(readAwardNotice).not.toHaveBeenCalled();
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.error).toMatch(/決標公告/);
+  expect(res.body.error).toMatch(/重新建立/);
+  // 擋在 OCR 之前才有意義
+  expect(readKickoffReport).not.toHaveBeenCalled();
+});
+
+// 「這個工程沒照規則建立,請重建」與「公告檔壞了」要做的事完全不同:後者的
+// 工程本身是合法的,叫承辦人重建等於要他砍掉一個沒問題的案子。
+test('決標公告已歸檔但讀不出來時,訊息指向檔案而非要求重建工程', async () => {
+  readAwardNotice.mockRejectedValue(new Error('PDF 損毀'));
+  const { app, token, id } = await makeApp();
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/parse`)
+    .set('Authorization', `Bearer ${token}`)
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.error).toMatch(/決標公告/);
+  expect(res.body.error).not.toMatch(/重新建立工程/);
+});
+
+test('無決標公告時 confirm 也擋下', async () => {
+  const { app, token, id } = await makeApp({ withAward: false });
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify(KICKOFF))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.error).toMatch(/決標公告/);
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS n FROM project_attachments WHERE kind = 'kickoff_report'`);
+  expect(rows[0].n).toBe(0);
 });
 
 // 3/24 份不是開工報告表。硬湊欄位會讓承辦人以為系統看懂了。
@@ -100,6 +128,8 @@ test('非開工報告表回 400 明確訊息', async () => {
   const err = new Error('此檔無法辨識為開工報告表(缺少必要欄位標籤),請確認上傳的是開工報告表');
   err.code = 'NOT_KICKOFF_REPORT';
   readKickoffReport.mockRejectedValue(err);
+  // parse 現在先要有可讀的決標公告才會走到 OCR,否則會停在前一關而測不到這裡
+  readAwardNotice.mockResolvedValue(AWARD);
   const { app, token, id } = await makeApp();
   const res = await request(app).post(`/api/projects/${id}/kickoff-report/parse`)
     .set('Authorization', `Bearer ${token}`)
@@ -110,6 +140,7 @@ test('非開工報告表回 400 明確訊息', async () => {
 // OCR 內部錯誤細節(路徑、驅動訊息)不得回給前端
 test('OCR 失敗回 500 且不洩漏內部訊息', async () => {
   readKickoffReport.mockRejectedValue(new Error('OCR 驅動失敗: C:\\Windows\\...'));
+  readAwardNotice.mockResolvedValue(AWARD); // 同上:先過決標公告這一關才輪到 OCR
   const { app, token, id } = await makeApp();
   const res = await request(app).post(`/api/projects/${id}/kickoff-report/parse`)
     .set('Authorization', `Bearer ${token}`)
@@ -184,6 +215,104 @@ test('confirm 無硬錯時歸檔為 kickoff_report', async () => {
     [id]);
   expect(rows).toHaveLength(1);
   expect(rows[0].original_name).toBe('開工報告表.pdf');
+});
+
+// 少填一欄不會被 hardErrors 抓到(那只認 diff),沒有這層就會歸檔一份空表
+test('confirm 必填欄位留空時擋下', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify({ ...KICKOFF, 縣市: null }))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.fields).toContain('縣市');
+  // 逐欄原因要能標回那一列:只回欄位清單的話,前端只能套一句通用文案,而目前
+  // 那句是「與決標公告不符」——必填漏填根本不是跨文件比對的問題,會指錯方向。
+  expect(res.body.fieldMessages.縣市).toMatch(/必填/);
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS n FROM project_attachments WHERE kind = 'kickoff_report'`);
+  expect(rows[0].n).toBe(0);
+});
+
+// 署名欄校名 21/24、臺中市格式無決標日,這兩欄空著仍須放行
+test('confirm 學校與決標日留空仍可歸檔', async () => {
+  readAwardNotice.mockResolvedValue({ ...AWARD, 主辦機關: null, 決標日期: null });
+  const { app, token, id } = await makeApp();
+  await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify({ ...KICKOFF, 主辦機關: null, 決標日期: null }))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+});
+
+// 刻意挑竣工日:它在跨文件比對裡是**提示級**(決標公告的履約起迄明載預估),
+// 所以日曆上不存在的 2/30 不會被 hardErrors 攔到,只有值域這層擋得住。
+// 換成契約金額之類的硬錯欄位,測試在舊行為下也會綠——那就測不到這層。
+test('confirm 日曆上不存在的日期擋下', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify({ ...KICKOFF, 契約規定竣工日: '2026-02-30' }))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
+  expect(res.body.fields).toContain('契約規定竣工日');
+});
+
+// 明禮 160 工作天。承辦人已在日曆天欄位填入換算值,不得再以「工作天不推導」
+// 把它擋在門外——那會讓這種工程永遠歸不了檔。
+// 光看「有沒有歸檔成功」測不到這件事:工作天在舊行為下是 missing,而 missing
+// 本來就不擋歸檔,兩種行為都會回 200。要驗的是這一格真的被驗算過(match)。
+test('confirm 工作天案例經人工換算後照日曆天驗算', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify({ ...KICKOFF, 契約工期: { 天數: 150, 基準: '工作天' } }))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+  expect(res.body.rows.find((r) => r.欄位 === '契約工期').狀態).toBe('match');
+});
+
+// 重傳修正版是常態(OCR 讀錯、上傳到錯的檔)。累積多份的話,下游要靠
+// 「哪一份才算數」的隱含規則(目前是 id 最大),承辦人在附件清單看到兩份
+// 開工報告表也分不出哪份有效。
+test('confirm 重複歸檔時只保留最新一份', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  const post = (name) => request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify(KICKOFF))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), name).expect(200);
+  await post('舊版.pdf');
+  await post('修正版.pdf');
+  const { rows } = await db.query(
+    `SELECT original_name FROM project_attachments WHERE project_id = $1 AND kind = 'kickoff_report'`,
+    [id]);
+  expect(rows.map((r) => r.original_name)).toEqual(['修正版.pdf']);
+});
+
+// 覆蓋只針對開工報告表:決標公告是建案依據,不該被開工報告表流程動到
+test('confirm 覆蓋不影響決標公告附件', async () => {
+  readAwardNotice.mockResolvedValue(AWARD);
+  const { app, token, id } = await makeApp();
+  await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify(KICKOFF))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+  const { rows } = await db.query(
+    `SELECT COUNT(*)::int AS n FROM project_attachments WHERE project_id = $1 AND kind = 'award_notice'`,
+    [id]);
+  expect(rows[0].n).toBe(1);
+});
+
+// 提示級規則若不回傳,等於沒做:承辦人看不到就不會去確認。但也不能擋——
+// 決標日本身可空、補辦決標也存在,判硬錯會擋住合法文件。
+test('confirm 決標日晚於開工日仍歸檔,但回提示', async () => {
+  readAwardNotice.mockResolvedValue({ ...AWARD, 決標日期: '115/03/19' });
+  const { app, token, id } = await makeApp();
+  const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('values', JSON.stringify({ ...KICKOFF, 決標日期: '2026-03-19' }))
+    .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+  expect(res.body.warnings.map((w) => w.欄位)).toEqual(['決標日']);
 });
 
 // 提示級不得阻擋:古坑平移 10 天是正常的

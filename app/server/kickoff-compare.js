@@ -58,10 +58,11 @@ function cmp(欄位, kv, av, hasAward, eq) {
  * @param {object|null} award parseAwardNotice 的輸出;該工程未歸檔決標公告時傳 null
  * @returns {Array<object>}
  */
-function compareKickoff(kickoff, award) {
+function compareKickoff(kickoff, award, opts) {
   const k = kickoff || {};
   const a = award || {};
   const hasAward = !!award;
+  const confirmed = !!(opts && opts.confirmed);
   const rows = [];
 
   // ── 硬錯欄位 ────────────────────────────────────────────
@@ -87,7 +88,12 @@ function compareKickoff(kickoff, award) {
   // 但表上兩個數字互相矛盾就是這份文件自己填錯,沒有「預估值」這種正常解釋
   // 可以開脫,級別維持 hard(spec §5.2)。
   const dur = k.契約工期 || { 天數: null, 基準: null };
-  if (dur.基準 === '工作天') {
+  // 確認階段(confirmed)的天數來自畫面上的日曆天欄位——前端對工作天案例刻意
+  // 留空該欄並要承辦人自行換算,OCR 的工作天數字不會流進去。故此時有值即是
+  // 已換算的日曆天,照常推導驗算。解析階段仍不推導(那時的值是 OCR 讀到的
+  // 工作天,推導必然假警報);少了這個區分,工作天案例(明禮)在必填上線後
+  // 恆為 missing → 永遠歸不了檔。
+  if (dur.基準 === '工作天' && !(confirmed && dur.天數 != null)) {
     // 由日期推導出的是日曆天,工作天案例必然對不上(明禮)。只取表上數字、不推導。
     rows.push(row('契約工期', `${dur.天數} 工作天`, '（工作天不推導）', 'missing', 'hard'));
   } else {
@@ -122,4 +128,74 @@ function hardErrors(rows) {
   return (rows || []).filter((r) => r && r.級別 === 'hard' && r.狀態 === 'diff');
 }
 
-module.exports = { compareKickoff, hardErrors };
+// 必填七欄。**學校與決標日刻意不在其中**:署名欄校名 21/24(3 份被印章蓋掉
+// 尾字)、臺中市格式整份沒有決標日,列必填會讓這些合法文件永遠歸不了檔。
+const REQUIRED = [
+  '工程名稱', '契約編號', '契約金額', '縣市', '契約規定開工日', '契約規定竣工日',
+];
+
+const isEmpty = (v) => v == null || (typeof v === 'string' && v.trim() === '');
+
+const isPositiveInt = (v) => Number.isInteger(Number(v)) && Number(v) > 0;
+
+// 比對表標籤 → values 的鍵名(這兩欄兩邊命名不同)
+const DATE_KEY = {
+  決標日: '決標日期', 契約規定開工日: '契約規定開工日', 契約規定竣工日: '契約規定竣工日',
+};
+
+// ISO 日期的日曆合法性。rocToISO 已對民國字串擋掉 2/30,confirm 收的是
+// 前端送來的 ISO 字串,同一種錯誤要在這條路徑上再擋一次。
+const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isValidISO(s) {
+  if (typeof s !== 'string' || !ISO_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * 必填檢查。看的是**開工報告表值本身有沒有**,與比對狀態無關——
+ * hardErrors 只認 'diff',missing(沒得比)一律放行,所以少了這一層,
+ * 九欄全空也照樣歸檔,下游 SP2 接到的會是一份空的工程基本資料。
+ *
+ * @param {object} values 承辦人確認後的值(extractFields 形狀)
+ * @returns {Array<{欄位:string, 訊息:string}>} 欄位用比對表的中文標籤(前端以此標紅)
+ */
+function validateValues(values) {
+  const v = values || {};
+  const errs = REQUIRED.filter((k) => isEmpty(v[k]))
+    .map((欄位) => ({ 欄位, 訊息: '必填,請對照 PDF 填寫', 級別: 'hard' }));
+  const 天數 = v.契約工期 && v.契約工期.天數;
+  if (isEmpty(天數)) errs.push({ 欄位: '契約工期', 訊息: '必填,請對照 PDF 填寫', 級別: 'hard' });
+
+  // ── 值域 ────────────────────────────────────────────────
+  // 前端是 <input type=number/date>,但 confirm 收的是 JSON,繞得過去;
+  // 且瀏覽器的 number 欄本來就擋不住負號與小數。
+  if (!isEmpty(v.契約金額) && !isPositiveInt(v.契約金額)) {
+    errs.push({ 欄位: '契約金額', 訊息: '須為大於 0 的整數(元)', 級別: 'hard' });
+  }
+  if (!isEmpty(天數) && !isPositiveInt(天數)) {
+    errs.push({ 欄位: '契約工期', 訊息: '須為大於 0 的天數', 級別: 'hard' });
+  }
+  for (const 欄位 of ['決標日', '契約規定開工日', '契約規定竣工日']) {
+    const val = v[DATE_KEY[欄位]];
+    if (!isEmpty(val) && !isValidISO(val)) {
+      errs.push({ 欄位, 訊息: '日期格式不正確或日曆上不存在', 級別: 'hard' });
+    }
+  }
+  const 開工 = v.契約規定開工日;
+  const 竣工 = v.契約規定竣工日;
+  // 日期填反時 deriveDuration 回 null,承辦人只會看到「契約工期讀不到」,
+  // 看不出真正的問題是兩個日期顛倒——那要做的事完全不同。
+  if (isValidISO(開工) && isValidISO(竣工) && 竣工 < 開工) {
+    errs.push({ 欄位: '契約規定竣工日', 訊息: '竣工日早於開工日', 級別: 'hard' });
+  }
+  // 決標之後才會開工。但決標日本身可空、也有補辦決標的例外,判硬錯會擋住
+  // 合法文件,故只提示。
+  if (isValidISO(v.決標日期) && isValidISO(開工) && v.決標日期 > 開工) {
+    errs.push({ 欄位: '決標日', 訊息: '決標日晚於開工日,請確認是否填反', 級別: 'hint' });
+  }
+  return errs;
+}
+
+module.exports = { compareKickoff, hardErrors, validateValues };

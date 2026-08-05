@@ -107,6 +107,36 @@ describe('sample-jinda parse(第一天/第一頁)', () => {
   test('當日累計(本日完成金額)= 10400.248', () => {
     expect(out.header.本日累計金額).toBe(10400.248);
   });
+  // 項目名稱裡的工程縮寫被當成單位:`7 整地,新設 RC 基礎板 M 1,049 124.0` 的 RC
+  // 命中了舊的樣式判定 /^[A-Z]+\d*$/,於是名稱被截成「整地,新設」、單位變 RC、
+  // 真正的 M 1,049 124.0 全部錯位成 null——而且沒有任何錯誤訊息。
+  // 17 列裡有 2 列如此,舊測試因為只抽驗特定項次而全綠。
+  test('項次7 名稱含 RC 縮寫時,單位與數字欄仍正確', () => {
+    const r7 = out.dailyRows.find((r) => r.項次 === '7');
+    // 名稱 token 一律以空字串接合(讀取器既有行為,其他項目的斷言也依此)。
+  // 與契約表比對時兩邊都會去空白(kickoff/E3 的 squash),故不影響下游。
+  expect(r7.工程項目).toBe('整地,新設RC基礎板');
+    expect(r7.單位).toBe('M');
+    expect(r7.契約單價).toBe(1049);
+    expect(r7.契約數量).toBe(124);
+  });
+
+  test('項次8 同樣的形態', () => {
+    const r8 = out.dailyRows.find((r) => r.項次 === '8');
+    expect(r8.工程項目).toBe('新建圍網RC矮牆基座');
+    expect(r8.單位).toBe('M');
+    expect(r8.契約單價).toBe(3280);
+    expect(r8.契約數量).toBe(124);
+  });
+
+  // 沒有這條,任何一列解析失敗都只會靜默變 null。抽驗特定項次擋不住這種缺陷。
+  test('每一個非大類列都解析得出單位與契約數量單價', () => {
+    const 缺 = out.dailyRows
+      .filter((r) => !(r.單位 == null && r.契約數量 == null && r.契約單價 == null))
+      .filter((r) => r.單位 == null || r.契約數量 == null || r.契約單價 == null)
+      .map((r) => `${r.項次} ${r.工程項目}`);
+    expect(缺).toEqual([]);
+  });
 });
 
 describe('sample-jinda parseAll(逐日彙總)', () => {

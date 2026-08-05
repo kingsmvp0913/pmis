@@ -1,3 +1,4 @@
+const path = require('path');
 const { rowsFromItems } = require('../server/parsers/filetypes/pdf');
 
 describe('rowsFromItems — 決標公告兩欄表座標分欄(純函式)', () => {
@@ -98,5 +99,33 @@ describe('rowsFromItems — CJK 部首補充區誤映還原(決標公告字型�
       { x: 166, y: 100, s: `雲林縣元${GOOD_CHANG}鄉仁德國${GOOD_MIN}小學(${GOOD_XI}棟)` },
     ];
     expect(rowsFromItems(items)[0].value).toBe(`雲林縣元${GOOD_CHANG}鄉仁德國${GOOD_MIN}小學(${GOOD_XI}棟)`);
+  });
+});
+
+// ── 通用座標抽取(給多欄表格的廠商讀取器用)──────────────────
+// extractRows 的分欄是寫死給決標公告兩欄表的(BLOCK_MAX_X/LABEL_MAX_X),
+// 多欄表格套不上;extractPages 又只回文字,展翔那種版面抽出來會變成
+// 「1.002,500.001.00 2,500.00」這種黏連字串,還原不回欄位。
+// 讀取器需要的是原始 x/y,自己依該家版面分欄——同 SP1B 對 OCR 的結論:
+// 把座標丟掉之後,下游只能靠順序猜,而順序在多欄表格裡不成立。
+describe('extractItems 通用座標抽取', () => {
+  const { extractItems } = require('../server/parsers/filetypes/pdf');
+  const FIXTURE = path.join(__dirname, 'fixtures', 'jinda.pdf');
+
+  test('每頁回傳帶 x/y 的文字 item', async () => {
+    const pages = await extractItems(FIXTURE);
+    expect(pages.length).toBeGreaterThan(0);
+    expect(pages[0].page).toBe(1);
+    const it = pages[0].items.find((i) => String(i.s).trim());
+    expect(typeof it.x).toBe('number');
+    expect(typeof it.y).toBe('number');
+    expect(typeof it.s).toBe('string');
+  });
+
+  // 同一列的 item y 值相同(或在容差內),這是讀取器分列的依據
+  test('同一列的 item 具有相近的 y', async () => {
+    const pages = await extractItems(FIXTURE);
+    const ys = new Set(pages[0].items.map((i) => Math.round(i.y)));
+    expect(ys.size).toBeLessThan(pages[0].items.length);
   });
 });

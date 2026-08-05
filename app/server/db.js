@@ -139,6 +139,34 @@ async function migrate() {
     // 工程層一次性文件(決標公告、開工報告表)。刻意不塞進 submission_history——
     // 那張表的語意是「每月/督導繳交週期」,綁著 period/deadline/繳交狀態計算,
     // 混入工程層文件會污染那套邏輯。
+    // 契約詳細價目表的項目清單(SP2)。**這不是權威來源**——權威是 .xlsm 內
+    // 該分頁。存在的唯一目的:重傳新版時要能依「項目名稱」比出改了什麼,以及
+    // 日後 SP3 把已填施工進度搬到新位置。只剩列位置可比對的話,而列位置正是
+    // 重傳時會位移的東西。
+    `CREATE TABLE IF NOT EXISTS contract_items (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      seq        INTEGER NOT NULL,
+      item_no    TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      unit       TEXT,
+      quantity   NUMERIC NOT NULL,
+      unit_price NUMERIC NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
+    // 已寫入每日施工紀錄的逐日逐項數量(SP3)。權威仍是 .xlsm 內該分頁;
+    // 這張表的用途是**跨批次比對**——施工日誌分多次提交,且「後面才發現前面錯了」
+    // 是真實流程,覆蓋前要能說出哪一天的哪一項從多少改成多少。
+    `CREATE TABLE IF NOT EXISTS daily_records (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      log_date   DATE NOT NULL,
+      item_no    TEXT NOT NULL,
+      qty        NUMERIC,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS project_attachments (
       id            SERIAL PRIMARY KEY,
       project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

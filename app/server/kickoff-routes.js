@@ -21,7 +21,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { readKickoffReport } = require('./kickoff-report');
 const { readAwardNotice } = require('./award-notice');
-const { compareKickoff, hardErrors } = require('./kickoff-compare');
+const { compareKickoff, hardErrors, validateValues } = require('./kickoff-compare');
 const { saveAttachment } = require('./project-attachments-routes');
 const { safeResolve } = require('./history-routes');
 
@@ -44,6 +44,10 @@ function isIdShape(id) {
 // 若固定回「與決標公告不符,請發文更正」,唯一硬錯是契約工期時會叫承辦人
 // 拿決標公告去跟廠商發文,而實際上該做的是檢查開工報告表自己填的三個數字對不對。
 const DURATION_FIELD = '契約工期';
+
+// 工程一律由決標公告建立(2026-08-05 裁決,手動新增已移除),故「沒有決標公告」
+// 不是可補件的狀態,而是這個工程當初就沒照規則建立——要他重建,不是要他補掛。
+const NO_AWARD_MESSAGE = '此工程未歸檔決標公告,無法核對開工報告表。請以決標公告重新建立工程。';
 
 /**
  * 依硬錯欄位組成挑文案:跨文件欄位與契約工期(表內自洽)所需的下一步動作不同,
@@ -78,7 +82,12 @@ async function withTempPdf(buffer, fn) {
 /**
  * 取該工程已歸檔的決標公告並重新解析。DB 沒存決標日期/履約地點/履約起迄,
  * 只能從歸檔的那份 PDF 重新讀。
- * @returns {Promise<object|null>} 沒有附件或檔案已遺失回 null(不阻擋流程)
+ *
+ * 回傳要區分「沒有附件」與「有附件但讀不出來」:前者代表這個工程當初沒照
+ * 規則建立(要重建),後者的工程本身合法、只是檔案壞了(要換檔)。兩者都回
+ * null 的話,承辦人會被叫去砍掉一個其實沒問題的案子。
+ *
+ * @returns {Promise<{found:boolean, award:object|null}>}
  */
 async function loadAwardNotice(projectId) {
   const { rows } = await query(
@@ -86,16 +95,19 @@ async function loadAwardNotice(projectId) {
       WHERE project_id = $1 AND kind = 'award_notice' ORDER BY id DESC LIMIT 1`,
     [projectId]
   );
-  if (!rows[0]) return null;
+  if (!rows[0]) return { found: false, award: null };
   const abs = safeResolve(rows[0].file_path);
-  if (!abs) return null;
-  try { return await readAwardNotice(abs); }
+  if (!abs) return { found: true, award: null };
+  try { return { found: true, award: await readAwardNotice(abs) }; }
   catch (err) {
-    // 歸檔的公告解析失敗(如當初存的是掃描件)不得讓開工報告表流程整個掛掉
-    console.error('[kickoff] 歸檔的決標公告解析失敗,改以無公告模式比對:', err);
-    return null;
+    console.error('[kickoff] 歸檔的決標公告解析失敗:', err);
+    return { found: true, award: null };
   }
 }
+
+// 有附件卻讀不出來:工程本身是合法的,該換的是那份檔案。
+const BAD_AWARD_MESSAGE = '此工程歸檔的決標公告無法讀取(檔案損毀或不是決標公告),' +
+  '請重新上傳正確的決標公告後再核對開工報告表。';
 
 function registerRoutes(app) {
   app.post('/api/projects/:id/kickoff-report/parse', verifyToken,
@@ -108,12 +120,19 @@ function registerRoutes(app) {
         const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
         if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
 
+        // 決標公告先查:沒有它就沒有比對基準,而規則已改成「工程一律由決標公告
+        // 建立」,這種工程要重建而不是補件。擋在 OCR 之前——讓承辦人等完數十秒
+        // 的 OCR 才被告知這個工程不能歸檔,等於白等。
+        const { found, award } = await loadAwardNotice(req.params.id);
+        if (!award) {
+          return res.status(400).json({ error: found ? BAD_AWARD_MESSAGE : NO_AWARD_MESSAGE });
+        }
+
         const kickoff = await withTempPdf(req.file.buffer, (p) => readKickoffReport(p));
-        const award = await loadAwardNotice(req.params.id);
         res.json({
           kickoff,
           award,
-          hasAward: !!award,
+          hasAward: true,
           rows: compareKickoff(kickoff, award),
         });
       } catch (err) {
@@ -142,8 +161,29 @@ function registerRoutes(app) {
           return res.status(400).json({ error: '確認值格式不正確' });
         }
 
-        const award = await loadAwardNotice(req.params.id);
-        const compared = compareKickoff(values, award);
+        const { found, award } = await loadAwardNotice(req.params.id);
+        if (!award) {
+          return res.status(400).json({ error: found ? BAD_AWARD_MESSAGE : NO_AWARD_MESSAGE });
+        }
+
+        // 必填/值域先擋,與跨文件比對分兩段回報:前者是「這份表還沒填完或填得
+        // 不成立」,承辦人自己補得了;後者是「與決標公告記載不同」,要發文請廠商
+        // 更正。混在同一則訊息裡列出,兩種完全不同的下一步動作會被誤讀成同一種。
+        const validated = validateValues(values);
+        const invalid = validated.filter((e) => e.級別 === 'hard');
+        if (invalid.length) {
+          return res.status(400).json({
+            error: '以下欄位尚未填寫或內容不成立,請對照 PDF 補正:' +
+              invalid.map((e) => `${e.欄位}(${e.訊息})`).join('、'),
+            fields: invalid.map((e) => e.欄位),
+            // 逐欄原因:只給欄位清單的話,前端只能套一句通用文案(目前那句是
+            // 「與決標公告不符」),而必填漏填不是跨文件比對的問題,會指錯方向。
+            fieldMessages: Object.fromEntries(invalid.map((e) => [e.欄位, e.訊息])),
+            rows: compareKickoff(values, award, { confirmed: true }),
+          });
+        }
+
+        const compared = compareKickoff(values, award, { confirmed: true });
         const errs = hardErrors(compared);
         if (errs.length) {
           // 一次列全:逐條修正會讓承辦人來回發文好幾次
@@ -163,8 +203,17 @@ function registerRoutes(app) {
           // (沿用 project-routes.js:159)
           originalName: Buffer.from(req.file.originalname, 'latin1').toString('utf8'),
           userId: req.userId || null,
+          // 重傳修正版是常態(OCR 讀錯、傳錯檔);留著舊的只會讓承辦人在附件
+          // 清單看到兩份開工報告表卻分不出哪份才算數。
+          replace: true,
         });
-        res.json({ ok: true, attachmentId: saved.id, rows: compared });
+        // 提示級不擋歸檔,但一定要回:承辦人看不到就等於這條規則沒做。
+        res.json({
+          ok: true,
+          attachmentId: saved.id,
+          rows: compared,
+          warnings: validated.filter((e) => e.級別 === 'hint'),
+        });
       } catch (err) {
         console.error('[kickoff] 開工報告表歸檔失敗:', err);
         res.status(500).json({ error: '開工報告表歸檔失敗,請稍後重試;若持續失敗請聯絡系統管理員' });

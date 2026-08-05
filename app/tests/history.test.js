@@ -128,10 +128,11 @@ describe('history routes', () => {
     db._setPoolForTesting(freshPool());
     await db.migrate();
     ({ app, token } = await makeApp());
-    const p = await request(app).post('/api/projects')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ name: '測試工程', start_date: '2026-07-01' });
-    projectId = p.body.id;
+    // 直接 INSERT 而不打建案 API:建案入口已收斂成「必須上傳決標公告」,而本檔
+    // 測的是繳交紀錄,工程只是前置條件(理由同 submission-report.test.js)。
+    const { rows } = await db.query(
+      `INSERT INTO projects (name, start_date) VALUES ('測試工程', '2026-07-01') RETURNING id`);
+    projectId = rows[0].id;
   });
   afterEach(() => db._setPoolForTesting(null));
 

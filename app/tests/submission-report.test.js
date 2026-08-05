@@ -52,11 +52,15 @@ describe('POST /submissions 串接監造報表產生', () => {
   function auth(req) { return req.set('Authorization', `Bearer ${token}`); }
 
   // 建 vendor + project(綁 vendor),回 projectId。
+  // 直接 INSERT 而不打建案 API:建案入口已收斂成「必須上傳決標公告」,本檔測的是
+  // 繳交紀錄與報表產生,工程只是前置條件——為了它去湊一份決標公告與五個必填欄位,
+  // 只會讓這些測試綁上一條與被測行為無關的規則。
   async function makeProjectWithVendor(vendorName) {
     const v = await auth(request(app).post('/api/vendors')).send({ name: vendorName });
-    const p = await auth(request(app).post('/api/projects'))
-      .send({ name: '竹崎圍牆工程', vendor_id: v.body.id, start_date: '2026-04-01' });
-    return p.body.id;
+    const { rows } = await db.query(
+      `INSERT INTO projects (name, vendor_id, start_date)
+       VALUES ('竹崎圍牆工程', $1, '2026-04-01') RETURNING id`, [v.body.id]);
+    return rows[0].id;
   }
 
   beforeEach(async () => {
