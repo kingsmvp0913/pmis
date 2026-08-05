@@ -613,17 +613,20 @@
       const title = { kickoff: '開工報告表', items: '契約詳細價目表', logs: '施工日誌' }[key];
       let changed = false;
       const done = () => { changed = true; };
-      const content = key === 'kickoff'
+      const body = key === 'kickoff'
         ? KickoffReport.card(p.id, { onArchived: done })
         : (key === 'items' ? ContractItems.card(p.id) : DailyLogs.card(p.id));
-      const dlg = modalDialog({ title: `${title}—${p.name}`, content, wide: true });
+      // 重載邏輯放 onClose、不是「關閉」鈕的 onClick:modalDialog 有三條關閉路徑
+      // (Escape、點 overlay、呼叫 close()),塞在按鈕上只堵得住第三條——比照
+      // submissionDialog 已經在用的模式,把重載收斂到 onClose 統一處理。
+      const dlg = modalDialog({
+        title: `${title}—${p.name}`, content: body, wide: true,
+        onClose: () => { if (changed || key !== 'kickoff') load(); },
+      });
       const close = el('div', { class: 'modal-actions' }, [
-        el('button', {
-          class: 'btn btn-outline',
-          onClick: () => { dlg.close(); if (changed || key !== 'kickoff') load(); },
-        }, '關閉'),
+        el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '關閉'),
       ]);
-      content.appendChild(close);
+      body.appendChild(close);
     }
 
     async function load() {
