@@ -109,6 +109,61 @@ async function loadAwardNotice(projectId) {
 const BAD_AWARD_MESSAGE = '此工程歸檔的決標公告無法讀取(檔案損毀或不是決標公告),' +
   '請重新上傳正確的決標公告後再核對開工報告表。';
 
+// 開工報告表九欄 → projects 主檔可對應的四欄。與 school-routes.js/vendor-routes.js
+// 的 /seed 同一條鐵則:只補空缺,絕不覆蓋——承辦人手動維護過的值(如透過「寫入
+// 監造報表」已填的契約金額)權威性高於開工報告表這份快照。
+//
+// 「工程名稱」刻意不在此列:projects.name 是 NOT NULL,工程一律由決標公告建立,
+// 該欄必有值,COALESCE 永遠選現有值、補了也不會生效——列進來只會讓人誤以為
+// 這裡能更新工程名稱。
+const MASTER_FIELDS = [
+  ['契約編號', 'project_no'],
+  ['契約金額', 'award_amount'],
+  ['契約規定開工日', 'start_date'], // 卡住施工日誌關卡(daily-log-routes 的 NO_START)的關鍵欄位
+  ['契約規定竣工日', 'contract_completion_date'],
+];
+
+const isEmptyMasterValue = (v) => v == null || v === '';
+
+/**
+ * 開工報告表歸檔成功後,把可對應的欄位補進工程主檔——只補「目前是空的」欄位。
+ *
+ * 寫入決策整句包進同一個 UPDATE(CASE/COALESCE),不是先 SELECT 目前值再由 JS
+ * 決定要 SET 哪幾欄:那樣兩次往返之間有 race,別的請求可能插進來改掉正要補的欄位。
+ * 即使值讀不到(null),COALESCE(既有值, null) 仍是既有值,不會把主檔清成 null。
+ *
+ * `before` 只用來組回應裡的 updated 清單(告訴承辦人「這次補了什麼」),不影響
+ * 實際寫入結果——即使這份快照因並行請求而過時,UPDATE 仍以執行當下的最新列值
+ * 為準,不會誤蓋;`updated` 頂多在那種罕見並行情境下少報,不會多報。
+ *
+ * @param {string|number} projectId
+ * @param {object} values 承辦人確認後的開工報告表值(confirm 已通過驗證的那份)
+ * @param {object} before UPDATE 之前的主檔四欄快照(confirm handler 一開始查詢時取得)
+ * @returns {Promise<string[]>} 這次實際補上的 projects 欄位名
+ */
+async function fillProjectMasterFromKickoff(projectId, values, before) {
+  const v = values || {};
+  const candidates = {
+    project_no: isEmptyMasterValue(v.契約編號) ? null : String(v.契約編號).trim(),
+    award_amount: v.契約金額 != null ? v.契約金額 : null,
+    start_date: v.契約規定開工日 || null,
+    contract_completion_date: v.契約規定竣工日 || null,
+  };
+  await query(
+    `UPDATE projects
+        SET project_no = CASE WHEN project_no IS NULL OR project_no = '' THEN $1 ELSE project_no END,
+            award_amount = COALESCE(award_amount, $2),
+            start_date = COALESCE(start_date, $3),
+            contract_completion_date = COALESCE(contract_completion_date, $4)
+      WHERE id = $5`,
+    [candidates.project_no, candidates.award_amount, candidates.start_date,
+      candidates.contract_completion_date, projectId]
+  );
+  return MASTER_FIELDS
+    .map(([, col]) => col)
+    .filter((col) => candidates[col] != null && isEmptyMasterValue(before[col]));
+}
+
 function registerRoutes(app) {
   app.post('/api/projects/:id/kickoff-report/parse', verifyToken,
     upload.single('kickoff_report'), async (req, res) => {
@@ -151,8 +206,14 @@ function registerRoutes(app) {
           return res.status(400).json({ error: '請上傳開工報告表 PDF' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
-        const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+        // 多選四欄當「補寫前快照」:confirm 成功後若要補寫主檔,靠這份判斷哪些欄位
+        // 目前是空的——不必為此再多一次往返(見 fillProjectMasterFromKickoff)。
+        const { rows } = await query(
+          'SELECT id, project_no, award_amount, start_date, contract_completion_date FROM projects WHERE id = $1',
+          [req.params.id]
+        );
         if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
+        const project = rows[0];
 
         let values;
         try { values = JSON.parse(req.body && req.body.values); }
@@ -207,12 +268,29 @@ function registerRoutes(app) {
           // 清單看到兩份開工報告表卻分不出哪份才算數。
           replace: true,
         });
+
+        // 附件已歸檔才補寫主檔:失敗路徑(硬錯/驗證未過)不得寫入,前面的 return 已擋掉。
+        // 這條路徑失敗不可讓歸檔整個失敗——附件已經寫進去了,回滾語意只會更亂,
+        // 記 log 並在回應裡誠實反映即可,承辦人可回頭至「工程基本資料」手動補。
+        let updated = [];
+        let masterUpdateWarning = null;
+        try {
+          updated = await fillProjectMasterFromKickoff(req.params.id, values, project);
+        } catch (err) {
+          console.error('[kickoff] 補寫工程主檔失敗:', err);
+          masterUpdateWarning = '開工報告表已歸檔,但補寫工程主檔(契約編號/金額/開工竣工日)失敗,' +
+            '請至「工程基本資料」頁籤手動確認並補填。';
+        }
+
         // 提示級不擋歸檔,但一定要回:承辦人看不到就等於這條規則沒做。
         res.json({
           ok: true,
           attachmentId: saved.id,
           rows: compared,
           warnings: validated.filter((e) => e.級別 === 'hint'),
+          // 這次實際補上的 projects 欄位名(只補空缺,已有值的不列入)。
+          updated,
+          ...(masterUpdateWarning ? { masterUpdateWarning } : {}),
         });
       } catch (err) {
         console.error('[kickoff] 開工報告表歸檔失敗:', err);
@@ -221,4 +299,4 @@ function registerRoutes(app) {
     });
 }
 
-module.exports = { registerRoutes };
+module.exports = { registerRoutes, fillProjectMasterFromKickoff };

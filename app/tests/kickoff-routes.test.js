@@ -12,7 +12,7 @@ const { readKickoffReport } = require('../server/kickoff-report');
 const { readAwardNotice } = require('../server/award-notice');
 
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
-const { registerRoutes: registerKickoffRoutes } = require('../server/kickoff-routes');
+const { registerRoutes: registerKickoffRoutes, fillProjectMasterFromKickoff } = require('../server/kickoff-routes');
 
 const KICKOFF = {
   工程名稱: '南陽廁所整修', 契約編號: '1150113', 契約金額: 3122168,
@@ -333,4 +333,64 @@ test('values 非合法 JSON 回 400', async () => {
     .field('values', '{壞掉')
     .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(400);
   expect(res.body.error).toMatch(/確認值/);
+});
+
+// 2026-08-05 補強:歸檔成功卻不寫工程主檔,承辦人核對完九欄仍卡在下一關
+// (施工日誌要求 start_date 非空)。規則與決標公告的 seed 同一條鐵則:只補空缺。
+describe('confirm 歸檔後補寫工程主檔(只補空缺)', () => {
+  test('主檔四欄皆空時,歸檔後四欄都被補上且值正確', async () => {
+    readAwardNotice.mockResolvedValue(AWARD);
+    const { app, token, id } = await makeApp();
+    const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('values', JSON.stringify(KICKOFF))
+      .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+    // 回應的 updated 要與實際寫入的欄位一致
+    expect(res.body.updated.sort()).toEqual(
+      ['award_amount', 'contract_completion_date', 'project_no', 'start_date'].sort());
+    const { rows } = await db.query(
+      `SELECT project_no, award_amount, start_date, contract_completion_date
+         FROM projects WHERE id = $1`, [id]);
+    expect(rows[0].project_no).toBe('1150113');
+    expect(Number(rows[0].award_amount)).toBe(3122168);
+    expect(rows[0].start_date.toISOString().slice(0, 10)).toBe('2026-03-18');
+    expect(rows[0].contract_completion_date.toISOString().slice(0, 10)).toBe('2026-08-14');
+  });
+
+  // 承辦人可能已透過「寫入監造報表」填過 award_amount——那個值權威性高於開工
+  // 報告表這份快照,不得被覆蓋。其餘仍是空的三欄要照樣補上。
+  test('主檔已有值時不被覆蓋,其餘空欄仍被補,updated 不列已有值的欄位', async () => {
+    readAwardNotice.mockResolvedValue(AWARD);
+    const { app, token, id } = await makeApp();
+    await db.query('UPDATE projects SET award_amount = $1 WHERE id = $2', [9999999, id]);
+    const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('values', JSON.stringify(KICKOFF))
+      .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+    expect(res.body.updated).not.toContain('award_amount');
+    expect(res.body.updated.sort()).toEqual(
+      ['contract_completion_date', 'project_no', 'start_date'].sort());
+    const { rows } = await db.query('SELECT award_amount FROM projects WHERE id = $1', [id]);
+    expect(Number(rows[0].award_amount)).toBe(9999999);
+  });
+});
+
+// confirm 走不到這個情境(契約編號/金額/開工/竣工日皆是 validateValues 的
+// REQUIRED,驗證通過時四欄必有值)——但 fillProjectMasterFromKickoff 本身要對
+// 「值讀不到」保持防禦,COALESCE(既有值, null) 不得把主檔既有值清成 null。
+test('fillProjectMasterFromKickoff:candidate 為 null 時不清空主檔既有值', async () => {
+  const { id } = await makeApp();
+  await db.query(`UPDATE projects SET project_no = '既有編號', award_amount = 500 WHERE id = $1`, [id]);
+  const before = { project_no: '既有編號', award_amount: 500, start_date: null, contract_completion_date: null };
+  const updated = await fillProjectMasterFromKickoff(id, {
+    契約編號: null, 契約金額: null, 契約規定開工日: '2026-03-18', 契約規定竣工日: null,
+  }, before);
+  expect(updated).toEqual(['start_date']);
+  const { rows } = await db.query(
+    `SELECT project_no, award_amount, start_date, contract_completion_date
+       FROM projects WHERE id = $1`, [id]);
+  expect(rows[0].project_no).toBe('既有編號');
+  expect(Number(rows[0].award_amount)).toBe(500);
+  expect(rows[0].start_date.toISOString().slice(0, 10)).toBe('2026-03-18');
+  expect(rows[0].contract_completion_date).toBeNull();
 });
