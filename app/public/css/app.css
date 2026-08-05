@@ -127,6 +127,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* ── Modal / Dialog ── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; padding: var(--space-4); z-index: var(--z-modal); }
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); width: 440px; max-width: 100%; }
+/* 開工報告表的九欄比對表與價目表差異清單塞不進 440px。內容高度不可預期,
+   故限制在視窗高度內並讓內容自己捲,否則長表格會把彈窗撐出畫面外、
+   按鈕點不到。 */
+.modal-wide { width: 960px; }
+.modal-wide .modal-body { max-height: 70vh; overflow-y: auto; padding-bottom: var(--space-6); }
 .modal-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); padding: var(--space-5) var(--space-6) var(--space-3); }
 .modal-body { padding: 0 var(--space-6); font-size: var(--fs-md); color: var(--text-secondary); line-height: 1.7; }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-5) var(--space-6) var(--space-6); }
@@ -137,6 +142,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .toolbar .spacer { flex: 1; }
 
 /* ── Table ── */
+/* 只設 overflow-x,但依 CSS Overflow 規範另一軸沒設為 visible 時會被算成
+   auto——實際是雙軸捲動容器,子節點若用 absolute 定位會被這層裁掉
+   (踩過的案例見 .more-menu)。不可拿掉 overflow-x:auto,寬表格需要它捲動。 */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
 table.data th, table.data td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
@@ -153,6 +161,9 @@ table.data td.actions { text-align: right; }
 .form-row { display: flex; gap: var(--space-4); flex-wrap: wrap; }
 .form-row > .form-group { flex: 1; min-width: 160px; }
 .form-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
+/* 開工報告表卡片底部的按鈕列(kickoff-report.js):右對齊 + 頂部分隔線,
+   跟卡片其餘內容區隔開。彈窗情境下 openFlow 會把「關閉」插進這一列最前面。 */
+.ko-actions { justify-content: flex-end; border-top: 1px solid var(--border); padding-top: var(--space-4); }
 select.form-control { appearance: auto; }
 textarea.form-control { min-height: 160px; resize: vertical; font-family: inherit; }
 .hint { font-size: var(--fs-sm); color: var(--text-muted); margin-top: var(--space-2); }
@@ -198,3 +209,58 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 .toast.success { background: var(--success); }
 .toast.warn { background: var(--warning); }
 .toast.error { background: var(--danger); }
+
+/* ── 流程進度 stepper(workflow-status.js)── */
+/* 5 個固定關卡,用 border-top 當連接線比另外疊一層 div 簡單:每個 .wf-step
+   的 ::before 從自己中線往左延伸到上一個節點中線。overflow-x:auto 讓窄螢幕
+   能捲動,但這裡沒有子節點需要逃出這層容器(不像 .more-menu 用 position:fixed
+   搬去 body 才躲得掉裁切),故不會重演那個坑。顏色一律走 CSS 變數,深色模式
+   會自動跟著 --surface/--border-strong/--text-muted 等變數切換,不必另寫
+   [data-theme="dark"] 覆寫。 */
+.wf-steps { display: flex; overflow-x: auto; padding: var(--space-2) 0; }
+.wf-step { flex: 1; min-width: 96px; text-align: center; position: relative; }
+.wf-step::before { content: ''; position: absolute; top: 13px; left: -50%; width: 100%; height: 2px;
+  background: var(--border); z-index: 0; }
+.wf-step:first-child::before { display: none; }
+.wf-step.line-done::before { background: var(--success); }
+.wf-node { position: relative; z-index: 1; width: 26px; height: 26px; line-height: 22px; margin: 0 auto;
+  border-radius: 50%; font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+  background: var(--surface); border: 2px solid var(--border-strong); color: var(--text-muted); }
+.wf-step.done .wf-node { background: var(--success); border-color: var(--success); color: #fff; }
+.wf-step.current .wf-node { background: var(--primary); border-color: var(--primary); color: #fff; }
+.wf-label { margin-top: 6px; font-size: var(--fs-sm); color: var(--text-muted); white-space: normal; }
+.wf-step.current .wf-label { color: var(--text); font-weight: var(--fw-medium); }
+
+/* 工程詳細頁的頁籤。色彩全走變數:深色模式下寫死淺色底會讓 var(--text)
+   翻白而隱形(CLAUDE.md §2)。 */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: var(--space-4); }
+.tab { padding: 9px 16px; font-size: var(--fs-base); color: var(--text-muted); background: none;
+  border: none; border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: var(--fw-semibold); }
+/* 有未看過的同步改動時的小圓點(見 kickoff-report.js 的 koSyncNote) */
+.tab .dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%;
+  background: var(--primary); vertical-align: middle; }
+
+/* 列表頁的流程按鈕。✓ 已完成、● 下一步、灰底 disabled = 前置未完成。 */
+.flow-btns { display: flex; gap: 4px; align-items: center; }
+.flow-btns .btn { padding: 4px 9px; font-size: var(--fs-sm); }
+.flow-btns .btn.done { color: var(--success); border-color: var(--success); }
+.flow-btns .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 「更多」下拉。.table-wrap 是雙軸捲動容器(見下方 .table-wrap 註解),
+   absolute 定位的選單會被它裁掉,故 position 改由 JS 動態設 fixed 並依按鈕
+   座標計算(見 projects.js 的 openMoreMenu)——這裡不再寫 position/top/right。 */
+.more-wrap { position: relative; display: inline-block; }
+/* 預設隱藏:選單開啟時搬到 document.body 前,也會先以「未開啟」的狀態掛在
+   .more-wrap 底下(見 projects.js 的 menu 建立處)。inline style 容易在下次
+   重構時再被弄丟一次,故改用 CSS 當預設值較穩——開啟時 JS 另外設
+   display:block 蓋過。少了這條,列表一載入就是整頁的「歷史/詳細/刪除」
+   按鈕直接顯示,整頁破版。 */
+.more-menu { display: none; z-index: var(--z-modal);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); min-width: 96px; padding: 4px; }
+.more-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px;
+  background: none; border: none; color: var(--text); font-size: var(--fs-base);
+  cursor: pointer; border-radius: var(--radius-sm); }
+.more-menu button:hover { background: var(--bg); }
+.more-menu button.danger { color: var(--danger); }

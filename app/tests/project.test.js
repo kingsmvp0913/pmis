@@ -303,3 +303,83 @@ describe('GET /api/projects/:id/workflow-status', () => {
     await request(app).get('/api/projects/1/workflow-status').expect(401);
   });
 });
+
+describe('GET /api/projects 流程狀態欄位', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  // 列表頁的四顆流程按鈕靠這四個欄位決定 ✓／下一步／disabled。少了它們,
+  // 承辦人得逐個點開才知道哪個做過了——那正是這次改版要消滅的來回。
+  test('回傳附件種類、契約項目數與施工日誌天數', async () => {
+    const created = await createViaAward(app, token, { name: '狀態工程' });
+    const id = created.body.id;
+    await db.query(
+      `INSERT INTO project_attachments (project_id, kind, file_path)
+       VALUES ($1, 'kickoff_report', 'k.pdf')`, [id]
+    );
+    await db.query(
+      `INSERT INTO contract_items (project_id, seq, item_no, name, quantity, unit_price)
+       VALUES ($1, 1, '1', '項目A', 10, 100), ($1, 2, '2', '項目B', 5, 200)`, [id]
+    );
+    const res = await request(app).get('/api/projects')
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    const row = res.body.find((r) => r.id === id);
+    expect(row.has_kickoff).toBe(true);
+    expect(row.has_budget).toBe(false);
+    expect(row.contract_items).toBe(2);
+    expect(row.log_days).toBe(0);
+  });
+
+  // pg-mem 不支援 COUNT(DISTINCT …) 且會**靜默算錯**(見 project-routes.js 的
+  // /workflow-status 路由 logDays 子查詢處註解),
+  // 故這條必須釘住:同一天的多個項次只能算一天,否則列表會顯示「已寫 3 天」
+  // 而實際只有 2 天。
+  test('同一天多個項次只算一天', async () => {
+    const created = await createViaAward(app, token, { name: '日誌工程' });
+    const id = created.body.id;
+    await db.query(
+      `INSERT INTO daily_records (project_id, log_date, item_no, qty)
+       VALUES ($1, '2026-01-26', '1', 3), ($1, '2026-01-26', '2', 4),
+              ($1, '2026-01-27', '1', 5)`, [id]
+    );
+    const res = await request(app).get('/api/projects')
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.find((r) => r.id === id).log_days).toBe(2);
+  });
+
+  // 搜尋走的是另一條 SQL 分支。少補這一條的話,一搜尋標記就全部消失,
+  // 而承辦人最常用的正是搜尋。
+  test('搜尋模式同樣帶這四個欄位', async () => {
+    const created = await createViaAward(app, token, { name: '可搜尋工程' });
+    const id = created.body.id;
+    await db.query(
+      `INSERT INTO project_attachments (project_id, kind, file_path)
+       VALUES ($1, 'budget_sheet', 'b.xlsx')`, [id]
+    );
+    const res = await request(app).get('/api/projects?q=可搜尋')
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    const row = res.body.find((r) => r.id === id);
+    expect(row.has_budget).toBe(true);
+    expect(row.has_kickoff).toBe(false);
+    expect(row.contract_items).toBe(0);
+    expect(row.log_days).toBe(0);
+  });
+
+  // 什麼都沒有的工程要回 false/0,不是 null 或缺欄位——前端用 `row.contract_items > 0`
+  // 判定,undefined 會靜默變成 false 而看不出是「沒資料」還是「後端沒回」。
+  test('無附件無項目的工程回 false 與 0,欄位不得缺漏', async () => {
+    const created = await createViaAward(app, token, { name: '空工程' });
+    const row = (await request(app).get('/api/projects')
+      .set('Authorization', `Bearer ${token}`).expect(200))
+      .body.find((r) => r.id === created.body.id);
+    expect(row.has_kickoff).toBe(false);
+    expect(row.has_budget).toBe(false);
+    expect(row.contract_items).toBe(0);
+    expect(row.log_days).toBe(0);
+  });
+});

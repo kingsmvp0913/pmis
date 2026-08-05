@@ -28,16 +28,25 @@ const { ocrPdf } = require('./ocr');
 
 // 標籤候選。變體只有元長廁所一份使用(`契約約定工期`/`開工日期`/`契約總價`),
 // 納入是補完整性、不是提辨識率——別再為此反覆調整(見 memory kickoff-report-ocr-findings)。
+//
+// 臺中市格式(大勇)另有兩個用詞,兩個都以決標公告驗證過語意等價才收:
+//   `承包工程費` → 值 6,319,000,與決標公告的契約金額完全相符
+//   `工程期限`   → 值「115 年 8 月 15 日前完工」,與履約起迄的**迄**相符,故掛竣工日
+//                  而非契約工期(那格是日期不是天數,掛錯會讓非 null 的垃圾值
+//                  擋掉 durationSentenceFallback)
+// **`訂約日期` 刻意不收**:大勇表上訂約 114/12/18、決標公告的決標日 114/12/16,
+// 實測差 2 天。決標日在 kickoff-compare 是 hard 級,收它等於每份臺中市文件都多
+// 一個擋住歸檔的假硬錯。
 const LABELS = {
   工程名稱: ['工程名稱'],
   契約編號: ['契約編號'],
-  契約金額: ['契約金額', '契約總價'],
+  契約金額: ['契約金額', '契約總價', '承包工程費'],
   決標日期: ['決標日期'],
   契約工期: ['契約規定工期', '契約約定工期'],
   主辦機關: ['主辦機關'],
   工程地點: ['工程地點'],
   契約規定開工日: ['契約規定開工日', '開工日期'],
-  契約規定竣工日: ['契約規定竣工日', '竣工日期'],
+  契約規定竣工日: ['契約規定竣工日', '竣工日期', '工程期限'],
 };
 
 const ALL_LABELS = Object.values(LABELS).flat();
@@ -107,8 +116,12 @@ function isPlausibleValue(fieldKey, s) {
     case '契約金額':
       // 不能只看「有沒有連續數字」——契約編號(如「A1150608」)本身就有一長串
       // 數字。金額一定有「元」、千分位逗號分組,或國字大寫數字這三種標記之一。
+      // 千分位要容忍逗號兩側的空白:collapseCjkSpaces 刻意只清 CJK 之間的空格
+      // (數字間的空格必須留著,否則 '115 06 16' 會被黏成 '1150616' 讓日期錯位),
+      // 於是 OCR 讀到的金額長成「6 , 319 , 000」。不容忍的話 parseMoney 明明解得出
+      // 6319000,卻在這一關就被判成讀不到——大勇的契約金額正是這樣掉的。
       return !looksLikeRocDate(s)
-        && (/元/.test(s) || /\d{1,3}(,\d{3})+/.test(s)
+        && (/元/.test(s) || /\d{1,3}(\s*,\s*\d{3})+/.test(s)
           || /[零〇一壹二貳兩三叁參四肆五伍六陸七柒八捌九玖十拾百佰千仟萬万億]/.test(s));
     case '主辦機關':
       return SCHOOL_NAME_MARKERS.some((k) => s.includes(k));
@@ -172,6 +185,33 @@ function mergedBelow(c, all) {
   return null;
 }
 
+// 臺中市格式的標籤是一格一字、**水平**排開(大勇的「工程」x274 /「名」x550 /
+// 「稱」x687,值在 x822)。mergedBelow 只合併垂直相鄰,拼不出完整標籤。
+//
+// **不能靠間距切**:大勇的標籤字間距是 91/95px,而標籤到值只有 85px——值反而
+// 比標籤自己的字距更近,任何間距門檻都會先把值吞進來。改成逐格向右累積、
+// **湊出完整標籤即停**,且只認完全相等(逐字拼出來的東西用 startsWith 會把值
+// 一起收進標籤)。湊不出就不算命中,值因此永遠不會被當成標籤的一部分。
+const MAX_MERGE_CELLS = 6;
+function mergedRight(c, all, labels) {
+  const row = all
+    .filter((d) => d !== c && d.x >= c.right - 2 && vOverlap(c, d) > 0)
+    .sort((a, b) => a.x - b.x)
+    .slice(0, MAX_MERGE_CELLS);
+  let text = c.text;
+  let right = c.right;
+  let bottom = c.bottom;
+  for (const d of row) {
+    text += d.text;
+    right = Math.max(right, d.right);
+    bottom = Math.max(bottom, d.bottom);
+    if (labels.some((lb) => text === lb)) {
+      return { text, x: c.x, y: c.y, right, bottom, h: bottom - c.y, cx: (c.x + right) / 2 };
+    }
+  }
+  return null;
+}
+
 /**
  * 找某欄位的標籤格。標籤在格內只認「開頭」或「結尾」:元長把廠商名稱與標籤
  * 擠成一格「賜利發土木包工業契約約定工期」,標籤在結尾;台西則是
@@ -192,6 +232,12 @@ function findLabel(all, labels) {
   for (const c of all) {
     const m = mergedBelow(c, all);
     if (m && labels.some((lb) => m.text.startsWith(lb))) return { anchor: m, rest: null };
+  }
+  // 垂直合併也拼不出來,才試水平累積(臺中市格式)。排最後是為了讓既有樣本的
+  // 判定路徑完全不變——水平合併只在前兩條都落空時才有機會影響結果。
+  for (const c of all) {
+    const m = mergedRight(c, all, labels);
+    if (m) return { anchor: m, rest: null };
   }
   return null;
 }
@@ -326,11 +372,8 @@ function missingDateFamily(lines) {
  * 缺席 → 直接判定不是;否則命中任一已知標籤(行首),或退路句本身可解出日期,
  * 即視為開工報告表。
  *
- * **已知殘留缺口**:「大勇廁所開工報告及相關文件.pdf」第 1 頁整份 OCR 只剩一句
- * 退路句,沒有任何標籤命中——這與「敘述句 fallback 可命中開工日」的輸入完全同型,
- * 而退路句依規格必須單獨足以放行,故無法僅憑文字內容把兩者分開。目前仍會放行;
- * 因為沒有任何欄位標籤命中,除了開工日外其餘欄位會全部是 null,不會有「硬湊出
- * 一個看似正確實則錯誤的值」的風險,但仍是已知限制。
+ * (原記於此的「大勇廁所只剩一句退路句」缺口已於 2026-08-05 解決:根因是臺中市格式
+ * 的標籤被 OCR 拆成逐字水平散開,mergedRight 補上水平累積後標籤真的命中了。)
  */
 function looksLikeKickoffReport(page1Lines) {
   if (looksComplete(page1Lines) && missingDateFamily(page1Lines)) return false;

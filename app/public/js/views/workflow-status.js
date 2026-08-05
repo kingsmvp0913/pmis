@@ -27,13 +27,22 @@ const WorkflowStatus = (() => {
     ];
 
     // 第一個未完成的關卡就是「下一步」。前面沒完成的,後面按了也只會被後端擋下。
+    // 判定邏輯(steps 陣列、next 的算法)完全不動,只改下面的呈現方式。
     const next = steps.find((s) => !s.好);
+    // 圓形節點 + 連接線的 stepper。之前拿 .error-msg(錯誤語意)套在「當前步驟」
+    // 上,「工程基本資料」還沒填完時看起來像出錯——那不是錯誤,只是還沒到。
+    // 連接線顏色規則:第 i 個節點左側那段線,顏色看「前一個節點是否已完成」
+    // (steps[i-1].好),不是看自己——這樣「已完成 → 當前」那段線也會是完成色,
+    // 視覺上讀成「進度到這裡」,「當前之後」才轉灰,呼應一般 stepper 的語意。
     const cells = steps.map((s, i) => {
-      const 前置未完成 = steps.slice(0, i).some((x) => !x.好);
-      const mark = s.好 ? '✓' : (前置未完成 ? '·' : '○');
-      const cls = s.好 ? 'hint' : (s === next ? 'error-msg' : 'hint');
-      return el('span', { class: cls, style: 'margin-right:14px; white-space:nowrap' },
-        `${mark} ${s.名}`);
+      const isCurrent = s === next;
+      const state = s.好 ? 'done' : (isCurrent ? 'current' : 'todo');
+      const lineCls = i === 0 ? '' : (steps[i - 1].好 ? ' line-done' : ' line-todo');
+      const nodeText = s.好 ? '✓' : (isCurrent ? String(i + 1) : '');
+      return el('div', { class: 'wf-step ' + state + lineCls }, [
+        el('div', { class: 'wf-node' }, nodeText),
+        el('div', { class: 'wf-label' }, s.名),
+      ]);
     });
 
     const tip = next
@@ -43,7 +52,9 @@ const WorkflowStatus = (() => {
 
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-title' }, '流程進度'),
-      el('div', {}, cells),
+      // 窄螢幕水平捲動,但這裡沒有子節點會逃出容器邊界(不像 .more-menu 用
+      // position:fixed 搬去 body),不會重演「捲動容器裁切」那個坑。
+      el('div', { class: 'wf-steps' }, cells),
       tip,
     ]);
   }
