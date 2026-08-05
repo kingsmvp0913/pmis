@@ -93,6 +93,47 @@ function withComputed(row) {
   return { ...row, design_fee_actual: fee.design_fee_actual, design_fee_unbid: fee.unbid };
 }
 
+// 列表的流程狀態。**一律三次全表聚合後在 JS 合併,不得改成每列查一次**——
+// 100 個工程會變成 300 次查詢。
+//
+// 施工日誌天數刻意用子查詢而非 COUNT(DISTINCT log_date):測試用的 pg-mem
+// 不支援後者,而且是**靜默**算錯(同一天的多個項次被當成多天),
+// 與 workflow-status 路由(第 132 行)同一個理由。
+async function loadWorkflowFlags() {
+  const [atts, items, days] = await Promise.all([
+    query(`SELECT DISTINCT project_id, kind FROM project_attachments
+             WHERE kind IN ('kickoff_report', 'budget_sheet')`),
+    query('SELECT project_id, COUNT(*)::int AS n FROM contract_items GROUP BY project_id'),
+    query(`SELECT project_id, COUNT(*)::int AS n FROM
+             (SELECT DISTINCT project_id, log_date FROM daily_records) t
+             GROUP BY project_id`),
+  ]);
+  const flags = new Map();
+  const at = (id) => {
+    if (!flags.has(id)) {
+      flags.set(id, { has_kickoff: false, has_budget: false, contract_items: 0, log_days: 0 });
+    }
+    return flags.get(id);
+  };
+  for (const r of atts.rows) {
+    if (r.kind === 'kickoff_report') at(r.project_id).has_kickoff = true;
+    else at(r.project_id).has_budget = true;
+  }
+  for (const r of items.rows) at(r.project_id).contract_items = r.n;
+  for (const r of days.rows) at(r.project_id).log_days = r.n;
+  return flags;
+}
+
+// 聚合失敗不讓整個列表掛掉(沿用 workflow-status 的既有做法):該欄位退回
+// false/0,承辦人看到的是「未完成」,點進去仍會被後端正確把關。
+async function withWorkflowFlags(rows) {
+  let flags = new Map();
+  try { flags = await loadWorkflowFlags(); }
+  catch (err) { console.error('[projects] 讀取流程狀態失敗:', err); }
+  const empty = { has_kickoff: false, has_budget: false, contract_items: 0, log_days: 0 };
+  return rows.map((r) => ({ ...withComputed(r), ...(flags.get(r.id) || empty) }));
+}
+
 function registerRoutes(app) {
   app.get('/api/projects', verifyToken, async (req, res) => {
     try {
@@ -106,7 +147,7 @@ function registerRoutes(app) {
       } else {
         ({ rows } = await query('SELECT * FROM projects ORDER BY id DESC'));
       }
-      res.json(rows.map(withComputed));
+      res.json(await withWorkflowFlags(rows));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
