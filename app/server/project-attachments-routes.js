@@ -27,8 +27,29 @@ function isIdShape(id) {
   return /^[1-9][0-9]*$/.test(String(id)) && Number(id) <= INT4_MAX;
 }
 
-async function saveAttachment({ projectId, kind, buffer, originalName, userId }) {
+/**
+ * 落檔 + 寫 DB。
+ *
+ * @param {boolean} [replace] true 時先清掉同工程同 kind 的舊附件(DB 列 + 磁碟檔)。
+ *   開工報告表允許重傳修正版(OCR 讀錯、傳錯檔),累積多份的話下游得靠「id 最大
+ *   的才算數」這種隱含規則,承辦人在附件清單也分不出哪一份有效。
+ *   **只清同 kind**:決標公告是建案依據,不該被開工報告表流程動到。
+ */
+async function saveAttachment({ projectId, kind, buffer, originalName, userId, replace }) {
   if (!isIdShape(projectId)) throw new Error('projectId 不合法');
+  if (replace) {
+    const { rows: olds } = await query(
+      'SELECT id, file_path FROM project_attachments WHERE project_id = $1 AND kind = $2',
+      [projectId, kind]
+    );
+    for (const o of olds) {
+      // 先 unlink 再刪列,順序與 DELETE 路由一致:反過來的話 unlink 失敗就
+      // 再也找不到那個檔(孤兒)。
+      const abs = safeResolve(o.file_path);
+      if (abs) { try { fs.rmSync(abs, { force: true }); } catch { /* 檔案已不在也算成功 */ } }
+      await query('DELETE FROM project_attachments WHERE id = $1', [o.id]);
+    }
+  }
   const dir = path.join(UPLOAD_DIR, `proj_${projectId}`);
   fs.mkdirSync(dir, { recursive: true });
   // 時間戳前綴防碰撞;原檔名另存 original_name 欄,下載時才能還原。
