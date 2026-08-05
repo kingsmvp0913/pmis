@@ -127,19 +127,37 @@ function registerRoutes(app) {
       const hasAward = !!(req.file && req.file.buffer && req.file.buffer.length);
       const body = req.body || {};
 
+      // 建案入口只剩決標公告一條(2026-08-05 裁決)。沒有公告的工程到開工報告表
+      // 那關必然被擋(比對沒有基準),先建起來只是讓承辦人白填一次再重建。
+      if (!hasAward) {
+        return res.status(400).json({ error: '建立工程必須上傳決標公告' });
+      }
+
       // 一次列全,不在第一個問題就中斷——只報第一個會讓承辦人來回送好幾次。
-      const required = hasAward ? AWARD_REQUIRED : ['name'];
-      const fields = required.filter((k) => isBlank(body[k]));
+      const fields = AWARD_REQUIRED.filter((k) => isBlank(body[k]));
       if (fields.length) {
+        return res.status(400).json({ error: '以下欄位尚未填寫或尚未綁定', fields });
+      }
+
+      // 同一份決標公告傳兩次(忘記已建過、兩人同時處理)會產生兩個內容相同的
+      // 工程,之後的施工日誌與監造報表分岔到兩邊,而畫面上看不出它們是同一件事。
+      // 契約編號是決標公告上的唯一識別。
+      const projectNo = String(body.project_no).trim();
+      const { rows: dup } = await query(
+        'SELECT id, name, project_no FROM projects WHERE project_no = $1', [projectNo]
+      );
+      if (dup[0]) {
         return res.status(400).json({
-          error: hasAward ? '以下欄位尚未填寫或尚未綁定' : '工程名稱為必填',
-          fields,
+          error: `契約編號 ${projectNo} 已建立工程「${dup[0].name}」,請勿重複建立`,
+          existing: dup[0],
         });
       }
 
       // name 此時已通過必填檢查(非 blank),trim 前後空白後才寫入——
       // 舊版 JSON 路徑本就會 trim,拆成兩條路徑不能讓這行為悄悄漂走。
-      const data = normalize({ ...body, name: String(body.name).trim() });
+      const data = normalize({
+        ...body, name: String(body.name).trim(), project_no: projectNo,
+      });
       const cols = COLUMNS.join(', ');
       const params = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
       const { rows } = await query(
