@@ -266,6 +266,10 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 .flow-btns .btn { padding: 4px 9px; font-size: var(--fs-sm); }
 .flow-btns .btn.done { color: var(--success); border-color: var(--success); }
 .flow-btns .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 全部未完成關卡都被擋住時的提示連結(見 projects.js)。只吃文字色、不設
+   背景——deep/light 兩種主題都靠 var(--warning) 就夠對比,不必另外為背景配
+   一組深色覆寫。 */
+.flow-hint { color: var(--warning); font-size: var(--fs-sm); text-decoration: underline; white-space: nowrap; }
 /* 「更多」下拉。.table-wrap 是雙軸捲動容器(見下方 .table-wrap 註解),
    absolute 定位的選單會被它裁掉,故 position 改由 JS 動態設 fixed 並依按鈕
    座標計算(見 projects.js 的 openMoreMenu)——這裡不再寫 position/top/right。 */
