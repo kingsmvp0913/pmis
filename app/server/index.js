@@ -4,6 +4,7 @@ const { registerRoutes: registerAuthRoutes } = require('./auth');
 const { registerRoutes: registerVendorRoutes } = require('./vendor-routes');
 const { registerRoutes: registerSchoolRoutes } = require('./school-routes');
 const { registerRoutes: registerInsurerRoutes } = require('./insurer-routes');
+const { registerRoutes: registerFirmRoutes } = require('./firm-routes');
 const { registerRoutes: registerProjectRoutes } = require('./project-routes');
 const { registerRoutes: registerHistoryRoutes } = require('./history-routes');
 const { registerRoutes: registerSettingsRoutes } = require('./settings');
@@ -25,6 +26,7 @@ function createApp() {
   registerVendorRoutes(app);
   registerSchoolRoutes(app);
   registerInsurerRoutes(app);
+  registerFirmRoutes(app);
   registerProjectRoutes(app);
   registerHistoryRoutes(app);
   registerSettingsRoutes(app);
