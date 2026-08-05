@@ -719,11 +719,23 @@
         const panelRow = el('tr', { style: 'display:none' }, [panelCell]);
 
         const steps = flowSteps(p);
-        // 第一個未完成的關卡就是「下一步」;它之前若還有未完成的,後面按了
-        // 也只會被後端擋下,故 disabled 並在 title 說明缺什麼。
-        const next = steps.find((s) => !s.好);
-        const flowCell = el('div', { class: 'flow-btns' }, steps.map((s, i) => {
-          const 前置未完成 = steps.slice(0, i).some((x) => !x.好) || !!s.額外前置;
+        // next 不能只看「第一個未完成」:某些關卡除了前面關卡都好之外,還有
+        // 額外前置(例如日誌關卡的 !p.start_date,見 flowSteps 註解)。若只用
+        // `steps.find(s => !s.好)`,遇到「前面關卡都好、但這關被額外前置擋住」
+        // 的情況(如缺開工日期),會選到一個仍會被 disabled 的關卡當 next——
+        // 畫面上就會出現「●主色卻按不下去」的矛盾按鈕。故這裡先算出每關的
+        // 前置未完成,再從「未完成且未被擋」的關卡裡找 next;若全部未完成的
+        // 關卡都被擋住,next 會是 undefined,下面另外顯示提示,不讓承辦人卡住
+        // 不知道下一步是什麼。
+        let 前面關卡未完成 = false;
+        const stepsWithBlock = steps.map((s) => {
+          const 前置未完成 = 前面關卡未完成 || !!s.額外前置;
+          前面關卡未完成 = 前面關卡未完成 || !s.好;
+          return { s, 前置未完成 };
+        });
+        const nextEntry = stepsWithBlock.find((x) => !x.s.好 && !x.前置未完成);
+        const next = nextEntry ? nextEntry.s : null;
+        const flowCell = el('div', { class: 'flow-btns' }, stepsWithBlock.map(({ s, 前置未完成 }) => {
           const btn = el('button', {
             class: 'btn' + (s.好 ? ' btn-outline done' : (s === next ? ' btn-primary' : ' btn-outline')),
             type: 'button',
@@ -733,6 +745,18 @@
           if (前置未完成) btn.disabled = true;
           return btn;
         }));
+        // 全部未完成的關卡都被擋住時(如缺開工日期),四顆按鈕沒有一顆能點——
+        // 承辦人會不知道下一步要做什麼,而真正缺的東西(工程基本資料的欄位)
+        // 不在這四顆按鈕的任何一顆上,只能去工程詳細頁補。故另外給一個連結,
+        // 文案沿用擋住那關的「缺」文字,點了直接跳到基本資料頁籤。
+        if (!next && stepsWithBlock.some((x) => !x.s.好)) {
+          const blocked = stepsWithBlock.find((x) => !x.s.好);
+          flowCell.appendChild(el('a', {
+            class: 'flow-hint',
+            href: '#/projects/' + p.id + '/basics',
+            title: blocked.s.缺,
+          }, '⚠ ' + blocked.s.缺));
+        }
 
         // 歷史/詳細/刪除收進「⋮」:一列已經有四顆流程按鈕,七顆並排會擠爆。
         // menu 平時不掛在任何父節點上,只在 moreBtn 開啟時 appendChild 到
