@@ -31,11 +31,34 @@
     ]));
 
     let firms = { supervisor_firm: '', designer_firm: '' };
-    try { firms = await Api.get('settings/firms'); }
-    catch (e) { showToast(e.message, 'error'); }
+    let firmList = [];
+    try {
+      [firms, firmList] = await Promise.all([
+        Api.get('settings/firms'),
+        Api.get('firms'), // 事務所主檔清單,供下拉選項用
+      ]);
+    } catch (e) { showToast(e.message, 'error'); }
 
-    const supI = el('input', { class: 'form-control', type: 'text', value: firms.supervisor_firm || '' });
-    const desI = el('input', { class: 'form-control', type: 'text', value: firms.designer_firm || '' });
+    // 監造/設計單位只能下拉選,不能手打(避免同一家事務所出現兩種寫法)。
+    // 目前值不在清單裡(例如那家事務所被刪了)不可靜默清空——否則按「儲存」
+    // 會把承辦人原本設定的系統預設值洗成空字串,故保留成臨時選項並選起來。
+    function firmSelect(current) {
+      const sel = el('select', { class: 'form-control' }, [el('option', { value: '' }, '(未設定)')]);
+      firmList.forEach((f) => {
+        const opt = el('option', { value: f.name }, f.name);
+        if (f.name === current) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      if (current && !firmList.some((f) => f.name === current)) {
+        const opt = el('option', { value: current }, current + '(不在清單中)');
+        opt.selected = true;
+        sel.appendChild(opt);
+      }
+      return sel;
+    }
+
+    const supI = firmSelect(firms.supervisor_firm || '');
+    const desI = firmSelect(firms.designer_firm || '');
 
     async function saveFirms() {
       try {
@@ -53,6 +76,10 @@
       el('div', { class: 'form-group' }, [
         el('label', {}, '設計單位'), desI,
         el('div', { class: 'hint' }, '填工程基本資料時的預設值;個別工程若不同家,可在該工程頁覆寫。')
+      ]),
+      firmList.length ? null : el('div', { class: 'hint' }, [
+        '尚未建立任何事務所,請先',
+        el('a', { href: '#/firms/new' }, '前往新增')
       ]),
       el('div', { class: 'form-actions' }, [
         el('button', { class: 'btn btn-primary', onClick: saveFirms }, '儲存')
