@@ -530,6 +530,10 @@
         koBox,
       ]));
 
+      // 契約詳細價目表(SP2)。整塊流程獨立在 views/contract-items.js——
+      // 本檔已 46KB,再塞一段多檔上傳→挑表→差異確認→寫入只會讓兩邊都難改。
+      content.appendChild(ContractItems.card(id));
+
       const attBox = el('div', { class: 'table-wrap' });
       const attCard = el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '附件'),
@@ -537,7 +541,9 @@
       ]);
       content.appendChild(attCard);
 
-      const KIND_LABEL = { award_notice: '決標公告', kickoff_report: '開工報告表' };
+      const KIND_LABEL = {
+        award_notice: '決標公告', kickoff_report: '開工報告表', budget_sheet: '發包經費總表',
+      };
 
       async function loadAttachments() {
         attBox.innerHTML = '';
