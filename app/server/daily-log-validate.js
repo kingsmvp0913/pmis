@@ -147,6 +147,10 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 從 0 起算的話,B3 在每一批的第一天都必然誤判,承辦人送第二批就被擋死。
   const prevCum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
   const cumAmount = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.金額) || 0]));
+  // B3 容差要隨累加筆數放寬:數量是比例時,每日金額各自四捨五入成整數,逐日累加
+  // 後誤差會累積(玉森項次4:22003×2=44006,而 0.2×220027=44005.4,差 0.6)。
+  // 每一筆的捨入本來就最多差半元,固定半元容差在第二天就爆掉。
+  const amountTerms = new Map(Object.entries(prior).map(([k]) => [k, 1]));
   const prevUnit = new Map();
   const dailySum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
@@ -243,15 +247,22 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       }
 
       // B2 累計 = 前一日累計 + 本日完成
+      // 費用項目(貳~陸)的數量欄語意各家不一:金大填「完成比例」、玉森的累計欄
+      // 填的是本日值(天1 與天2 都是 0.012233,而同一天的施工項目正確累加)。
+      // 硬套會生出 238 個假硬錯,把施工項目真正的累計錯誤淹掉。
+      const 是費用項目 = !/^\d+$/.test(項次 || '');
       const 前一日 = prevCum.get(項次);
       if (累計量 != null && 本日量 != null && 前一日 != null
         && !approx(累計量, 前一日 + 本日量)) {
-        hard('B2', 日期, 項次,
-          `累計完成數量 ${累計量} 不等於前一日累計 ${前一日} 加本日完成 ${本日量}`);
+        const m = `累計完成數量 ${累計量} 不等於前一日累計 ${前一日} 加本日完成 ${本日量}`;
+        if (是費用項目) soft('B2', 日期, 項次, `${m}(費用項目的數量欄語意各家不一,僅供參考)`);
+        else hard('B2', 日期, 項次, m);
       }
       // F1 累計不得逐日變小:做過的量不會消失,變小代表某一天填錯了
       if (累計量 != null && 前一日 != null && lt(累計量, 前一日)) {
-        hard('F1', 日期, 項次, `累計完成數量從 ${前一日} 掉到 ${累計量}`);
+        const m = `累計完成數量從 ${前一日} 掉到 ${累計量}`;
+        if (是費用項目) soft('F1', 日期, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
+        else hard('F1', 日期, 項次, m);
       }
       if (累計量 != null) prevCum.set(項次, 累計量);
       // F4 用的:各日本日完成的總和,最後與期末累計對照
@@ -263,12 +274,14 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       if (!skippedCodes.has('B3') && 本日金額 != null) {
         const 累計金額 = (cumAmount.get(項次) || 0) + 本日金額;
         cumAmount.set(項次, 累計金額);
-        if (累計量 != null && 單價 != null && !approxAmount(累計金額, 累計量 * 單價)) {
+        const 筆數 = (amountTerms.get(項次) || 0) + 1;
+        amountTerms.set(項次, 筆數);
+        if (累計量 != null && 單價 != null
+          && Math.abs(累計金額 - 累計量 * 單價) >= 0.5 * 筆數) {
           // 費用項目(貳~陸)的「完成數量」是**完成比例**而非數量(金大實測:貳的
           // 本日完成數量 0.003、金額 45,而 0.003×15996≈48),金額由廠商按自己的
           // 計價基準算,與「數量×單價」本來就不相乘。判硬錯會生出 317 個假警報,
           // 把施工項目那 1 個真問題淹掉——但也不能不報,故降為軟警告。
-          const 是費用項目 = !/^\d+$/.test(項次 || '');
           const 訊息 = `累加的完成金額 ${累計金額} 與「累計數量 ${累計量} × 單價 ${單價}」不符`;
           if (是費用項目) {
             soft('B3', 日期, 項次, `${訊息}(費用項目的完成數量是比例,僅供參考)`);
@@ -363,7 +376,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   for (const [項次, 累計] of lastCum) {
     const 總和 = dailySum.get(項次);
     if (總和 != null && !approx(累計, 總和)) {
-      hard('F4', null, 項次, `期末累計 ${累計} 與各日本日完成的總和 ${總和} 不符`);
+      const m = `期末累計 ${累計} 與各日本日完成的總和 ${總和} 不符`;
+      if (!/^[0-9]+$/.test(項次)) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
+      else hard('F4', null, 項次, m);
     }
   }
 
