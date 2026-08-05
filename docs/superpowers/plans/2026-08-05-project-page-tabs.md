@@ -243,10 +243,13 @@ EOF
 在 `app/public/js/dialog.js` 的 `window.confirmDialog = confirmDialog;` 那一行**之後**插入：
 
 ```js
-// modalDialog({ title, content, wide }) → { close }
+// modalDialog({ title, content, wide, onClose }) → { close }
 // 裝任意 DOM 的彈窗。與 confirmDialog 的差別:那支是「一句話 + 是/否」,
 // 這支裡面有多個輸入框與多顆按鈕,故**刻意不做 Enter 送出**——那會誤觸。
 // 關閉時機由呼叫端自己決定(流程走完才關),所以回傳 close 而不是 Promise。
+// onClose 在任何關閉路徑(Escape、點 overlay、呼叫 close)都會觸發一次,
+// 讓以 Promise 包裝的呼叫端有機會 resolve——少了它,使用者按 Escape 放棄操作
+// 會讓那個 Promise 永遠擱置。
 function modalDialog(opts = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -268,9 +271,13 @@ function modalDialog(opts = {}) {
   modal.appendChild(body);
   overlay.appendChild(modal);
 
+  let closed = false;
   function close() {
+    if (closed) return;          // onClose 只跑一次:呼叫端可能已自行 close 過
+    closed = true;
     window.removeEventListener('keydown', onKey);
     overlay.remove();
+    if (opts.onClose) opts.onClose();
   }
   function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
 
@@ -309,12 +316,16 @@ window.modalDialog = modalDialog;
       const fileI = el('input', { class: 'form-control', type: 'file' });
       const errBox = el('div', { class: 'error-msg', style: 'display:none' });
 
+      // 關閉路徑有四條(送出、取消鈕、Escape、點 overlay)。一律由 modalDialog
+      // 的 onClose 收斂成一次 resolve,四條各自 resolve 會漏掉後兩條——
+      // 使用者按 Escape 放棄操作時,那個 Promise 會永遠擱置。
+      let result = null;
       function submit() {
         const period = periodI.value.trim();
         if (!/^\d{4}-\d{2}$/.test(period)) { errBox.textContent = '請選擇週期(年月)'; errBox.style.display = ''; return; }
         if (!fileI.files || !fileI.files[0]) { errBox.textContent = '請選擇施工日誌檔'; errBox.style.display = ''; return; }
+        result = { type: typeSel.value, period, file: fileI.files[0] };
         dlg.close();
-        resolve({ type: typeSel.value, period, file: fileI.files[0] });
       }
 
       const body = el('div', {}, [
@@ -323,16 +334,19 @@ window.modalDialog = modalDialog;
         el('div', { class: 'form-group' }, [el('label', {}, '週期'), periodI]),
         el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔'), fileI]),
         el('div', { class: 'modal-actions' }, [
-          el('button', { class: 'btn btn-outline', onClick: () => { dlg.close(); resolve(null); } }, '取消'),
+          el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '取消'),
           el('button', { class: 'btn btn-primary', onClick: submit }, '送出')
         ])
       ]);
-      const dlg = modalDialog({ title: '登錄繳交(上傳施工日誌)', content: body });
+      const dlg = modalDialog({
+        title: '登錄繳交(上傳施工日誌)', content: body,
+        onClose: () => resolve(result),
+      });
     });
   }
 ```
 
-**注意：** 原本 Escape／點 overlay 關閉時會 `resolve(null)`；改用 `modalDialog` 後那兩條路徑只會 `close()`，Promise 不會 resolve。這在此處無害——呼叫端 `generate()`（`projects.js:863`）只在拿到值時才繼續，未 resolve 等同使用者放棄操作，不會留下半完成狀態。**不要**為此在 `modalDialog` 加 `onClose` callback，那會讓介面為了單一呼叫端變複雜。
+**注意：** 四條關閉路徑（送出、取消鈕、Escape、點 overlay）全部收斂到 `onClose` 的單一 `resolve(result)`。`result` 預設 `null`，只有 `submit()` 通過驗證才會被賦值——所以放棄操作一律 resolve 成 `null`，呼叫端 `generate()`（`projects.js:863`）的 `if (!r) return;` 照常成立。
 
 - [ ] **Step 4: 手動驗證**
 
@@ -1279,5 +1293,4 @@ EOF
 
 **已知取捨（實作時不要當成 bug 修）：**
 
-- `submissionDialog` 改用 `modalDialog` 後，Escape／點 overlay 關閉不再 `resolve(null)`，Promise 就此擱置。呼叫端只在拿到值時繼續，無副作用。理由見 Task 2 Step 3。
 - 價目表與日誌的彈窗關閉一律重載列表（那兩個元件沒有完成 callback，且不在本次改動範圍）。多一次 API 呼叫換狀態一定正確。
