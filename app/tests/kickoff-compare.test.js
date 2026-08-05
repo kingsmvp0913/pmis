@@ -1,4 +1,4 @@
-const { compareKickoff, hardErrors } = require('../server/kickoff-compare');
+const { compareKickoff, hardErrors, validateValues } = require('../server/kickoff-compare');
 
 const AWARD = {
   工程名稱: '114年南陽國小北棟教室廁所整修工程',
@@ -21,6 +21,13 @@ const KICKOFF = {
   契約規定竣工日: '2026-08-14',
 };
 const find = (rows, 欄位) => rows.find((r) => r.欄位 === 欄位);
+
+// validateValues 收的是承辦人確認後的值(extractFields 形狀),回傳的欄位一律用
+// 比對表上的中文標籤,前端才標得到對應那一列(koResultCells 以標籤為鍵)。
+const VALUES = KICKOFF;
+// 不手排 Unicode 順序(本檔既有測試已因此踩過一次),兩邊都 sort 再比
+const REQUIRED_LABELS = ['工程名稱', '契約編號', '契約金額', '縣市', '契約工期', '契約規定開工日', '契約規定竣工日'].sort();
+const 欄位s = (errs) => errs.map((e) => e.欄位).sort();
 
 test('全部相符時無硬錯', () => {
   const rows = compareKickoff(KICKOFF, AWARD);
@@ -68,6 +75,22 @@ test('工作天不推導,狀態為 missing 不判硬錯', () => {
   const r = find(rows, '契約工期');
   expect(r.狀態).toBe('missing');
   expect(hardErrors(rows)).toEqual([]);
+});
+
+// 承辦人確認階段的天數來自畫面上的日曆天欄位(工期I),而前端對工作天案例
+// 刻意留空該欄並警示「請自行換算」——OCR 讀到的工作天數字不會流進去。
+// 故確認階段有值即代表已人工換算成日曆天,要照常驗算。維持「不推導」的話,
+// 這格恆為 missing,必填一上線工作天案例(明禮)就永遠歸不了檔。
+test('確認階段的工作天視為人工換算後的日曆天,照常驗算', () => {
+  const rows = compareKickoff(
+    { ...KICKOFF, 契約工期: { 天數: 150, 基準: '工作天' } }, AWARD, { confirmed: true });
+  expect(find(rows, '契約工期').狀態).toBe('match');
+});
+
+test('確認階段換算錯了仍判硬錯', () => {
+  const rows = compareKickoff(
+    { ...KICKOFF, 契約工期: { 天數: 140, 基準: '工作天' } }, AWARD, { confirmed: true });
+  expect(hardErrors(rows).map((r) => r.欄位)).toContain('契約工期');
 });
 
 // 古坑:整體平移 10 天,兩邊工期都是 180。判硬錯會逼承辦人去請廠商
@@ -131,6 +154,64 @@ test('元長國小真實案例:OCR 把連字號讀成「一」不影響工程名
     { ...AWARD, 工程名稱: '元長國小辦理「114-116年公立國民中小學老舊廁所整修工程計畫」' }
   );
   expect(find(rows, '工程名稱').狀態).toBe('match');
+});
+
+// ── 必填與值域(validateValues)──────────────────────────────
+// 為何另立一層:hardErrors 只認 'diff',missing 一律放行(那是「沒得比」,
+// 不是「填錯」),所以在這層之前,九欄全空也照樣歸檔成功,SP2 接到的會是
+// 一份空的工程基本資料。必填看的是「開工報告表值本身有沒有」,與比對狀態無關。
+
+test('七個必填欄位為空時一次列全', () => {
+  const errs = validateValues({});
+  expect(欄位s(errs)).toEqual(REQUIRED_LABELS);
+});
+
+// 署名欄校名 21/24(3 份被印章蓋掉尾字)、臺中市格式整份無決標日——
+// 這兩欄不是每份文件都有,列必填會讓合法文件永遠歸不了檔
+test('學校與決標日留空不擋', () => {
+  const errs = validateValues({ ...VALUES, 主辦機關: null, 決標日期: null });
+  expect(errs).toEqual([]);
+});
+
+test('必填齊全時無錯', () => {
+  expect(validateValues(VALUES)).toEqual([]);
+});
+
+// 前端金額欄是 <input type=number>,瀏覽器擋不住負號與小數,後端不驗就直接歸檔。
+// 決標金額在 DB 是整數元,小數點進來就與決標公告永遠比不相等。
+test.each([[0], [-1], [3122168.5]])('契約金額 %p 判硬錯', (金額) => {
+  const errs = validateValues({ ...VALUES, 契約金額: 金額 });
+  expect(欄位s(errs)).toEqual(['契約金額']);
+  expect(errs[0].級別).toBe('hard');
+});
+
+test.each([[0], [-30]])('契約工期 %p 判硬錯', (天數) => {
+  const errs = validateValues({ ...VALUES, 契約工期: { 天數, 基準: '日曆天' } });
+  expect(欄位s(errs)).toEqual(['契約工期']);
+});
+
+// 日期填反時 deriveDuration 回 null,契約工期只會顯示 missing(沒得比),
+// 承辦人看到的是「工期讀不到」而不是「日期填反了」——兩者要做的事不同。
+test('竣工日早於開工日判硬錯', () => {
+  const errs = validateValues({
+    ...VALUES, 契約規定開工日: '2026-08-14', 契約規定竣工日: '2026-03-18',
+  });
+  expect(欄位s(errs)).toEqual(['契約規定竣工日']);
+});
+
+// 前端 <input type=date> 送不出 2/30,但 confirm 收的是 JSON,繞得過去。
+// rocToISO 已擋掉民國字串的不存在日期,ISO 這條路徑同樣要擋。
+test('日曆上不存在的日期判硬錯', () => {
+  const errs = validateValues({ ...VALUES, 契約規定開工日: '2026-02-30' });
+  expect(欄位s(errs)).toEqual(['契約規定開工日']);
+});
+
+// 決標之後才會開工。反過來多半是承辦人把兩個日期填顛倒,但決標日本身可空、
+// 也有補辦決標的例外,判硬錯會擋住合法文件,故只提示。
+test('決標日晚於開工日只提示不擋', () => {
+  const errs = validateValues({ ...VALUES, 決標日期: '2026-03-19', 契約規定開工日: '2026-03-18' });
+  expect(欄位s(errs)).toEqual(['決標日']);
+  expect(errs[0].級別).toBe('hint');
 });
 
 // 逐條修正會讓承辦人來回發文好幾次
