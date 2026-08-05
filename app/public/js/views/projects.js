@@ -83,6 +83,58 @@
 
     content.appendChild(el('div', { class: 'page-title' }, isNew ? '新增工程' : '編輯工程'));
 
+    // 頁籤只用於既有工程。新增工程時只有決標公告 + 基本資料兩塊,分頁只是多一次點擊。
+    //
+    // **一次全建、切換只改 display**:開工報告表解析後會直接改寫「監造報表基本資料」
+    // 的工期/開工日,惰性建構會讓那些 DOM 還不存在時就被寫入;切回去若重建,
+    // 承辦人未儲存的編輯也會被清掉。全建等於「現狀 + 分堆隱藏」,既有引用完全不動。
+    const TABS = [
+      { key: 'basics', label: '基本資料' },
+      { key: 'kickoff', label: '開工報告表' },
+      { key: 'items', label: '契約價目表' },
+      { key: 'logs', label: '施工日誌' },
+      { key: 'files', label: '附件' },
+    ];
+    const panes = {};
+    const tabBtns = {};
+    let tabBar = null;
+
+    function showTab(key) {
+      const k = panes[key] ? key : TABS[0].key;
+      for (const t of TABS) {
+        panes[t.key].style.display = t.key === k ? '' : 'none';
+        tabBtns[t.key].className = 'tab' + (t.key === k ? ' active' : '');
+      }
+      // 看過就把小圓點收掉
+      const dot = tabBtns[k].querySelector('.dot');
+      if (dot) dot.remove();
+      // 網址同步,但**不觸發重建**:路由只讀第二段當 id,第三段在這裡自行解析。
+      const target = '/projects/' + id + '/' + k;
+      if (window.location.hash.replace(/^#/, '') !== target) {
+        history.replaceState(null, '', '#' + target);
+      }
+    }
+
+    // 在「基本資料」頁籤標籤上點一個小圓點(解析開工報告表改到了那頁的欄位時)
+    function markTab(key) {
+      const btn = tabBtns[key];
+      if (!btn || btn.classList.contains('active') || btn.querySelector('.dot')) return;
+      btn.appendChild(el('span', { class: 'dot' }));
+    }
+
+    if (!isNew) {
+      tabBar = el('div', { class: 'tabs' });
+      for (const t of TABS) {
+        panes[t.key] = el('div', { style: 'display:none' });
+        const btn = el('button', { class: 'tab', type: 'button', onClick: () => showTab(t.key) }, t.label);
+        tabBtns[t.key] = btn;
+        tabBar.appendChild(btn);
+      }
+    }
+
+    // 既有工程把區塊放進對應頁籤;新增工程維持直接往 content 疊。
+    const into = (key) => (isNew ? content : panes[key]);
+
     // 決標公告區塊只在新增模式出現:既有工程要重新裁決仍走原本的逐欄比對流程。
     // 沿用 vendors.js:172 的 if (!isNew) 分岔慣例。
     let awardFile = null;
@@ -224,7 +276,7 @@
         el('button', { class: 'btn btn-outline', onClick: () => { window.location.hash = '/projects'; } }, '取消')
       ])
     ]);
-    content.appendChild(card);
+    into('basics').appendChild(card);
 
     // 寫監造報表要開 Excel COM、可能重試失敗,比一般存檔重得多。
     // 故必須是獨立按鈕——否則改個保險到期日也會去開一次 Excel。
@@ -272,7 +324,7 @@
         } finally { writeBtn.disabled = false; }
       });
 
-      content.appendChild(el('div', { class: 'card' }, [
+      into('basics').appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '監造報表基本資料'),
         el('div', { class: 'hint', style: 'margin-top:0' },
           '契約工期與開工日期須對照開工報告表填寫,系統不會自動帶入。完工期限由範本公式算出。'),
@@ -289,16 +341,16 @@
       // 遲早漂成兩套行為。
       // 傳入既有的工期/開工日 input:歸檔仍以那兩格為準(工作天案例要承辦人
       // 自行換算日曆天),與抽出前完全相同。
-      content.appendChild(KickoffReport.card(id, {
+      into('kickoff').appendChild(KickoffReport.card(id, {
         durationInput: 工期I,
         startDateInput: 開工I,
         onArchived: () => loadAttachments(),
+        onSynced: () => markTab('basics'),
       }));
 
       // 流程狀態列:8 個區塊的順序就是承辦流程,但承辦人得捲到底才知道走到哪,
       // 而各區塊的前置條件又是按下去才知道。這一列先講清楚下一步該做什麼。
       const wfBox = el('div', {});
-      content.appendChild(wfBox);
       (async () => {
         try {
           const [st, atts] = await Promise.all([
@@ -312,17 +364,17 @@
 
       // 契約詳細價目表(SP2)。整塊流程獨立在 views/contract-items.js——
       // 本檔已 46KB,再塞一段多檔上傳→挑表→差異確認→寫入只會讓兩邊都難改。
-      content.appendChild(ContractItems.card(id));
+      into('items').appendChild(ContractItems.card(id));
 
       // 施工日誌(SP3)。同樣獨立成檔,理由見上。
-      content.appendChild(DailyLogs.card(id));
+      into('logs').appendChild(DailyLogs.card(id));
 
       const attBox = el('div', { class: 'table-wrap' });
       const attCard = el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '附件'),
         attBox,
       ]);
-      content.appendChild(attCard);
+      into('files').appendChild(attCard);
 
       const KIND_LABEL = {
         award_notice: '決標公告', kickoff_report: '開工報告表', budget_sheet: '發包經費總表', daily_log: '施工日誌',
@@ -365,6 +417,17 @@
         ]));
       }
       loadAttachments();
+
+      // content 上只有這三件事,順序即畫面由上而下。
+      // 流程進度列常駐在頁籤**上方**:它是唯一會講「下一步該做什麼」的區塊,
+      // 放進頁籤內容裡等於要承辦人先選對頁籤才看得到,本末倒置。
+      content.appendChild(wfBox);
+      content.appendChild(tabBar);
+      for (const t of TABS) content.appendChild(panes[t.key]);
+
+      // 網址第三段決定預設頁籤;沒有或不認得就回第一頁。
+      const wanted = (window.location.hash.replace(/^#/, '').split('/')[3] || '').trim();
+      showTab(wanted);
     }
 
     // 決標公告解析結果 → 表單。廠商/學校對不到時當場提供建立鈕,

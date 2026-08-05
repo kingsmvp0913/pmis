@@ -195,6 +195,7 @@ const KickoffReport = (() => {
         if (!owns && synced.length) {
           koSyncNote.textContent = '已同步更新「基本資料」頁籤的' + synced.join('、') + '。';
           koSyncNote.style.display = '';
+          if (opts.onSynced) opts.onSynced();
         }
         // 未歸檔決標公告的工程已由後端擋在 parse 之前(要求以決標公告重建工程),
         // 走到這裡必然有比對基準,不再有「僅預填、未比對」這種半套狀態。
