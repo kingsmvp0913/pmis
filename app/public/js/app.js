@@ -55,7 +55,7 @@ async function renderLogin() {
         });
         Api.setToken(res.token);
       }
-      window.location.hash = '/';
+      window.location.hash = '/projects'; // 首頁已移除,直接導向工程列表,省掉 '/' → fallback 的二次 hashchange
     } catch (e) {
       showErr(e.message);
     }

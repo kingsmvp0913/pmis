@@ -21,6 +21,15 @@
   // scroll 事件不冒泡,用 capture 監聽 document 才能連 .table-wrap 內部捲動也接到。
   // 捲動時選單位置沒跟著算會飄掉,直接關閉最簡單也不會有殘影。
   document.addEventListener('scroll', closeMoreMenu, true);
+  // 下拉選單基本慣例:Escape 也要能關閉(先前只有點畫面其他地方會關)。
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMoreMenu(); });
+  // 選單開啟時會 appendChild 到 document.body,脫離 app.js 的 renderShell()
+  // 用 root.innerHTML = '' 清空的範圍——換頁(#/projects → #/projects/3/basics)
+  // 若不主動清,選單會孤兒殘留在 body 上、position:fixed 浮在新頁面之上。
+  // 選在這裡監聽 hashchange(而非讓 app.js 的 route() 認識 projects.js 的
+  // closeMoreMenu)是因為:選單是 projects.js 私有的實作細節,由它自己
+  // 負責清理自己掛在 body 上的東西,app.js 不需要、也不該知道有這顆選單存在。
+  window.addEventListener('hashchange', closeMoreMenu);
 
   // ── 登錄繳交彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
   // 這裡**只登錄繳交**。產監造報表已於 2026-08-05 收斂到工程頁的施工日誌區塊,
