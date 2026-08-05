@@ -264,3 +264,42 @@ describe('POST /api/projects 決標公告路徑', () => {
 });
 
 afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ } });
+
+// 工程頁的流程狀態列要的兩個計數。專開端點而不是塞進 GET /projects/:id——
+// 那支是列表與編輯頁共用的,每次都多兩個 COUNT 只為了一列狀態並不划算。
+describe('GET /api/projects/:id/workflow-status', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  test('尚未建立契約表與施工日誌時皆為 0', async () => {
+    const created = await createViaAward(app, token, { name: '狀態測試' });
+    const res = await request(app).get(`/api/projects/${created.body.id}/workflow-status`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body).toEqual({ contractItems: 0, logDays: 0 });
+  });
+
+  // 同一天多個項次只算一天:狀態列要講的是「寫了幾天進度」,不是幾筆資料
+  test('契約項目數與施工日誌天數各自計數', async () => {
+    const created = await createViaAward(app, token, { name: '狀態測試2' });
+    const id = created.body.id;
+    await db.query(
+      `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+       VALUES ($1, 1, '1', 'A', '式', 1, 100), ($1, 2, '2', 'B', '式', 1, 200)`, [id]);
+    await db.query(
+      `INSERT INTO daily_records (project_id, log_date, item_no, qty)
+       VALUES ($1, '2026-04-08', '1', 1), ($1, '2026-04-08', '2', 2), ($1, '2026-04-09', '1', 3)`,
+      [id]);
+    const res = await request(app).get(`/api/projects/${id}/workflow-status`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body).toEqual({ contractItems: 2, logDays: 2 });
+  });
+
+  test('未帶 token 回 401', async () => {
+    await request(app).get('/api/projects/1/workflow-status').expect(401);
+  });
+});

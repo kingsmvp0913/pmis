@@ -49,8 +49,12 @@
       }
       bundledWrap.appendChild(el('div', { class: 'card', style: 'margin-bottom:16px' }, [
         el('div', { class: 'card-title' }, '內建讀取器'),
+        // 讀取器已改為**啟動時自動掃描安裝**(parser-onboarding.runStartupOnboarding),
+        // 這裡的按鈕只在「剛加了新讀取器但還沒重啟」時才需要用到。不講清楚的話,
+        // 承辦人會以為每次都得手動來按一次。
         el('div', { class: 'hint', style: 'margin-top:0' },
-          '系統內建的廠商讀取器,一鍵安裝即可使用(必要時自動建立同名廠商)。'),
+          '系統內建的廠商讀取器,伺服器啟動時會自動安裝,平常不需要手動操作。' +
+          '若剛放入新的讀取器且尚未重啟,可用下方按鈕立即安裝(必要時自動建立同名廠商)。'),
         list
       ]));
     }

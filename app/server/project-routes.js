@@ -122,6 +122,28 @@ function registerRoutes(app) {
     }
   });
 
+  // 工程頁流程狀態列要的兩個計數。專開一支輕量端點而不是塞進 GET /projects/:id:
+  // 那支是列表與編輯頁共用的,每次都多兩個 COUNT 只為了一列狀態並不划算。
+  app.get('/api/projects/:id/workflow-status', verifyToken, async (req, res) => {
+    try {
+      const { rows: items } = await query(
+        'SELECT COUNT(*)::int AS n FROM contract_items WHERE project_id = $1', [req.params.id]
+      );
+      // 用子查詢而非 COUNT(DISTINCT …):測試用的 pg-mem 不支援後者,會靜默把
+      // 每一筆都算進去(同一天的多個項次會被當成多天)。
+      const { rows: days } = await query(
+        `SELECT COUNT(*)::int AS n FROM
+           (SELECT DISTINCT log_date FROM daily_records WHERE project_id = $1) t`,
+        [req.params.id]
+      );
+      res.json({ contractItems: items[0].n, logDays: days[0].n });
+    } catch (err) {
+      // 狀態列失敗不該讓整個工程頁進不去,回 0 讓前端照常顯示「未完成」
+      console.error('[projects] 讀取流程狀態失敗:', err);
+      res.json({ contractItems: 0, logDays: 0 });
+    }
+  });
+
   app.post('/api/projects', verifyToken, upload.single('award_notice'), async (req, res) => {
     try {
       const hasAward = !!(req.file && req.file.buffer && req.file.buffer.length);

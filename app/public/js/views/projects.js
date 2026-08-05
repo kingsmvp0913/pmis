@@ -4,7 +4,10 @@
 
   const STATUS_LABEL = { submitted: '已繳', overdue: '未繳', pending: '未到期' };
 
-  // ── 產生監造報表彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
+  // ── 登錄繳交彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
+  // 這裡**只登錄繳交**。產監造報表已於 2026-08-05 收斂到工程頁的施工日誌區塊,
+  // 那條路徑會跑 39 條驗證再寫進常駐 .xlsm;兩顆按鈕並存時承辦人看不出差別,
+  // 按到舊的就產出一份沒驗證過的報表。
   function submissionDialog(defaultPeriod) {
     return new Promise((resolve) => {
       const overlay = el('div', { class: 'modal-overlay' });
@@ -27,7 +30,7 @@
       }
 
       const modal = el('div', { class: 'modal', role: 'dialog' }, [
-        el('div', { class: 'modal-title' }, '產生監造報表'),
+        el('div', { class: 'modal-title' }, '登錄繳交(上傳施工日誌)'),
         el('div', { class: 'modal-body' }, [
           errBox,
           el('div', { class: 'form-group' }, [el('label', {}, '類型'), typeSel]),
@@ -530,6 +533,21 @@
         koBox,
       ]));
 
+      // 流程狀態列:8 個區塊的順序就是承辦流程,但承辦人得捲到底才知道走到哪,
+      // 而各區塊的前置條件又是按下去才知道。這一列先講清楚下一步該做什麼。
+      const wfBox = el('div', {});
+      content.appendChild(wfBox);
+      (async () => {
+        try {
+          const [st, atts] = await Promise.all([
+            Api.get('projects/' + id + '/workflow-status'),
+            Api.get('projects/' + id + '/attachments'),
+          ]);
+          wfBox.innerHTML = '';
+          wfBox.appendChild(WorkflowStatus.bar(p, atts, st.contractItems, st.logDays));
+        } catch { /* 狀態列讀不到不該擋住整頁 */ }
+      })();
+
       // 契約詳細價目表(SP2)。整塊流程獨立在 views/contract-items.js——
       // 本檔已 46KB,再塞一段多檔上傳→挑表→差異確認→寫入只會讓兩邊都難改。
       content.appendChild(ContractItems.card(id));
@@ -792,7 +810,7 @@
       await renderHistory(p, cell);
     }
 
-    // 繳交狀態格 + 紀錄列 + 產生監造報表
+    // 繳交狀態格 + 紀錄列 + 登錄繳交
     async function renderHistory(p, cell) {
       let data;
       try { data = await Api.get('projects/' + p.id + '/history'); }
@@ -823,7 +841,7 @@
       const head = el('div', { class: 'history-head' }, [
         el('span', { class: 'history-title' }, '歷史檔案(結算日 ' + data.settlement_day + ' 日)'),
         el('span', { class: 'spacer', style: 'flex:1' }),
-        el('button', { class: 'btn btn-primary', onClick: () => generate(p, cell) }, '＋ 產生監造報表')
+        el('button', { class: 'btn btn-primary', onClick: () => generate(p, cell) }, '＋ 登錄繳交')
       ]);
 
       cell.innerHTML = '';
@@ -849,15 +867,10 @@
       fd.append('period', r.period);
       fd.append('daily_log', r.file);
       try {
-        const resp = await Api.upload('projects/' + p.id + '/submissions', fd);
-        if (resp && resp.report_generated) {
-          showToast('已產生監造報表', 'success');
-        } else if (resp && resp.reason) {
-          // 未產生報表:明確告知原因(如尚未安裝讀取器),避免以為成功卻沒東西。
-          showToast(resp.reason, 'warn');
-        } else {
-          showToast('已建立', 'success');
-        }
+        await Api.upload('projects/' + p.id + '/submissions', fd);
+        // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 39 條
+        // 驗證——訊息要講清楚去哪產,否則承辦人會以為按完這裡報表就有了。
+        showToast('已登錄繳交。要產監造報表請至工程頁的「施工日誌」區塊', 'success');
         await renderHistory(p, cell);
       } catch (e) { showToast(e.message, 'error'); }
     }

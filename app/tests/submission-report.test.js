@@ -75,100 +75,31 @@ describe('POST /submissions 串接監造報表產生', () => {
     registry.remove(VENDOR_KEY);
   });
 
-  test('有讀取器 → 產生報表:report_generated=true、實體檔存在、download 200', async () => {
-    // 裝 jinda 讀取器(meta.vendorKey = 金大營造有限公司)。
-    const inst = registry.install(fs.readFileSync(JINDA_SRC), VENDOR_KEY);
-    expect(inst.ok).toBe(true);
-
-    const projectId = await makeProjectWithVendor(VENDOR_KEY);
-
+  // 舊的「上傳施工日誌即自動產監造報表」已於 2026-08-05 退役:那條路線從零手刻
+  // xlsx、完全不跑 SP3 的 39 條驗證,與新路線並存時承辦人看不出兩顆按鈕的差別,
+  // 按錯就產出一份沒驗證過的報表。這裡改為釘住「只登錄繳交、不再產報表」。
+  test('上傳施工日誌只登錄繳交紀錄,不再自動產報表', async () => {
+    const projectId = await makeProjectWithVendor('金大營造有限公司');
     const res = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
-      .field('type', 'monthly')
-      .field('period', '2026-04')
+      .field('type', 'monthly').field('period', '2026-04')
       .attach('daily_log', FIXTURE);
-
     expect(res.status).toBe(201);
-    expect(res.body.report_generated).toBe(true);
-    expect(res.body.report_path).toBeTruthy();
-    // 實體檔存在。
-    const abs = path.join(DATA_DIR, res.body.report_path);
-    expect(fs.existsSync(abs)).toBe(true);
-    // DB 已回填 report_path。
-    expect(res.body.report_path).toMatch(/^output\/proj_/);
+    expect(res.body.id).toEqual(expect.any(Number));
+    expect(res.body.daily_log_path).toBeTruthy();
+    // 回應不得再帶產報表的欄位——留著會讓前端以為還有那條路徑
+    expect(res.body.report_generated).toBeUndefined();
+    expect(res.body.report_path).toBeFalsy();
+  });
 
-    // download report 回 200,且回的是 xlsx 檔(有內容)。
-    const dl = await auth(request(app).get(`/api/submissions/${res.body.id}/download/report`))
-      .buffer(true)
-      .parse((r, cb) => {
-        const chunks = [];
-        r.on('data', c => chunks.push(c));
-        r.on('end', () => cb(null, Buffer.concat(chunks)));
-      });
-    expect(dl.status).toBe(200);
-    expect(dl.body.length).toBeGreaterThan(0);
-  }, 30000);
-
-  test('選到沒資料的月份 → reason 列出檔案實際含有的月份(可操作提示)', async () => {
-    const inst = registry.install(fs.readFileSync(JINDA_SRC), VENDOR_KEY);
-    expect(inst.ok).toBe(true);
-    const projectId = await makeProjectWithVendor(VENDOR_KEY);
-
-    // jinda 施工日誌實際為 2026-04~07;故意選 2026-01(無資料)。
+  // 沒有讀取器也不該影響繳交登錄:報表已不在這條路徑上
+  test('廠商沒有讀取器時仍能登錄繳交', async () => {
+    const projectId = await makeProjectWithVendor('查無此廠商');
     const res = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
-      .field('type', 'monthly')
-      .field('period', '2026-01')
+      .field('type', 'monthly').field('period', '2026-04')
       .attach('daily_log', FIXTURE);
-
-    expect(res.status).toBe(201);            // 紀錄仍建立
-    expect(res.body.report_generated).toBe(false);
-    // 訊息要明確列出檔案內含月份,讓使用者知道改選哪個。
-    expect(res.body.reason).toContain('檔案內含月份');
-    expect(res.body.reason).toContain('2026-04');
-    expect(res.body.reason).not.toContain('未取得可對應');
-  }, 30000);
-
-  test('無讀取器 → 明確回報:report_generated=false + reason,紀錄仍建、download report 409', async () => {
-    const projectId = await makeProjectWithVendor('沒有讀取器的廠商');
-
-    const res = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
-      .field('type', 'monthly')
-      .field('period', '2026-04')
-      .attach('daily_log', FIXTURE);
-
-    expect(res.status).toBe(201);          // 紀錄仍建立
-    expect(res.body.id).toBeTruthy();
-    expect(res.body.report_generated).toBe(false);
-    expect(res.body.reason).toContain('尚未安裝讀取器');
-    expect(res.body.report_path == null).toBe(true);
-
-    // 紀錄確實在。
-    const hist = await auth(request(app).get(`/api/projects/${projectId}/history`));
-    expect(hist.body.records).toHaveLength(1);
-
-    // download report 回 409(尚未產生)。
-    const dl = await auth(request(app).get(`/api/submissions/${res.body.id}/download/report`));
-    expect(dl.status).toBe(409);
-  }, 30000);
-
-  test('解析失敗 → 紀錄仍保留、report_generated=false、不 500', async () => {
-    // 裝讀取器,但上傳非 PDF 內容 → 讀取器解析丟錯或無天數。
-    registry.install(fs.readFileSync(JINDA_SRC), VENDOR_KEY);
-    const projectId = await makeProjectWithVendor(VENDOR_KEY);
-
-    const res = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
-      .field('type', 'monthly')
-      .field('period', '2026-04')
-      .attach('daily_log', Buffer.from('this is not a pdf'), 'bad.txt');
-
     expect(res.status).toBe(201);
-    expect(res.body.id).toBeTruthy();
-    expect(res.body.report_generated).toBe(false);
-    expect(typeof res.body.reason).toBe('string');
-    expect(res.body.report_path == null).toBe(true);
-    // 紀錄仍在。
-    const hist = await auth(request(app).get(`/api/projects/${projectId}/history`));
-    expect(hist.body.records).toHaveLength(1);
-  }, 30000);
+    expect(res.body.report_generated).toBeUndefined();
+  });
 
   test('download report:kind=official_doc 維持 409(公文待範本)', async () => {
     registry.install(fs.readFileSync(JINDA_SRC), VENDOR_KEY);
