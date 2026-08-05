@@ -645,10 +645,17 @@
         title: `${title}—${p.name}`, content: body, wide: true,
         onClose: () => { if (changed || key !== 'kickoff') load(); },
       });
-      const close = el('div', { class: 'modal-actions' }, [
-        el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '關閉'),
-      ]);
-      body.appendChild(close);
+      const closeBtn = el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '關閉');
+      // KickoffReport.card 把「解析並比對」/「確認無誤並歸檔」放在卡片底部的
+      // .ko-actions 這個既有按鈕列,「關閉」插進同一列最前面即可三顆並排收在
+      // 底部;ContractItems.card/DailyLogs.card 沒有這個 class,找不到就沿用
+      // 原本「另外附加一列在最後」的做法,不去改那兩個元件。
+      const actionsRow = body.querySelector && body.querySelector('.ko-actions');
+      if (actionsRow) {
+        actionsRow.insertBefore(closeBtn, actionsRow.firstChild);
+      } else {
+        body.appendChild(el('div', { class: 'modal-actions' }, [closeBtn]));
+      }
     }
 
     async function load() {

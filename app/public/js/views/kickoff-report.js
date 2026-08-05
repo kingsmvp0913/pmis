@@ -48,7 +48,9 @@ const KickoffReport = (() => {
       || el('input', { class: 'form-control', type: 'date' });
 
     const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
-    const koParseBtn = el('button', { class: 'btn', type: 'button' }, '解析並比對');
+    // 原本是裸 .btn(沒有色彩修飾類別,吃瀏覽器原生按鈕樣式,這是「解析按鈕很醜」的
+    // 根因)。移到底部按鈕列與其他按鈕並排後改用既有的 .btn-outline,不新增顏色。
+    const koParseBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '解析並比對');
     const koConfirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' }, '確認無誤並歸檔');
     const koErr = el('div', { class: 'error-msg', style: 'display:none' });
     // 工作天案例的專屬警示:與 koErr 分開,因為 koErr 是「這次操作失敗」,
@@ -287,17 +289,21 @@ const KickoffReport = (() => {
       el('div', { class: 'form-group' }, [el('label', {}, '開工日期'), 開工I]),
     ]) : null;
 
+    // 按鈕列收在卡片最下面(.ko-actions,CSS 設右對齊 + 分隔線)。彈窗情境下
+    // openFlow 會把「關閉」插進這個既有的按鈕列最前面,湊成「關閉/解析並比對/
+    // 確認無誤並歸檔」三顆並排;詳細頁(非彈窗)沒有「關閉」,這裡兩顆一樣落在
+    // 卡片底部,不會退化。
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-title' }, '開工報告表'),
       koHint,
       el('div', { class: 'form-group' }, [el('label', {}, '開工報告表 PDF'), koFileI]),
-      el('div', { class: 'form-actions' }, [koParseBtn, koConfirmBtn]),
+      koBox,
+      ownFields,
       koErr,
       koDurationWarn,
       koSyncNote,
       koWarn,
-      koBox,
-      ownFields,
+      el('div', { class: 'form-actions ko-actions' }, [koParseBtn, koConfirmBtn]),
     ]);
   }
 
