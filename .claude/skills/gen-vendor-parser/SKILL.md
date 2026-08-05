@@ -79,6 +79,9 @@ module.exports = {
 
 ## 每家要「參數化/客製」的四點
 1. **單位字典**:各家單位集合不同(式/面/M/M2/M3/組/間/處/式…)。列邊界切「工程項目 vs 數字欄」時靠它;每家獨立一份 `KNOWN_UNITS`。
+   **單位一律走白名單,禁用樣式判定。** 曾經建議過 `/^[A-Z]+\d*$/`(大寫拉丁+可選數字)來涵蓋 M/M2/M3——這條規則害金大讀取器把
+   `7 整地,新設 RC 基礎板 M 1,049 124.0` 的 **RC** 當成單位:名稱被截成「整地,新設」、單位變 RC、真正的 `M 1,049 124.0` 全部錯位成 null。
+   凡是項目名稱含 RC/PVC/PC/SUS 這類工程縮寫的列都會中,而且**沒有任何錯誤訊息**。要 M/M2/M3 就把它們列進字典,不要用樣式猜。
 2. **列邊界 / 欄序規則**:
    - PDF/逐列型(金大):以「行首 token 是否為**項次 id**(中文大寫壹貳參… 或 1–2 位阿拉伯整數)」為列界;續行(名稱片段/單位/數字/`-`)併入當前列;再以「第一個單位 token」切「名稱 | 數字欄」。
    - Excel 座標型(摯東:一天一 sheet;承昇:固定欄):直接依固定 row/col 座標取值。
@@ -91,7 +94,21 @@ module.exports = {
 2. **對應**:把統一 schema 每個欄位對到來源具體位置;該家沒有的欄位輸出 null。
 3. **產生 reader**:寫 `<key>.pmisparser.js`(沿用分層;檔型工具經 `ctx.filetypes` 注入取用,**不 require 檔型檔**;版面規則本地化;含 `parsePage`/`parseGrid` 純函式)。
 4. **fixture 測試**:複製樣本檔到 `app/tests/fixtures/<key>.<ext>`;寫 `app/tests/parser-<key>.test.js`,呼叫 `parse`/`parseAll` 時傳入 `ctx`(`const ctx = { filetypes: require('../server/parsers/filetypes') }`),Excel 讀取器的 `selfTest(filetypes)` 也帶入同一份;**斷言來源的具體已知值**(工程名稱、某日日期、某項次各欄數字、當日累計金額、「-」轉 null 的語意、天數)。**金額/數量解析錯時測試必須失敗(Rule 9)。**
-5. **驗證**:`cd app && npx jest` 全綠;`selfTest(ft)` 回 true;回報**對不到的欄位**(標紅,不靜默略過)。
+5. **驗證(三道關卡,全部要過才算完成)**:
+
+   a. `cd app && npx jest` 全綠;`selfTest(ft)` 回 true。
+
+   b. **解析完整性**:`node scripts/check-parser.js <vendorKey> <樣本檔>`。它會解析**整份**樣本,
+      統計「非大類列中,單位/契約數量/契約單價任一為 null」的比例。**不是 0 就不得交付**——
+      要逐列列出並說明每一列為何抽不到(原文件真的沒有 vs 讀取器讀錯)。
+      為什麼需要這關:`selfTest` 的內建小樣本是**產生者自己挑的**,自然會挑解得出來的那幾列;
+      fixture 測試又只斷言「某幾個項次」。金大 17 列裡有 2 列全錯,卻沒有任何測試會紅。
+
+   c. **跨層驗證**:同一支 `check-parser.js` 會把解析結果餵進 SP3 的 `validateDailyLog`(39 條規則)。
+      **硬錯數 > 0 就要逐條確認是「廠商真的填錯」還是「讀取器讀錯」**,後者一律回頭修讀取器。
+      金大當初若跑過這關,A7:160、J2:160、B3:318 在交付當下就會現形。
+
+   三關都過之後,才回報**確實對不到的欄位**(標紅,不靜默略過)。
 6. **交付**:讀取器進 repo `parsers/vendors/samples/`,`meta.vendorKey` = **廠商正式名稱**(中文)。安裝方式二擇一:①廠商詳細頁「安裝讀取檔」單家上傳(vendorKey 須等於該廠商名稱);②`POST /api/parsers/bulk` 多檔批次上傳,registry 依 `meta.vendorKey` 名稱自動歸位到同名廠商(對不到者標 unmatched)。兩者安裝時都會自動跑 selfTest 驗證。
 
 ## 護欄(硬規則)
