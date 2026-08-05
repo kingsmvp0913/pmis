@@ -103,6 +103,15 @@ async function migrate() {
       name       TEXT NOT NULL
     )`,
 
+    // 事務所主檔:監造/設計單位共用同一份清單——實務上都是建築師事務所,
+    // 常常同一家。projects.supervisor_firm / designer_firm 仍存名稱字串(不是 FK),
+    // 因為「寫入監造報表」要把名稱寫進 Excel 儲存格,這裡只是提供下拉選項與去重。
+    `CREATE TABLE IF NOT EXISTS firms (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS projects (
       id                       SERIAL PRIMARY KEY,
       project_no               TEXT,
@@ -223,6 +232,23 @@ async function migrate() {
     } catch (err) {
       if (err.code !== '42701') throw err; // 42701 = duplicate_column
     }
+  }
+
+  // settings 表原本存的監造/設計單位「系統預設」是自由字串,新增 firms 主檔後
+  // 若不補進去,升級後下拉選單會找不到承辦人原本設定的那家事務所、工程層存的
+  // 名稱也對不上任何選項。用「name 是否已存在」判斷要不要插入,重跑不會重複。
+  const { rows: seedRows } = await query(
+    "SELECT value FROM settings WHERE key IN ('supervisor_firm', 'designer_firm')"
+  );
+  const { rows: firmRows } = await query('SELECT name FROM firms');
+  const firmNames = new Set(firmRows.map((r) => r.name));
+  const seedNames = new Set(
+    seedRows.map((r) => (r.value || '').trim()).filter((v) => v.length > 0)
+  );
+  for (const name of seedNames) {
+    if (firmNames.has(name)) continue;
+    await query('INSERT INTO firms (name) VALUES ($1)', [name]);
+    firmNames.add(name);
   }
 }
 

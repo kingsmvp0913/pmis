@@ -95,15 +95,16 @@
   async function renderEdit(content, id) {
     const isNew = id === 'new';
     let p = { design_fee_type: 'lump_sum' };
-    let vendors = [], schools = [], insurers = [], firms = {};
+    let vendors = [], schools = [], insurers = [], firms = {}, firmList = [];
     try {
       // 系統預設的監造/設計單位另外接 .catch:projects.supervisor_firm 在第一次成功
       // 寫報表前恆為 NULL,少了這份 fallback 每個工程第一次寫監造報表都會被後端
       // REQUIRED 擋下、逼承辦人手打;但「設定讀不到」不該嚴重到讓整頁進不去,
-      // 故取不到就退回 {},由下面的 || '' 收尾。
-      [vendors, schools, insurers, firms] = await Promise.all([
+      // 故取不到就退回 {},由下面的 || '' 收尾。firmList 同理接 .catch(() => [])。
+      [vendors, schools, insurers, firms, firmList] = await Promise.all([
         Api.get('vendors'), Api.get('schools'), Api.get('insurers'),
-        Api.get('settings/firms').catch(() => ({}))
+        Api.get('settings/firms').catch(() => ({})),
+        Api.get('firms').catch(() => [])
       ]);
       if (!isNew) p = await Api.get('projects/' + id);
     } catch (e) { showToast(e.message, 'error'); window.location.hash = '/projects'; return; }
@@ -312,9 +313,26 @@
       // 「開工日」不再自建:原本這裡與「工程基本資料」的 startI 是兩個外觀相同、
       // 值卻可能不同步的欄位(開工報告表解析只同步到這格,startI 依然是空的,
       // 承辦人按「儲存」時 start_date 照樣送 null)。合併後一律用 startI。
-      // 工程層的值優先,沒有才吊系統預設(沿用已刪的 project-basics.js 既有行為)
-      const supI = el('input', { class: 'form-control', type: 'text', value: p.supervisor_firm || firms.supervisor_firm || '' });
-      const desI = el('input', { class: 'form-control', type: 'text', value: p.designer_firm || firms.designer_firm || '' });
+      // 監造/設計單位只能下拉選,不能手打(避免同一家事務所出現兩種寫法)。
+      // 工程層的值優先,沒有才吊系統預設(沿用已刪的 project-basics.js 既有行為)。
+      // 目前值不在清單裡(事務所被刪了,或資料較舊)不可靜默清空——那會在
+      // 「寫入監造報表」時把 Excel 的欄位一起清掉,故保留成臨時選項並選起來。
+      function firmSelect(current) {
+        const sel = el('select', { class: 'form-control' }, [el('option', { value: '' }, '(未選)')]);
+        firmList.forEach((f) => {
+          const opt = el('option', { value: f.name }, f.name);
+          if (f.name === current) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        if (current && !firmList.some((f) => f.name === current)) {
+          const opt = el('option', { value: current }, current + '(不在清單中)');
+          opt.selected = true;
+          sel.appendChild(opt);
+        }
+        return sel;
+      }
+      const supI = firmSelect(p.supervisor_firm || firms.supervisor_firm || '');
+      const desI = firmSelect(p.designer_firm || firms.designer_firm || '');
       const basicsErr = el('div', { class: 'error-msg', style: 'display:none' });
       const writeBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '寫入監造報表');
 
@@ -357,6 +375,11 @@
         el('div', { class: 'hint', style: 'margin-top:0' },
           '契約工期須對照開工報告表填寫,系統不會自動帶入;開工日與「工程基本資料」' +
           '的「開工日」是同一欄。完工期限由範本公式算出。'),
+        // 清單是空的(還沒建過任何事務所)不能讓承辦人卡死在這裡——給明確提示與去新增的動線。
+        firmList.length ? null : el('div', { class: 'hint' }, [
+          '尚未建立任何事務所,監造/設計單位請先',
+          el('a', { href: '#/firms/new' }, '前往新增')
+        ]),
         el('div', { class: 'form-group' }, [el('label', {}, '監造單位'), supI]),
         el('div', { class: 'form-group' }, [el('label', {}, '設計單位'), desI]),
         el('div', { class: 'form-group' }, [el('label', {}, '契約工期(日曆天)'), 工期I]),
