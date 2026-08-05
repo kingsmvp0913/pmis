@@ -204,9 +204,9 @@
     const nameI = el('input', { class: 'form-control', type: 'text', value: p.name || '' });
     const vendorI = selectFrom(vendors, p.vendor_id, '(未選廠商)');
     const schoolI = selectFrom(schools, p.school_id, '(未選學校)');
-    const startI = el('input', { class: 'form-control', type: 'date', value: p.start_date ? String(p.start_date).slice(0, 10) : '' });
-    const contractI = el('input', { class: 'form-control', type: 'date', value: p.contract_completion_date ? String(p.contract_completion_date).slice(0, 10) : '' });
-    const actualI = el('input', { class: 'form-control', type: 'date', value: p.actual_completion_date ? String(p.actual_completion_date).slice(0, 10) : '' });
+    const startI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.start_date) });
+    const contractI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.contract_completion_date) });
+    const actualI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.actual_completion_date) });
     const awardI = el('input', { class: 'form-control', type: 'number', step: '1', value: p.award_amount != null ? p.award_amount : '' });
 
     // 保險公司 → 險種連動
@@ -228,8 +228,8 @@
     insurerI.addEventListener('change', () => loadTypes(insurerI.value, null));
     if (p.insurer_id) loadTypes(p.insurer_id, p.insurance_type_id);
 
-    const insStartI = el('input', { class: 'form-control', type: 'date', value: p.insurance_start ? String(p.insurance_start).slice(0, 10) : '' });
-    const insEndI = el('input', { class: 'form-control', type: 'date', value: p.insurance_end ? String(p.insurance_end).slice(0, 10) : '' });
+    const insStartI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.insurance_start) });
+    const insEndI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.insurance_end) });
 
     // 設計費:類型切換顯示金額 / %
     const feeTypeI = el('select', { class: 'form-control' }, [
@@ -361,7 +361,7 @@
           // 承辦人接著按「儲存」時 PUT 會用陳舊值覆蓋回去,靜默抹掉剛算出的完工期限——
           // 所以寫入成功後必須把畫面同步到 DB 現況。開工日不必再同步:開工日期欄位
           // 已合併成 startI 本身,值本來就是同一格,沒有「另一格」需要跟著更新。
-          if (r.完工期限) contractI.value = String(r.完工期限).slice(0, 10);
+          if (r.完工期限) contractI.value = PmisApp.toDateInputValue(r.完工期限);
           showToast(`已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
         } catch (e) {
           const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
@@ -458,7 +458,7 @@
           return el('tr', {}, [
             el('td', {}, KIND_LABEL[a.kind] || a.kind),
             el('td', {}, a.original_name || ''),
-            el('td', {}, String(a.uploaded_at || '').slice(0, 10)),
+            el('td', {}, PmisApp.toDateInputValue(a.uploaded_at)),
             el('td', {}, [dl, rm]),
           ]);
         });
