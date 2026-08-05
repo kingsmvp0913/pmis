@@ -142,6 +142,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .toolbar .spacer { flex: 1; }
 
 /* ── Table ── */
+/* 只設 overflow-x,但依 CSS Overflow 規範另一軸沒設為 visible 時會被算成
+   auto——實際是雙軸捲動容器,子節點若用 absolute 定位會被這層裁掉
+   (踩過的案例見 .more-menu)。不可拿掉 overflow-x:auto,寬表格需要它捲動。 */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
 table.data th, table.data td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
@@ -220,9 +223,11 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 .flow-btns .btn { padding: 4px 9px; font-size: var(--fs-sm); }
 .flow-btns .btn.done { color: var(--success); border-color: var(--success); }
 .flow-btns .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-/* 「更多」下拉。position:relative 掛在按鈕的容器上,選單絕對定位於其下。 */
+/* 「更多」下拉。.table-wrap 是雙軸捲動容器(見下方 .table-wrap 註解),
+   absolute 定位的選單會被它裁掉,故 position 改由 JS 動態設 fixed 並依按鈕
+   座標計算(見 projects.js 的 openMoreMenu)——這裡不再寫 position/top/right。 */
 .more-wrap { position: relative; display: inline-block; }
-.more-menu { position: absolute; right: 0; top: 100%; z-index: var(--z-modal);
+.more-menu { z-index: var(--z-modal);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); min-width: 96px; padding: 4px; }
 .more-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px;

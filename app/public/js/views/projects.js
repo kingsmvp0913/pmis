@@ -4,6 +4,24 @@
 
   const STATUS_LABEL = { submitted: '已繳', overdue: '未繳', pending: '未到期' };
 
+  // ⋮ 下拉選單:目前開著的那顆(全域最多一顆)。.table-wrap 是 overflow-x:auto,
+  // 依 CSS Overflow 規範另一軸沒設就會被算成 auto,等於雙軸捲動容器,
+  // absolute 定位的選單包含塊被它裁掉(實測列表最後一列選單只剩 11px 可見)。
+  // 改用:開啟時把選單搬到 document.body、position:fixed 依按鈕的
+  // viewport 座標定位,跳出這層裁切邊界;關閉時直接從 DOM 移除(不留殘影,
+  // 也不用另外管 display)。
+  // 監聽器掛在 document 而非某個 view 節點上,故只能在 IIFE 頂層註冊一次
+  // (整支檔案只執行一次)——若放進 renderList,每次進出 #/projects 都會
+  // 多掛一個,越滾越多。
+  let openMoreMenu = null;
+  function closeMoreMenu() {
+    if (openMoreMenu) { openMoreMenu.remove(); openMoreMenu = null; }
+  }
+  document.addEventListener('click', closeMoreMenu);
+  // scroll 事件不冒泡,用 capture 監聽 document 才能連 .table-wrap 內部捲動也接到。
+  // 捲動時選單位置沒跟著算會飄掉,直接關閉最簡單也不會有殘影。
+  document.addEventListener('scroll', closeMoreMenu, true);
+
   // ── 登錄繳交彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
   // 這裡**只登錄繳交**。產監造報表已於 2026-08-05 收斂到工程頁的施工日誌區塊,
   // 那條路徑會跑 39 條驗證再寫進常駐 .xlsm;兩顆按鈕並存時承辦人看不出差別,
@@ -601,7 +619,11 @@
       return [
         { key: 'kickoff', 名: '開工表', 好: !!p.has_kickoff, 缺: '需先建立工程(上傳決標公告)' },
         { key: 'items', 名: '價目表', 好: (p.contract_items || 0) > 0, 缺: '需先有決標金額,再上傳發包經費總表' },
-        { key: 'logs', 名: '日誌', 好: (p.log_days || 0) > 0, 缺: '需先建立契約詳細價目表與開工日期' },
+        // 日誌這一關的前置條件不只是「前面幾關都好」:後端 daily-log-routes.js
+        // 會擋沒有 start_date 的工程(NO_START)。has_kickoff 只代表有上傳附件,
+        // 不代表比對表裡的開工日已確認寫回 projects.start_date——兩者可能不同步,
+        // 故用 額外前置 另外檢查,不能只看前面關卡的 好。
+        { key: 'logs', 名: '日誌', 好: (p.log_days || 0) > 0, 額外前置: !p.start_date, 缺: '需先建立契約詳細價目表與開工日期' },
         { key: 'submit', 名: '繳交', 好: false, 缺: '需先寫入施工日誌' },
       ];
     }
@@ -652,7 +674,7 @@
         // 也只會被後端擋下,故 disabled 並在 title 說明缺什麼。
         const next = steps.find((s) => !s.好);
         const flowCell = el('div', { class: 'flow-btns' }, steps.map((s, i) => {
-          const 前置未完成 = steps.slice(0, i).some((x) => !x.好);
+          const 前置未完成 = steps.slice(0, i).some((x) => !x.好) || !!s.額外前置;
           const btn = el('button', {
             class: 'btn' + (s.好 ? ' btn-outline done' : (s === next ? ' btn-primary' : ' btn-outline')),
             type: 'button',
@@ -664,18 +686,26 @@
         }));
 
         // 歷史/詳細/刪除收進「⋮」:一列已經有四顆流程按鈕,七顆並排會擠爆。
-        const menu = el('div', { class: 'more-menu', style: 'display:none' }, [
-          el('button', { type: 'button', onClick: () => { menu.style.display = 'none'; toggleHistory(p, panelRow); } }, '歷史'),
-          el('button', { type: 'button', onClick: () => { window.location.hash = '/projects/' + p.id; } }, '詳細'),
-          el('button', { class: 'danger', type: 'button', onClick: () => { menu.style.display = 'none'; remove(p); } }, '刪除'),
+        // menu 平時不掛在任何父節點上,只在 moreBtn 開啟時 appendChild 到
+        // document.body(見檔案頂端 openMoreMenu 的說明);三個項目一律先
+        // closeMoreMenu() 再動作,避免「詳細」跳頁後選單還孤兒掛在 body 上。
+        const menu = el('div', { class: 'more-menu' }, [
+          el('button', { type: 'button', onClick: () => { closeMoreMenu(); toggleHistory(p, panelRow); } }, '歷史'),
+          el('button', { type: 'button', onClick: () => { closeMoreMenu(); window.location.hash = '/projects/' + p.id; } }, '詳細'),
+          el('button', { class: 'danger', type: 'button', onClick: () => { closeMoreMenu(); remove(p); } }, '刪除'),
         ]);
         const moreBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '⋮');
         moreBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const open = menu.style.display !== 'none';
-          // 先關掉別列已開的選單,否則會同時開好幾個
-          document.querySelectorAll('.more-menu').forEach((m) => { m.style.display = 'none'; });
-          menu.style.display = open ? 'none' : '';
+          e.stopPropagation(); // 擋掉冒泡到 document 的 closeMoreMenu,否則剛開就被自己關掉
+          const wasOpen = openMoreMenu === menu;
+          closeMoreMenu(); // 先關掉別列已開的選單,否則會同時開好幾個
+          if (wasOpen) return; // 這顆本來就開著 → 這次點擊是要收合,關掉就好
+          const r = moreBtn.getBoundingClientRect();
+          menu.style.position = 'fixed';
+          menu.style.top = (r.bottom + 4) + 'px';
+          menu.style.right = (window.innerWidth - r.right) + 'px';
+          document.body.appendChild(menu);
+          openMoreMenu = menu;
         });
 
         const tr = el('tr', {}, [
@@ -783,12 +813,6 @@
       try { await Api.delete('projects/' + p.id); showToast('已刪除', 'success'); load(); }
       catch (e) { showToast(e.message, 'error'); }
     }
-
-    // 點畫面任何其他地方就收起下拉。掛在 content 上而非 document:
-    // 這個 view 被換掉時節點一起消失,不會留下孤兒監聽器。
-    content.addEventListener('click', () => {
-      document.querySelectorAll('.more-menu').forEach((m) => { m.style.display = 'none'; });
-    });
 
     load();
   }

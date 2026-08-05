@@ -38,7 +38,10 @@ const KickoffReport = (() => {
 
     // 外部有給就用外部的(詳細頁),沒有就自建(彈窗)。自建的那組要顯示出來,
     // 外部的那組已經在別處顯示,這裡不能重複畫。
-    const owns = !opts.durationInput || !opts.startDateInput;
+    // 兩個都沒傳才算「自建」——只傳其中一個(目前呼叫方不會發生,但元件本身
+    // 不該預設呼叫方永遠成對傳)用 || 會誤判為自建,把另一個外部傳入的 input
+    // appendChild 進這裡的區塊,等於把它從原本的卡片搬走,原處欄位就消失了。
+    const owns = !opts.durationInput && !opts.startDateInput;
     const 工期I = opts.durationInput
       || el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
     const 開工I = opts.startDateInput
