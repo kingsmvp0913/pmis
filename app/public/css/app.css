@@ -214,3 +214,19 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 /* 有未看過的同步改動時的小圓點(見 kickoff-report.js 的 koSyncNote) */
 .tab .dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%;
   background: var(--primary); vertical-align: middle; }
+
+/* 列表頁的流程按鈕。✓ 已完成、● 下一步、灰底 disabled = 前置未完成。 */
+.flow-btns { display: flex; gap: 4px; align-items: center; }
+.flow-btns .btn { padding: 4px 9px; font-size: var(--fs-sm); }
+.flow-btns .btn.done { color: var(--success); border-color: var(--success); }
+.flow-btns .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 「更多」下拉。position:relative 掛在按鈕的容器上,選單絕對定位於其下。 */
+.more-wrap { position: relative; display: inline-block; }
+.more-menu { position: absolute; right: 0; top: 100%; z-index: var(--z-modal);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); min-width: 96px; padding: 4px; }
+.more-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px;
+  background: none; border: none; color: var(--text); font-size: var(--fs-base);
+  cursor: pointer; border-radius: var(--radius-sm); }
+.more-menu button:hover { background: var(--bg); }
+.more-menu button.danger { color: var(--danger); }

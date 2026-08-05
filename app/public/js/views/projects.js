@@ -584,7 +584,8 @@
           el('th', { style: 'width:110px' }, '編號'),
           el('th', {}, '名稱'),
           el('th', { style: 'width:140px' }, '設計費'),
-          el('th', { style: 'width:120px' }, '')
+          el('th', { style: 'width:300px' }, '流程'),
+          el('th', { style: 'width:50px' }, '')
         ])]),
         tbody
       ])
@@ -593,6 +594,38 @@
     let timer;
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
 
+    // 流程關卡。判定與 WorkflowStatus.bar 同一套語意(附件種類、契約項目數、
+    // 日誌天數),不重寫一份規則——真正的把關仍在各自的後端路由。
+    // 「前置未完成」的按鈕 disabled:按了也只會被後端擋下,不如先講清楚缺什麼。
+    function flowSteps(p) {
+      return [
+        { key: 'kickoff', 名: '開工表', 好: !!p.has_kickoff, 缺: '需先建立工程(上傳決標公告)' },
+        { key: 'items', 名: '價目表', 好: (p.contract_items || 0) > 0, 缺: '需先有決標金額,再上傳發包經費總表' },
+        { key: 'logs', 名: '日誌', 好: (p.log_days || 0) > 0, 缺: '需先建立契約詳細價目表與開工日期' },
+        { key: 'submit', 名: '繳交', 好: false, 缺: '需先寫入施工日誌' },
+      ];
+    }
+
+    // 開對應彈窗。四種都在彈窗內走完整流程,故一律 wide;完成後重載列表
+    // 讓狀態標記更新(純關閉不重載——什麼都沒做就不必打 API)。
+    function openFlow(p, key) {
+      if (key === 'submit') { generate(p, null); return; }
+      const title = { kickoff: '開工報告表', items: '契約詳細價目表', logs: '施工日誌' }[key];
+      let changed = false;
+      const done = () => { changed = true; };
+      const content = key === 'kickoff'
+        ? KickoffReport.card(p.id, { onArchived: done })
+        : (key === 'items' ? ContractItems.card(p.id) : DailyLogs.card(p.id));
+      const dlg = modalDialog({ title: `${title}—${p.name}`, content, wide: true });
+      const close = el('div', { class: 'modal-actions' }, [
+        el('button', {
+          class: 'btn btn-outline',
+          onClick: () => { dlg.close(); if (changed || key !== 'kickoff') load(); },
+        }, '關閉'),
+      ]);
+      content.appendChild(close);
+    }
+
     async function load() {
       const q = search.value.trim();
       let rows;
@@ -600,7 +633,7 @@
       catch (e) { showToast(e.message, 'error'); return; }
       tbody.innerHTML = '';
       if (!rows.length) {
-        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '4' }, '沒有資料')]));
+        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '5' }, '沒有資料')]));
         return;
       }
       for (const p of rows) {
@@ -608,17 +641,50 @@
         if (p.design_fee_unbid) feeText = '未招標,待補';
         else if (p.design_fee_actual != null) feeText = Number(p.design_fee_actual).toLocaleString() + ' 元';
         else feeText = '—';
-        const panelCell = el('td', { colspan: '4', style: 'padding:0' });
+        const panelCell = el('td', { colspan: '5', style: 'padding:0' });
         const panelRow = el('tr', { style: 'display:none' }, [panelCell]);
+
+        const steps = flowSteps(p);
+        // 第一個未完成的關卡就是「下一步」;它之前若還有未完成的,後面按了
+        // 也只會被後端擋下,故 disabled 並在 title 說明缺什麼。
+        const next = steps.find((s) => !s.好);
+        const flowCell = el('div', { class: 'flow-btns' }, steps.map((s, i) => {
+          const 前置未完成 = steps.slice(0, i).some((x) => !x.好);
+          const btn = el('button', {
+            class: 'btn' + (s.好 ? ' btn-outline done' : (s === next ? ' btn-primary' : ' btn-outline')),
+            type: 'button',
+            title: 前置未完成 ? s.缺 : '',
+            onClick: () => openFlow(p, s.key),
+          }, (s.好 ? '✓' : (s === next ? '●' : '')) + s.名);
+          if (前置未完成) btn.disabled = true;
+          return btn;
+        }));
+
+        // 歷史/詳細/刪除收進「⋮」:一列已經有四顆流程按鈕,七顆並排會擠爆。
+        const menu = el('div', { class: 'more-menu', style: 'display:none' }, [
+          el('button', { type: 'button', onClick: () => { menu.style.display = 'none'; toggleHistory(p, panelRow); } }, '歷史'),
+          el('button', { type: 'button', onClick: () => { window.location.hash = '/projects/' + p.id; } }, '詳細'),
+          el('button', { class: 'danger', type: 'button', onClick: () => { menu.style.display = 'none'; remove(p); } }, '刪除'),
+        ]);
+        const moreBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '⋮');
+        moreBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const open = menu.style.display !== 'none';
+          // 先關掉別列已開的選單,否則會同時開好幾個
+          document.querySelectorAll('.more-menu').forEach((m) => { m.style.display = 'none'; });
+          menu.style.display = open ? 'none' : '';
+        });
+
         const tr = el('tr', {}, [
           el('td', {}, p.project_no || '—'),
           el('td', {}, p.name),
           el('td', {}, feeText),
           el('td', { class: 'actions' }, [
-            el('button', { class: 'btn btn-outline', onClick: () => toggleHistory(p, panelRow) }, '歷史'),
-            el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => { window.location.hash = '/projects/' + p.id; } }, '編輯'),
-            el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => remove(p) }, '刪除')
-          ])
+            flowCell,
+          ]),
+          el('td', { class: 'actions' }, [
+            el('div', { class: 'more-wrap' }, [moreBtn, menu]),
+          ]),
         ]);
         tbody.appendChild(tr);
         tbody.appendChild(panelRow);
@@ -696,7 +762,8 @@
         // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 39 條
         // 驗證——訊息要講清楚去哪產,否則承辦人會以為按完這裡報表就有了。
         showToast('已登錄繳交。要產監造報表請至工程頁的「施工日誌」區塊', 'success');
-        await renderHistory(p, cell);
+        if (cell) await renderHistory(p, cell);
+        else load();
       } catch (e) { showToast(e.message, 'error'); }
     }
 
@@ -713,6 +780,12 @@
       try { await Api.delete('projects/' + p.id); showToast('已刪除', 'success'); load(); }
       catch (e) { showToast(e.message, 'error'); }
     }
+
+    // 點畫面任何其他地方就收起下拉。掛在 content 上而非 document:
+    // 這個 view 被換掉時節點一起消失,不會留下孤兒監聽器。
+    content.addEventListener('click', () => {
+      document.querySelectorAll('.more-menu').forEach((m) => { m.style.display = 'none'; });
+    });
 
     load();
   }
