@@ -113,7 +113,7 @@ function absentHeaderFields(days) {
  * @returns {{errors:Array, warnings:Array, skipped:Array}}
  *   errors/warnings 元素為 { code, 日期, 項次, 訊息 }
  */
-function validateDailyLog({ days = [], contract = [], project = {} } = {}) {
+function validateDailyLog({ days = [], contract = [], project = {}, prior = {} } = {}) {
   const errors = [];
   const warnings = [];
   const skipped = [];
@@ -139,10 +139,12 @@ function validateDailyLog({ days = [], contract = [], project = {} } = {}) {
   const skippedCodes = new Set(skipped.map((s) => s.code));
 
   // 逐項的跨日狀態:上一日累計數量、推導到目前為止的累計金額。
-  const prevCum = new Map();
-  const cumAmount = new Map();
+  // 前期累計當起點:施工日誌分批提交,第二批的累計值包含前面批次做過的量。
+  // 從 0 起算的話,B3 在每一批的第一天都必然誤判,承辦人送第二批就被擋死。
+  const prevCum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
+  const cumAmount = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.金額) || 0]));
   const prevUnit = new Map();
-  const dailySum = new Map();  // F4:各日本日完成的累加
+  const dailySum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
 

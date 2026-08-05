@@ -471,3 +471,40 @@ test('F1 浮點尾差不算回退', () => {
   ));
   expect(codes(r)).not.toContain('F1');
 });
+
+// ── 跨批次:前期累計要當成起點 ────────────────────────────────
+// 施工日誌分多批提交,而累計欄位是跨批累積的。第二批的「累計完成數量 5」包含
+// 第一批做的 3——驗證層若從 0 起算,B3(累加金額 vs 累計數量×單價)在每一批的
+// 第一天都必然誤判,承辦人送第二批就會被擋死。
+
+test('有前期累計時,第二批的累計對得起來就不判錯', () => {
+  const r = validateDailyLog({
+    days: [day('2026-05-06', [
+      row('1', { 本日完成數量: 2, 本日完成金額: 200, 累計完成數量: 5 }),
+    ])],
+    contract: CONTRACT,
+    project: PROJECT,
+    prior: { 1: { 數量: 3, 金額: 300 } },
+  });
+  expect(r.errors.map((e) => e.code)).not.toContain('B3');
+  expect(r.errors.map((e) => e.code)).not.toContain('B2');
+});
+
+test('有前期累計時,累計比前期還小仍要判回退', () => {
+  const r = validateDailyLog({
+    days: [day('2026-05-06', [
+      row('1', { 本日完成數量: 0, 本日完成金額: 0, 累計完成數量: 1 }),
+    ])],
+    contract: CONTRACT,
+    project: PROJECT,
+    prior: { 1: { 數量: 3, 金額: 300 } },
+  });
+  expect(r.errors.map((e) => e.code)).toContain('F1');
+});
+
+test('沒有前期累計時視為從零開始', () => {
+  const r = run([day('2026-04-08', [
+    row('1', { 本日完成數量: 2, 本日完成金額: 200, 累計完成數量: 2 }),
+  ])]);
+  expect(codes(r)).not.toContain('B3');
+});

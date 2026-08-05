@@ -155,6 +155,18 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 已寫入每日施工紀錄的逐日逐項數量(SP3)。權威仍是 .xlsm 內該分頁;
+    // 這張表的用途是**跨批次比對**——施工日誌分多次提交,且「後面才發現前面錯了」
+    // 是真實流程,覆蓋前要能說出哪一天的哪一項從多少改成多少。
+    `CREATE TABLE IF NOT EXISTS daily_records (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      log_date   DATE NOT NULL,
+      item_no    TEXT NOT NULL,
+      qty        NUMERIC,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     `CREATE TABLE IF NOT EXISTS project_attachments (
       id            SERIAL PRIMARY KEY,
       project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
