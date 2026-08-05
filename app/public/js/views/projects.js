@@ -309,8 +309,9 @@
     // 故必須是獨立按鈕——否則改個保險到期日也會去開一次 Excel。
     if (!isNew) {
       const 工期I = el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
-      const 開工I = el('input', { class: 'form-control', type: 'date',
-        value: p.start_date ? String(p.start_date).slice(0, 10) : '' });
+      // 「開工日」不再自建:原本這裡與「工程基本資料」的 startI 是兩個外觀相同、
+      // 值卻可能不同步的欄位(開工報告表解析只同步到這格,startI 依然是空的,
+      // 承辦人按「儲存」時 start_date 照樣送 null)。合併後一律用 startI。
       // 工程層的值優先,沒有才吊系統預設(沿用已刪的 project-basics.js 既有行為)
       const supI = el('input', { class: 'form-control', type: 'text', value: p.supervisor_firm || firms.supervisor_firm || '' });
       const desI = el('input', { class: 'form-control', type: 'text', value: p.designer_firm || firms.designer_firm || '' });
@@ -335,13 +336,13 @@
             // 故能轉數字就轉——空值/非數字仍留字串,讓後端 REQUIRED/FORMAT_OK 照常擋下並列出缺項。
             契約金額: (契約金額raw !== '' && Number.isFinite(Number(契約金額raw))) ? Number(契約金額raw) : 契約金額raw,
             契約工期: (契約工期raw !== '' && Number.isFinite(Number(契約工期raw))) ? Number(契約工期raw) : 契約工期raw,
-            開工日期: 開工I.value, 工程編號: noI.value.trim(),
+            開工日期: startI.value, 工程編號: noI.value.trim(),
           };
           const r = await Api.post('projects/' + id + '/basics', { values });
-          // 這支已經把開工日期與範本算出的完工期限寫進 DB 了。主表單的開工日/契約竣工日
-          // 若還停在舊值,承辦人接著按「儲存」時 PUT 會用陳舊值覆蓋回去,靜默抹掉剛算出
-          // 的完工期限——所以寫入成功後必須把畫面同步到 DB 現況。
-          startI.value = 開工I.value;
+          // 這支已經把範本算出的完工期限寫進 DB 了。主表單的契約竣工日若還停在舊值,
+          // 承辦人接著按「儲存」時 PUT 會用陳舊值覆蓋回去,靜默抹掉剛算出的完工期限——
+          // 所以寫入成功後必須把畫面同步到 DB 現況。開工日不必再同步:開工日期欄位
+          // 已合併成 startI 本身,值本來就是同一格,沒有「另一格」需要跟著更新。
           if (r.完工期限) contractI.value = String(r.完工期限).slice(0, 10);
           showToast(`已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
         } catch (e) {
@@ -354,11 +355,11 @@
       into('basics').appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '監造報表基本資料'),
         el('div', { class: 'hint', style: 'margin-top:0' },
-          '契約工期與開工日期須對照開工報告表填寫,系統不會自動帶入。完工期限由範本公式算出。'),
+          '契約工期須對照開工報告表填寫,系統不會自動帶入;開工日與「工程基本資料」' +
+          '的「開工日」是同一欄。完工期限由範本公式算出。'),
         el('div', { class: 'form-group' }, [el('label', {}, '監造單位'), supI]),
         el('div', { class: 'form-group' }, [el('label', {}, '設計單位'), desI]),
         el('div', { class: 'form-group' }, [el('label', {}, '契約工期(日曆天)'), 工期I]),
-        el('div', { class: 'form-group' }, [el('label', {}, '開工日期'), 開工I]),
         el('div', { class: 'form-actions' }, [writeBtn]),
         basicsErr,
       ]));
@@ -366,11 +367,13 @@
       // 開工報告表(SP1B 階段二)。已抽成 views/kickoff-report.js,讓這裡的頁籤
       // 與工程列表頁的彈窗共用同一份——兩邊各寫一份的話,比對表的編輯同步規則
       // 遲早漂成兩套行為。
-      // 傳入既有的工期/開工日 input:歸檔仍以那兩格為準(工作天案例要承辦人
-      // 自行換算日曆天),與抽出前完全相同。
+      // 開工日改傳「工程基本資料」的 startI(2026-08-05 合併重複欄位):原本自建
+      // 的「監造報表基本資料」開工日期已拿掉,歸檔同步的對象改成 startI,這樣
+      // 「儲存」送出的 start_date 才會是開工報告表核對過的值,不再是 null。
+      // 工期I 維持自建:「工程基本資料」沒有這個欄位,沒有可合併的對象。
       into('kickoff').appendChild(KickoffReport.card(id, {
         durationInput: 工期I,
-        startDateInput: 開工I,
+        startDateInput: startI,
         onArchived: () => loadAttachments(),
         onSynced: () => markTab('basics'),
       }));
