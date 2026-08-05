@@ -147,8 +147,9 @@ SELECT project_id, COUNT(*)::int AS n FROM
   GROUP BY project_id;
 ```
 
-第三個刻意用子查詢而非 `COUNT(DISTINCT log_date)`——`project-routes.js:132` 已記載
-pg-mem 不支援後者，且會**靜默算錯**（同一天的多個項次被當成多天）。
+第三個刻意用子查詢而非 `COUNT(DISTINCT log_date)`——與 `project-routes.js` 的
+`/workflow-status` 路由 `logDays` 子查詢同一理由：pg-mem 不支援後者，
+且會**靜默算錯**（同一天的多個項次被當成多天）。
 
 搜尋模式（`?q=`）也要帶同樣欄位，否則搜尋後標記會全部消失。聚合查詢不加
 `WHERE project_id IN (…)`：**假設**工程數量級在數千以內，三次全表聚合比動態組 IN 清單

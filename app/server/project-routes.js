@@ -98,7 +98,7 @@ function withComputed(row) {
 //
 // 施工日誌天數刻意用子查詢而非 COUNT(DISTINCT log_date):測試用的 pg-mem
 // 不支援後者,而且是**靜默**算錯(同一天的多個項次被當成多天),
-// 與 workflow-status 路由(第 132 行)同一個理由。
+// 與 /workflow-status 路由的 logDays 子查詢同一個理由。
 async function loadWorkflowFlags() {
   const [atts, items, days] = await Promise.all([
     query(`SELECT DISTINCT project_id, kind FROM project_attachments

@@ -335,7 +335,8 @@ describe('GET /api/projects 流程狀態欄位', () => {
     expect(row.log_days).toBe(0);
   });
 
-  // pg-mem 不支援 COUNT(DISTINCT …) 且會**靜默算錯**(project-routes.js:132 已記載),
+  // pg-mem 不支援 COUNT(DISTINCT …) 且會**靜默算錯**(見 project-routes.js 的
+  // /workflow-status 路由 logDays 子查詢處註解),
   // 故這條必須釘住:同一天的多個項次只能算一天,否則列表會顯示「已寫 3 天」
   // 而實際只有 2 天。
   test('同一天多個項次只算一天', async () => {
