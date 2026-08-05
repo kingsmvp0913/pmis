@@ -652,6 +652,11 @@
     }
 
     async function load() {
+      // 開著的 ⋮ 選單已搬到 document.body(不在即將清空的 tbody 底下)。
+      // 打字期間(debounce 未觸發)點開某列選單、debounce 觸發整表重繪的話,
+      // 選單會孤兒掛在 body 上、位置停在舊列座標,且閉包指向已被丟棄的
+      // panelRow——先關掉,重繪後要開哪列再重新點開。
+      closeMoreMenu();
       const q = search.value.trim();
       let rows;
       try { rows = await Api.get('projects' + (q ? '?q=' + encodeURIComponent(q) : '')); }
@@ -689,6 +694,9 @@
         // menu 平時不掛在任何父節點上,只在 moreBtn 開啟時 appendChild 到
         // document.body(見檔案頂端 openMoreMenu 的說明);三個項目一律先
         // closeMoreMenu() 再動作,避免「詳細」跳頁後選單還孤兒掛在 body 上。
+        // CSS 已把 .more-menu 設為預設 display:none(開啟時 JS 另外設 display:block)——
+        // 不能靠這裡的 inline style 補,inline 容易在下次重構時再被弄丟一次,
+        // 而這個缺陷的症狀是整頁破版(每列三顆按鈕一開始就全部顯示)。
         const menu = el('div', { class: 'more-menu' }, [
           el('button', { type: 'button', onClick: () => { closeMoreMenu(); toggleHistory(p, panelRow); } }, '歷史'),
           el('button', { type: 'button', onClick: () => { closeMoreMenu(); window.location.hash = '/projects/' + p.id; } }, '詳細'),
@@ -704,6 +712,7 @@
           menu.style.position = 'fixed';
           menu.style.top = (r.bottom + 4) + 'px';
           menu.style.right = (window.innerWidth - r.right) + 'px';
+          menu.style.display = 'block'; // 覆蓋 CSS 的預設 display:none
           document.body.appendChild(menu);
           openMoreMenu = menu;
         });

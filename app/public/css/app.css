@@ -227,7 +227,12 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
    absolute 定位的選單會被它裁掉,故 position 改由 JS 動態設 fixed 並依按鈕
    座標計算(見 projects.js 的 openMoreMenu)——這裡不再寫 position/top/right。 */
 .more-wrap { position: relative; display: inline-block; }
-.more-menu { z-index: var(--z-modal);
+/* 預設隱藏:選單開啟時搬到 document.body 前,也會先以「未開啟」的狀態掛在
+   .more-wrap 底下(見 projects.js 的 menu 建立處)。inline style 容易在下次
+   重構時再被弄丟一次,故改用 CSS 當預設值較穩——開啟時 JS 另外設
+   display:block 蓋過。少了這條,列表一載入就是整頁的「歷史/詳細/刪除」
+   按鈕直接顯示,整頁破版。 */
+.more-menu { display: none; z-index: var(--z-modal);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); min-width: 96px; padding: 4px; }
 .more-menu button { display: block; width: 100%; text-align: left; padding: 6px 10px;
