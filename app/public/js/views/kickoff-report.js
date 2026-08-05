@@ -289,7 +289,7 @@ const KickoffReport = (() => {
       el('div', { class: 'form-group' }, [el('label', {}, '開工日期'), 開工I]),
     ]) : null;
 
-    // 按鈕列收在卡片最下面(.ko-actions,CSS 設右對齊 + 分隔線)。彈窗情境下
+    // 按鈕列收在卡片最下面(.form-actions,全站統一右對齊)。彈窗情境下
     // openFlow 會把「關閉」插進這個既有的按鈕列最前面,湊成「關閉/解析並比對/
     // 確認無誤並歸檔」三顆並排;詳細頁(非彈窗)沒有「關閉」,這裡兩顆一樣落在
     // 卡片底部,不會退化。
@@ -303,7 +303,7 @@ const KickoffReport = (() => {
       koDurationWarn,
       koSyncNote,
       koWarn,
-      el('div', { class: 'form-actions ko-actions' }, [koParseBtn, koConfirmBtn]),
+      el('div', { class: 'form-actions' }, [koParseBtn, koConfirmBtn]),
     ]);
   }
 

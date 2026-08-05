@@ -135,6 +135,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .modal-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); padding: var(--space-5) var(--space-6) var(--space-3); }
 .modal-body { padding: 0 var(--space-6); font-size: var(--fs-md); color: var(--text-secondary); line-height: 1.7; }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-5) var(--space-6) var(--space-6); }
+/* 開工報告表/契約價目表/施工日誌三個彈窗塞的都是 .card(它們在詳細頁本來就是
+   卡片,不能改)。.modal 本身已經是白底+圓角+邊框+陰影,.card 再畫一次
+   等於兩層框疊在一起(實測 backgroundColor/borderRadius/border 三者完全相同)。
+   在彈窗情境把最外層 .card 的視覺樣式清空,只保留它當版面容器——不動
+   ContractItems.card/DailyLogs.card/KickoffReport.card 內部,詳細頁的外觀不受影響。 */
+.modal-body > .card { background: none; border: none; border-radius: 0; padding: 0; box-shadow: none; }
+/* 同一個道理:.modal-title 已經印過一次「OO—工程名」,元件自己的 .card-title
+   在彈窗裡是第二次「OO」。用 > 子選擇器只命中彈窗最外層 card 的標題,不會誤傷
+   元件內部若有的次級標題(如契約價目表若有「差異確認」這類小標,那些不是
+   直接子節點的 .card-title,不會中選)。詳細頁(非彈窗)沒有 .modal-body 這層,
+   .card-title 照常顯示,元件不用改。 */
+.modal-body > .card > .card-title { display: none; }
 
 /* ── Toolbar(list 頁上方搜尋 + 動作)── */
 .toolbar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
@@ -146,6 +158,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
    auto——實際是雙軸捲動容器,子節點若用 absolute 定位會被這層裁掉
    (踩過的案例見 .more-menu)。不可拿掉 overflow-x:auto,寬表格需要它捲動。 */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+/* 解析前的 .table-wrap(開工報告表/契約價目表)是空容器,但邊框還在——
+   實測高度只有 2px,畫面上就是一條沒頭沒尾的橫線。用 :empty 而不是 JS
+   控制 class:這幾個容器一律用 el('div',{class:'table-wrap'}) 建立(預設
+   children 是空陣列、不會塞文字節點),清空時也一律用 innerHTML=''(同樣不留
+   文字節點),故 :empty 選得到、不必額外狀態。若哪天改成會塞空白文字節點的
+   寫法,:empty 會失效,屆時要改回 JS 控制。 */
+.table-wrap:empty { border: none; }
 table.data { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
 table.data th, table.data td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); white-space: nowrap; }
 table.data th { font-weight: var(--fw-semibold); color: var(--text-secondary); background: var(--bg); font-size: var(--fs-sm); }
@@ -160,10 +179,10 @@ table.data td.actions { text-align: right; }
 .card-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); margin-bottom: var(--space-4); }
 .form-row { display: flex; gap: var(--space-4); flex-wrap: wrap; }
 .form-row > .form-group { flex: 1; min-width: 160px; }
-.form-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
-/* 開工報告表卡片底部的按鈕列(kickoff-report.js):右對齊 + 頂部分隔線,
-   跟卡片其餘內容區隔開。彈窗情境下 openFlow 會把「關閉」插進這一列最前面。 */
-.ko-actions { justify-content: flex-end; border-top: 1px solid var(--border); padding-top: var(--space-4); }
+/* 全站統一右對齊、無上分隔線(次要動作在左、主要動作在右)。曾有 .ko-actions
+   這個變體(右對齊+border-top)只給開工報告表用,結果同一個詳細頁四張卡
+   三種按鈕列樣式;拿掉那個 class,靠這裡統一。 */
+.form-actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); justify-content: flex-end; }
 select.form-control { appearance: auto; }
 textarea.form-control { min-height: 160px; resize: vertical; font-family: inherit; }
 .hint { font-size: var(--fs-sm); color: var(--text-muted); margin-top: var(--space-2); }
