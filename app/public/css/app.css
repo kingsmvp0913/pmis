@@ -141,6 +141,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
    在彈窗情境把最外層 .card 的視覺樣式清空,只保留它當版面容器——不動
    ContractItems.card/DailyLogs.card/KickoffReport.card 內部,詳細頁的外觀不受影響。 */
 .modal-body > .card { background: none; border: none; border-radius: 0; padding: 0; box-shadow: none; }
+/* 同一個道理:.modal-title 已經印過一次「OO—工程名」,元件自己的 .card-title
+   在彈窗裡是第二次「OO」。用 > 子選擇器只命中彈窗最外層 card 的標題,不會誤傷
+   元件內部若有的次級標題(如契約價目表若有「差異確認」這類小標,那些不是
+   直接子節點的 .card-title,不會中選)。詳細頁(非彈窗)沒有 .modal-body 這層,
+   .card-title 照常顯示,元件不用改。 */
+.modal-body > .card > .card-title { display: none; }
 
 /* ── Toolbar(list 頁上方搜尋 + 動作)── */
 .toolbar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); flex-wrap: wrap; }
