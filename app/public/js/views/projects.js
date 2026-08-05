@@ -658,11 +658,13 @@
         onClose: () => { if (changed || key !== 'kickoff') load(); },
       });
       const closeBtn = el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '關閉');
-      // KickoffReport.card 把「解析並比對」/「確認無誤並歸檔」放在卡片底部的
-      // .ko-actions 這個既有按鈕列,「關閉」插進同一列最前面即可三顆並排收在
-      // 底部;ContractItems.card/DailyLogs.card 沒有這個 class,找不到就沿用
-      // 原本「另外附加一列在最後」的做法,不去改那兩個元件。
-      const actionsRow = body.querySelector && body.querySelector('.ko-actions');
+      // 三個元件(KickoffReport/ContractItems/DailyLogs)各自的按鈕列都是
+      // .form-actions(全站通用 class,不必為了彈窗另外改元件內部)。找最後一個
+      // 是防同一個元件裡有多列 .form-actions(目前都只有一列,但比只認第一個
+      // 更保險);把「關閉」插到最前面,跟元件自己的按鈕收在同一排、同一種
+      // 右對齊。真的找不到(理論上不會發生)才退回舊的「另外附加一列」。
+      const rows = body.querySelectorAll ? body.querySelectorAll('.form-actions') : [];
+      const actionsRow = rows.length ? rows[rows.length - 1] : null;
       if (actionsRow) {
         actionsRow.insertBefore(closeBtn, actionsRow.firstChild);
       } else {
