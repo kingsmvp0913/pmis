@@ -153,26 +153,50 @@ test('項目寫進契約詳細價目表 A2 起的五欄', () => {
   expect(set.values).toEqual([['1', '施工圍籬', '式', 1, 3000]]);
 });
 
-// 範本的公式列是有限的:每日施工紀錄鋪到第 37 列(36 項)、監造報表到第 40 列
-// (31 項)。樣本項目數 11~39,多數案子都會超過 31——擴列是常態不是例外。
+// 一份工程 = N 個施工項目(阿拉伯項次) + 5 個費用項目(貳~陸),與真實樣本同形
+const 費用 = ['貳', '參', '肆', '伍', '陸'];
+const mixed = (施工數) => [
+  ...Array.from({ length: 施工數 }, (_, i) => item(String(i + 1), 100)),
+  ...費用.map((n) => item(n, 50)),
+];
+
+// 範本的公式列是有限的:每日施工紀錄鋪到第 37 列、監造報表到第 40 列。
 test('項目數在兩個分頁的容量內時不擴列', () => {
-  const ops = itemsToOperations(many(31));
-  expect(ops.filter((o) => o.type === 'copyRowDown')).toEqual([]);
+  const ops = itemsToOperations(mixed(26)); // 31 項總數、26 施工項,兩邊都剛好塞得下
+  expect(ops.filter((o) => /copyRowDown|insertRowsBelow/.test(o.type))).toEqual([]);
 });
 
-test('超出容量時各分頁補到夠', () => {
-  const ops = itemsToOperations(many(39)); // 豐榮:34 施工項 + 5 費用項
-  const copies = ops.filter((o) => o.type === 'copyRowDown');
-  expect(copies).toEqual(expect.arrayContaining([
-    { type: 'copyRowDown', sheet: '每日施工紀錄', srcRow: INDEX_ROWS['每日施工紀錄'].last, count: 3 },
-    { type: 'copyRowDown', sheet: '監造報表', srcRow: INDEX_ROWS['監造報表'].last, count: 8 },
-  ]));
+// 真實已填實例釘住的規律:**監造報表引用列數 = 價目表項目數 − 5**
+// (豐榮 39→34、南陽 36→31、東榮災後 11→6)。差的正是五個費用項目——
+// 監造報表是給人看施工進度的,職安衛管理費與營業稅沒有施工進度可言。
+test('監造報表只算施工項目,費用項目不佔列', () => {
+  const ops = itemsToOperations(mixed(34)); // 豐榮:34 施工 + 5 費用 = 39 項
+  const 監造 = ops.find((o) => o.sheet === '監造報表');
+  const 每日 = ops.find((o) => o.sheet === '每日施工紀錄');
+  expect(監造.count).toBe(3);  // 34 施工項 − 31 容量
+  expect(每日.count).toBe(3);  // 39 項總數 − 36 容量
+});
+
+// 監造報表的項目區正下方就是報表正文(二、監督…/三、查核…/簽章)。
+// FillDown 會直接覆蓋掉那些內容,而且覆蓋後看起來只是「報表少了幾段」——
+// 豐榮的真實實例是把正文往下推到第 44 列,即插入而非覆蓋。
+test('監造報表用插入列,每日施工紀錄用覆蓋', () => {
+  const ops = itemsToOperations(mixed(34));
+  expect(ops.find((o) => o.sheet === '監造報表').type).toBe('insertRowsBelow');
+  expect(ops.find((o) => o.sheet === '每日施工紀錄').type).toBe('copyRowDown');
+});
+
+test('只有每日施工紀錄超出時,不動監造報表', () => {
+  const ops = itemsToOperations(mixed(31)); // 36 項總數(剛好)、31 施工項(剛好)
+  expect(ops.filter((o) => o.sheet === '監造報表')).toEqual([]);
+  const ops2 = itemsToOperations(mixed(32)); // 37 項總數(超 1)、32 施工項(超 1)
+  expect(ops2.find((o) => o.sheet === '每日施工紀錄').count).toBe(1);
 });
 
 // 擴列要排在寫值之前:公式列不存在的話,寫進去的項目在那兩個分頁上看不到
 test('擴列指令排在寫值之前', () => {
-  const ops = itemsToOperations(many(39));
-  expect(ops.findIndex((o) => o.type === 'copyRowDown'))
+  const ops = itemsToOperations(mixed(34));
+  expect(ops.findIndex((o) => /copyRowDown|insertRowsBelow/.test(o.type)))
     .toBeLessThan(ops.findIndex((o) => o.type === 'setRange'));
 });
 

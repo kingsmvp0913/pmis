@@ -128,13 +128,28 @@ function diffItems(舊, 新) {
 const SHEET = '契約詳細價目表';
 const FIRST_ROW = 2; // 第 1 列是欄位標題
 
-// 範本裡以 INDEX/MATCH 引用契約詳細價目表的公式列範圍(實測公版範本)。
-// **監造報表只鋪到 31 列,比每日施工紀錄的 36 列還少**——樣本項目數 11~39,
-// 多數案子都會超過 31,所以擴列是常態不是例外。
+/**
+ * 範本裡以 INDEX/MATCH 引用契約詳細價目表的公式列範圍(實測公版範本),
+ * 以及各分頁該容納哪些項目、不足時怎麼補。
+ *
+ * **兩個分頁的規則不同,這是 38 份已填實例釘出來的**:
+ *
+ * 1. `監造報表` 的引用列數 = 價目表項目數 **− 5**(豐榮 39→34、南陽 36→31、
+ *    東榮災後 11→6)。差的正是五個費用項目——監造報表是給人看施工進度的,
+ *    職安衛管理費與營業稅沒有施工進度可言。
+ * 2. `監造報表` 的項目區**正下方就是報表正文**(二、監督…/三、查核…/簽章),
+ *    只能插入列把正文往下推;FillDown 會直接覆蓋掉那幾段,而覆蓋後看起來
+ *    只是「報表少了幾段」,不會有任何錯誤。豐榮實例的正文就在第 44 列,
+ *    正是被往下推 3 列的結果。
+ * 3. `每日施工紀錄` 收全部項目(含費用項目),且第 38 列起本來就是空白,
+ *    FillDown 覆蓋不到任何東西。
+ */
 const INDEX_ROWS = {
-  每日施工紀錄: { first: 2, last: 37 },
-  監造報表: { first: 10, last: 40 },
+  每日施工紀錄: { first: 2, last: 37, op: 'copyRowDown', 只算施工項目: false },
+  監造報表: { first: 10, last: 40, op: 'insertRowsBelow', 只算施工項目: true },
 };
+
+const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
 
 /**
  * 項目清單 → SP0 template-engine 的 operations。
@@ -154,10 +169,11 @@ function itemsToOperations(items, previousCount = 0) {
 
   const ops = [];
   // 擴列先做:公式列不存在的話,寫進去的項目在那兩個分頁上看不到。
-  for (const [sheet, { first, last }] of Object.entries(INDEX_ROWS)) {
+  for (const [sheet, { first, last, op, 只算施工項目 }] of Object.entries(INDEX_ROWS)) {
     const capacity = last - first + 1;
-    if (list.length > capacity) {
-      ops.push({ type: 'copyRowDown', sheet, srcRow: last, count: list.length - capacity });
+    const needed = 只算施工項目 ? list.filter(IS_WORK_ITEM).length : list.length;
+    if (needed > capacity) {
+      ops.push({ type: op, sheet, srcRow: last, count: needed - capacity });
     }
   }
 

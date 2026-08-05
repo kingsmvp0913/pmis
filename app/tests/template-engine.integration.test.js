@@ -45,6 +45,23 @@ d('fillTemplate 端對端(Excel COM)', () => {
     expect(g42.f).toBe('SUM($J42:$ACH42)'); // 相對列號由 2 調整到 42
   }, 180000);
 
+  // copyRowDown 是 FillDown,會**覆蓋**下方既有內容。監造報表的項目區正下方就是
+  // 報表正文(二、監督…/三、查核…/簽章),覆蓋掉之後看起來只是「報表少了幾段」,
+  // 不會有任何錯誤——SP2 實作時就是這樣靜默毀掉正文的。insertRowsBelow 先把下方
+  // 推開再填,是那個分頁唯一能用的擴列方式。
+  test('insertRowsBelow 擴列時把下方內容往下推,不覆蓋', async () => {
+    const before = XLSX.readFile(FIX).Sheets['監造報表'];
+    expect(String(before.A41.v)).toMatch(/^二、監督/); // 項目區下方緊接正文
+
+    await fillTemplate(FIX, OUT, [
+      { type: 'insertRowsBelow', sheet: '監造報表', srcRow: 40, count: 3 },
+    ]);
+    const after = XLSX.readFile(OUT).Sheets['監造報表'];
+    expect(after.A41.f).toMatch(/INDEX\(契約詳細價目表/); // 新列是複製來的公式
+    expect(after.A43.f).toMatch(/INDEX\(契約詳細價目表/);
+    expect(String(after.A44.v)).toMatch(/^二、監督/);     // 正文被推到第 44 列,沒被吃掉
+  }, 180000);
+
   test('setRange 寫入二維區塊,含公式欄同步重算', async () => {
     await fillTemplate(FIX, OUT, [
       {

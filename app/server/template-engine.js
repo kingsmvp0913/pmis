@@ -39,7 +39,7 @@ function buildJob(templatePath, outPath, operations) {
     throw new Error('operations 需為非空陣列');
   }
 
-  const KNOWN = new Set(['setCell', 'setRange', 'copyRowDown']);
+  const KNOWN = new Set(['setCell', 'setRange', 'copyRowDown', 'insertRowsBelow']);
   const isPosInt = (n) => Number.isInteger(n) && n >= 1;
   for (const op of operations) {
     if (!op || !KNOWN.has(op.type)) {
@@ -53,9 +53,9 @@ function buildJob(templatePath, outPath, operations) {
       if (!Array.isArray(op.values) || op.values.length === 0 || !op.values.every(Array.isArray)) {
         throw new Error('setRange 的 values 須為非空二維陣列');
       }
-    } else if (op.type === 'copyRowDown') {
-      if (!isPosInt(op.srcRow)) throw new Error('copyRowDown 的 srcRow 須為正整數');
-      if (!isPosInt(op.count)) throw new Error('copyRowDown 的 count 須為正整數');
+    } else if (op.type === 'copyRowDown' || op.type === 'insertRowsBelow') {
+      if (!isPosInt(op.srcRow)) throw new Error(`${op.type} 的 srcRow 須為正整數`);
+      if (!isPosInt(op.count)) throw new Error(`${op.type} 的 count 須為正整數`);
     }
   }
 
