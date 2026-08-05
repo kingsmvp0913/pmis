@@ -137,7 +137,7 @@ A1150505 元長國小老舊…   未招標     [✓開工表][✓價目表][✓�
 **不得 N+1**（100 個工程會跑 300 次查詢）。改成三次聚合查詢後在 JS 合併：
 
 ```sql
-SELECT DISTINCT project_id, kind FROM attachments
+SELECT DISTINCT project_id, kind FROM project_attachments
   WHERE kind IN ('kickoff_report', 'budget_sheet');
 
 SELECT project_id, COUNT(*)::int AS n FROM contract_items GROUP BY project_id;
