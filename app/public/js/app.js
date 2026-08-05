@@ -82,9 +82,9 @@ async function renderLogin() {
   root.appendChild(el('div', { class: 'login-wrap' }, [box]));
 }
 
-// 主選單項目(第二階段只掛這四項 + 首頁)
+// 主選單項目。首頁已移除(2026-08-05):登入後直接落在工程列表,
+// 未註冊的 hash 也一律導向工程列表,見下方 route() 結尾。
 const NAV = [
-  { hash: '#/', label: '🏠 首頁' },
   { hash: '#/vendors', label: '🏗️ 廠商' },
   { hash: '#/schools', label: '🏫 學校' },
   { hash: '#/insurers', label: '🛡️ 保險公司' },
@@ -126,22 +126,21 @@ async function renderShell(activeHash) {
 async function route() {
   const hash = window.location.hash.replace(/^#/, '') || '/';
   if (!Api.isLoggedIn() && hash !== '/login') { window.location.hash = '/login'; return; }
-  if (Api.isLoggedIn() && hash === '/login') { window.location.hash = '/'; return; }
+  if (Api.isLoggedIn() && hash === '/login') { window.location.hash = '/projects'; return; }
 
   if (hash === '/login') return renderLogin();
 
   // 掛在對應 nav 的 active(取 hash 第一段,如 #/vendors、#/vendors/3 皆對應 #/vendors)
   const seg = '#/' + (hash.replace(/^\//, '').split('/')[0] || '');
-  const activeHash = NAV.some(n => n.hash === seg) ? seg : '#/';
+  const activeHash = NAV.some(n => n.hash === seg) ? seg : '#/projects';
   const content = await renderShell(activeHash);
   if (!content) return; // 已導向登入
 
   const renderFn = routes['#' + hash] || routes[seg];
   if (renderFn) return renderFn(content, hash);
 
-  // 首頁歡迎(其餘未註冊 hash 也回首頁)
-  content.appendChild(el('div', { class: 'page-title' }, '歡迎'));
-  content.appendChild(el('p', { style: 'color:var(--text-muted)' }, '請由左側選單選擇主檔。'));
+  // 首頁已移除:未註冊的 hash 一律導向工程列表,不再顯示歡迎頁(避免白畫面)。
+  window.location.hash = '/projects';
 }
 
 // 對外:view 檔用 PmisApp.el 建 DOM、registerRoute 掛路由
