@@ -89,7 +89,8 @@
       const fileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
       const parseBtn = el('button', { class: 'btn', type: 'button' }, '解析決標公告');
       const awardMsg = el('div', { class: 'hint' },
-        '上傳決標公告可自動帶入工程名稱、編號、金額、主辦機關與承包廠商;也可略過直接手動填寫。');
+        '決標公告為必要:工程一律由決標公告建立,解析後會自動帶入工程名稱、編號、金額、' +
+        '主辦機關與承包廠商。沒有決標公告的工程無法核對開工報告表。');
       const awardErr = el('div', { class: 'error-msg', style: 'display:none' });
 
       parseBtn.addEventListener('click', async () => {
@@ -297,9 +298,13 @@
       // 工作天案例的專屬警示:與 koErr 分開,因為 koErr 是「這次操作失敗」,
       // 這個是「操作成功但有一格刻意不填」——同時顯示不衝突,語意也不同。
       const koDurationWarn = el('div', { class: 'error-msg', style: 'display:none' });
+      // 歸檔成功但有提示級問題(如決標日晚於開工日)。與 koErr 分開:那是「這次
+      // 操作失敗」,這是「已歸檔但有一點要回頭確認」。
+      const koWarn = el('div', { class: 'hint', style: 'display:none' });
       const koHint = el('div', { class: 'hint' },
         '上傳後系統以 OCR 預填候選值並與已歸檔的決標公告比對。讀不到的欄位留空,請對照 PDF 自行填寫。' +
-        '「開工報告表」欄可直接編輯(如 OCR 讀錯字),改完按「確認無誤並歸檔」由後端重新比對。');
+        '「開工報告表」欄可直接編輯(如 OCR 讀錯字),改完按「確認無誤並歸檔」由後端重新比對。' +
+        '除「學校」與「決標日」外皆為必填,留空無法歸檔。');
       const koBox = el('div', { class: 'table-wrap' });
 
       const 狀態文字 = { match: '相符', diff: '不符', missing: '未讀到', no_award: '無決標公告可比' };
@@ -434,11 +439,8 @@
             工期I.value = 工期.天數;
           }
           if (data.kickoff.契約規定開工日) 開工I.value = data.kickoff.契約規定開工日;
-          if (!data.hasAward) {
-            // 這是「未執行到比對」的限制提示,不是成功動作——用 success(綠)
-            // 會讓承辦人誤以為比對已經做完。
-            showToast('此工程未歸檔決標公告,僅做預填、未進行比對', 'warn');
-          }
+          // 未歸檔決標公告的工程已由後端擋在 parse 之前(要求以決標公告重建工程),
+          // 走到這裡必然有比對基準,不再有「僅預填、未比對」這種半套狀態。
           koConfirmBtn.style.display = '';
         } catch (e) {
           koErr.textContent = e.message;
@@ -479,6 +481,12 @@
           fd.append('values', JSON.stringify(values));
           const r = await Api.upload('projects/' + id + '/kickoff-report/confirm', fd);
           renderKickoffRows(r.rows);
+          // 提示級不擋歸檔,但用 toast 講會隨著跳轉消失,而這是要承辦人回頭確認的
+          // 東西——留在畫面上,與 koDurationWarn 同一種「已完成但有一點要看」的位置。
+          if (r.warnings && r.warnings.length) {
+            koWarn.textContent = r.warnings.map((w) => `${w.欄位}:${w.訊息}`).join('；');
+            koWarn.style.display = '';
+          }
           showToast('開工報告表已核對並歸檔', 'success');
           koConfirmBtn.style.display = 'none';
           await loadAttachments();
@@ -497,12 +505,15 @@
               const span = koResultCells[f];
               if (!span) continue;
               span.className = 'error-msg';
-              // 契約工期是開工報告表自身的內部自洽性檢查(表列工期 vs 開工/竣工日推導值),
-              // 不是跨文件比對,不可套用「與決標公告不符」——那會跟 koErr 頂部訊息自相矛盾
+              // 必填/值域的硬擋帶逐欄原因(fieldMessages),直接照用——那類問題是
+              // 「這欄沒填或填得不成立」,套下面的跨文件文案會把承辦人指去對決標公告。
+              // 契約工期則是開工報告表自身的內部自洽性檢查(表列工期 vs 開工/竣工日
+              // 推導值),同樣不可套「與決標公告不符」,那會跟 koErr 頂部訊息自相矛盾
               // (buildHardErrorMessage 已刻意分流,見 kickoff-routes.js)
-              span.textContent = f === '契約工期'
+              const note = e.fieldMessages && e.fieldMessages[f];
+              span.textContent = note || (f === '契約工期'
                 ? '仍不符,請確認表格填寫'
-                : '與決標公告不符,請確認後修正';
+                : '與決標公告不符,請確認後修正');
             }
           }
         } finally { koConfirmBtn.disabled = false; }
@@ -515,6 +526,7 @@
         el('div', { class: 'form-actions' }, [koParseBtn, koConfirmBtn]),
         koErr,
         koDurationWarn,
+        koWarn,
         koBox,
       ]));
 
@@ -671,8 +683,14 @@
         design_fee_amount: feeAmountI.value.trim() || null,
         design_fee_pct: feePctI.value.trim() || null
       };
+      // 建案入口只剩決標公告一條。擋在送出前而不是讓後端回 400:承辦人已經填完
+      // 一整份表單,到那時才被退回等於白填。
+      if (isNew && !awardFile) {
+        showToast('請先上傳並解析決標公告,工程一律由決標公告建立', 'warn');
+        return;
+      }
       try {
-        if (isNew && awardFile) {
+        if (isNew) {
           // 有決標公告就走 multipart,讓後端在建檔的同一個請求裡歸檔。
           const fd = new FormData();
           Object.keys(body).forEach((k) => {
@@ -683,9 +701,6 @@
           const created = await Api.upload('projects', fd);
           if (created.attachment_warning) showToast(created.attachment_warning, 'warn');
           else showToast('已儲存', 'success');
-        } else if (isNew) {
-          await Api.post('projects', body);
-          showToast('已儲存', 'success');
         } else {
           await Api.put('projects/' + id, body);
           showToast('已儲存', 'success');
