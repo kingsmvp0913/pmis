@@ -10,7 +10,6 @@
   // 按到舊的就產出一份沒驗證過的報表。
   function submissionDialog(defaultPeriod) {
     return new Promise((resolve) => {
-      const overlay = el('div', { class: 'modal-overlay' });
       const typeSel = el('select', { class: 'form-control' }, [
         el('option', { value: 'monthly' }, '每月'),
         el('option', { value: 'supervision' }, '督導')
@@ -19,33 +18,32 @@
       const fileI = el('input', { class: 'form-control', type: 'file' });
       const errBox = el('div', { class: 'error-msg', style: 'display:none' });
 
-      function close(val) { window.removeEventListener('keydown', onKey); overlay.remove(); resolve(val); }
-      function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); close(null); } }
-
+      // 關閉路徑有四條(送出、取消鈕、Escape、點 overlay)。一律由 modalDialog
+      // 的 onClose 收斂成一次 resolve,四條各自 resolve 會漏掉後兩條——
+      // 使用者按 Escape 放棄操作時,那個 Promise 會永遠擱置。
+      let result = null;
       function submit() {
         const period = periodI.value.trim();
         if (!/^\d{4}-\d{2}$/.test(period)) { errBox.textContent = '請選擇週期(年月)'; errBox.style.display = ''; return; }
         if (!fileI.files || !fileI.files[0]) { errBox.textContent = '請選擇施工日誌檔'; errBox.style.display = ''; return; }
-        close({ type: typeSel.value, period, file: fileI.files[0] });
+        result = { type: typeSel.value, period, file: fileI.files[0] };
+        dlg.close();
       }
 
-      const modal = el('div', { class: 'modal', role: 'dialog' }, [
-        el('div', { class: 'modal-title' }, '登錄繳交(上傳施工日誌)'),
-        el('div', { class: 'modal-body' }, [
-          errBox,
-          el('div', { class: 'form-group' }, [el('label', {}, '類型'), typeSel]),
-          el('div', { class: 'form-group' }, [el('label', {}, '週期'), periodI]),
-          el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔'), fileI])
-        ]),
+      const body = el('div', {}, [
+        errBox,
+        el('div', { class: 'form-group' }, [el('label', {}, '類型'), typeSel]),
+        el('div', { class: 'form-group' }, [el('label', {}, '週期'), periodI]),
+        el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔'), fileI]),
         el('div', { class: 'modal-actions' }, [
-          el('button', { class: 'btn btn-outline', onClick: () => close(null) }, '取消'),
+          el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '取消'),
           el('button', { class: 'btn btn-primary', onClick: submit }, '送出')
         ])
       ]);
-      overlay.appendChild(modal);
-      overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(null); });
-      window.addEventListener('keydown', onKey);
-      document.body.appendChild(overlay);
+      const dlg = modalDialog({
+        title: '登錄繳交(上傳施工日誌)', content: body,
+        onClose: () => resolve(result),
+      });
     });
   }
 
