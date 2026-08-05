@@ -138,4 +138,37 @@ async function extractRows(fileOrBuffer) {
   return pages.map((items, i) => ({ page: i + 1, rows: rowsFromItems(items) }));
 }
 
-module.exports = { extractPages, rowsFromItems, extractRows };
+/**
+ * 抽出 PDF 每頁的原始文字 item(含 x/y 座標),不做任何分欄。
+ *
+ * `extractRows` 的分欄寫死給決標公告的兩欄表(BLOCK_MAX_X/LABEL_MAX_X),多欄表格
+ * 套不上;`extractPages` 又只回文字,而多欄表格抽成文字後會變成
+ * 「1.002,500.001.00 2,500.00」這種黏連字串,還原不回欄位。
+ *
+ * 廠商讀取器需要的是原始座標,自己依該家版面分欄——同 SP1B 對 OCR 的結論:
+ * 把座標丟掉之後,下游只能靠順序猜,而順序在多欄表格裡不成立。
+ *
+ * @param {string|Buffer} fileOrBuffer
+ * @returns {Promise<Array<{page:number, items:Array<{x:number,y:number,s:string}>}>>}
+ */
+async function extractItems(fileOrBuffer) {
+  const buffer = Buffer.isBuffer(fileOrBuffer) ? fileOrBuffer : fs.readFileSync(fileOrBuffer);
+  const pages = [];
+  await pdf(buffer, {
+    pagerender: (pageData) => pageData
+      .getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false })
+      .then((tc) => {
+        pages.push(tc.items.map((it) => ({
+          x: it.transform[4],
+          y: it.transform[5],
+          // 與 extractPages 一致地做 NFKC:CID 字型會把「年」等字映到 CJK 相容區,
+          // 不正規化則下游 regex 抓不到(見本檔頭註)。
+          s: fixCjkRadicals(String(it.str == null ? '' : it.str).normalize('NFKC')),
+        })));
+        return '';
+      }),
+  });
+  return pages.map((items, i) => ({ page: i + 1, items }));
+}
+
+module.exports = { extractPages, rowsFromItems, extractRows, extractItems };
