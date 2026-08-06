@@ -832,7 +832,8 @@
           el('span', { class: 'rec-tag' + (r.type === 'supervision' ? ' supervision' : '') }, r.type === 'supervision' ? '督導' : '每月'),
           el('span', { class: 'rec-main' }, (r.period || '—')),
           el('span', { class: 'spacer' }),
-          el('button', { class: 'btn btn-outline', onClick: () => download(r.id, 'official_doc') }, '公文'),
+          el('button', { class: 'btn btn-outline', onClick: () => makeOfficialDoc(p, r, cell) }, '產公文'),
+          el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'official_doc') }, '公文'),
           el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'report') }, '監造報表'),
           el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'daily_log') }, '施工日誌'),
           el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => removeRec(p, r, cell) }, '刪除')
@@ -856,6 +857,78 @@
         const soft = e.message.indexOf('尚未產出') >= 0 || e.message.indexOf('尚未產生') >= 0;
         showToast(e.message, soft ? 'warn' : 'error');
       }
+    }
+
+    // 產公文的輸入彈窗。文號一律人工輸入(事務所收發文簿可能與非本系統的案子共用流水),
+    // 帶出該列上次填的值——重產通常只改一兩個欄位。
+    function askOfficialDoc(r) {
+      return new Promise((resolve) => {
+        const vendorNoI = el('input', { class: 'form-control', type: 'text', value: r.vendor_doc_no || '' });
+        // 日期一律走 toDateInputValue:DB 的 DATE 欄位序列化成 JSON 後是 UTC 字串,
+        // 直接 slice(0,10) 會少一天(見 app.js 該函式的註解)。
+        const vendorDateI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(r.vendor_doc_date) });
+        const ourNoI = el('input', { class: 'form-control', type: 'text', value: r.our_doc_no || '' });
+        const ourDateI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(r.our_doc_date) });
+        const copiesI = el('input', { class: 'form-control', type: 'text', value: r.copies || '乙' });
+        const errBox = el('div', { class: 'error-msg', style: 'display:none' });
+
+        // 關閉路徑有四條(產出、取消鈕、Escape、點 overlay)。一律由 modalDialog 的
+        // onClose 收斂成一次 resolve,四條各自 resolve 會漏掉後兩條——使用者按 Escape
+        // 放棄操作時,那個 Promise 會永遠擱置(同本檔登錄繳交彈窗的作法)。
+        let result = null;
+        function submit() {
+          const missing = [];
+          if (!vendorNoI.value.trim()) missing.push('廠商文號');
+          if (!vendorDateI.value) missing.push('廠商公文日期');
+          if (!ourNoI.value.trim()) missing.push('我方文號');
+          if (!ourDateI.value) missing.push('我方發文日期');
+          if (missing.length) {
+            errBox.textContent = '請填寫：' + missing.join('、');
+            errBox.style.display = '';
+            return;
+          }
+          result = {
+            vendor_doc_no: vendorNoI.value.trim(),
+            vendor_doc_date: vendorDateI.value,
+            our_doc_no: ourNoI.value.trim(),
+            our_doc_date: ourDateI.value,
+            copies: copiesI.value.trim() || '乙',
+          };
+          dlg.close();
+        }
+
+        const body = el('div', {}, [
+          errBox,
+          el('div', { class: 'form-group' }, [el('label', {}, '廠商文號'), vendorNoI]),
+          el('div', { class: 'form-group' }, [el('label', {}, '廠商公文日期'), vendorDateI]),
+          el('div', { class: 'form-group' }, [el('label', {}, '我方文號'), ourNoI]),
+          el('div', { class: 'form-group' }, [el('label', {}, '我方發文日期'), ourDateI]),
+          el('div', { class: 'form-group' }, [el('label', {}, '份數(乙/三…)'), copiesI]),
+          el('div', { class: 'modal-actions' }, [
+            el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '取消'),
+            el('button', { class: 'btn btn-primary', onClick: submit }, '產出')
+          ])
+        ]);
+        const dlg = modalDialog({
+          title: '產公文(' + (r.period || '—') + ')', content: body,
+          onClose: () => resolve(result),
+        });
+      });
+    }
+
+    async function makeOfficialDoc(p, r, cell) {
+      const payload = await askOfficialDoc(r);
+      if (!payload) return;   // 使用者取消
+      try {
+        await Api.post('submissions/' + r.id + '/official-doc', payload);
+      } catch (e) {
+        // 後端的硬擋會帶 fields(哪一欄不合格),只丟 message 會讓承辦人不知道要改哪裡
+        const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
+        showToast(e.message + suffix, 'error');
+        return;
+      }
+      showToast('已產出公文', 'success');
+      await renderHistory(p, cell);   // 重繪以帶出新存的欄位值
     }
 
     async function generate(p, cell) {
