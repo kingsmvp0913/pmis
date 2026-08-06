@@ -61,49 +61,84 @@ const first = (s) => {
 };
 
 /**
- * 明細列。名稱片段可能落在項次列的上一列或下一列,故先收集再收束:
- * 遇到下一個項次列(或表尾)時,才把累積的片段接成完整名稱。
+ * 明細列。**名稱片段以項次列為中心、上下對稱分佈**(實測 fixture 的項次 4:
+ * 前段在上一列、中段與項次列只差 1 個 y 而被 Y_TOL 併進項次列本身、後段在下一列)。
+ *
+ * 因此片段歸屬一律看「離哪個項次列最近」,不可用「本列名稱欄有沒有值」二選一——
+ * 舊作法遇到「上面一段 + 併入一段 + 下面一段」時,會把前段送給上一個項次、
+ * 後段送給下一個項次,**兩邊的名稱都是錯的**;而且名稱錯不會讓任何欄位變 null,
+ * 完整性關卡完全看不到(見 scripts/check-parser.js 的名稱形狀健檢)。
  */
-function collectRows(rows) {
-  const out = [];
-  let cur = null;
-  let pending = [];   // 尚未歸屬的名稱片段
+// 把名稱欄的 items 依原始 y 收成片段(同一個 y 的多個 item 併成一段)。
+function nameSegments(items) {
+  const byY = new Map();
+  for (const i of items) {
+    if (i.x < X.項次 || i.x >= X.名稱) continue;
+    const s = text(i.s);
+    if (!s) continue;
+    byY.set(i.y, (byY.get(i.y) || '') + s);
+  }
+  return [...byY.entries()].map(([y, s]) => ({ y, s }));
+}
 
-  const push = (extra) => {
-    if (!cur) return;
-    cur.工程項目 = [cur.工程項目, ...extra].filter(Boolean).join('') || null;
-    out.push(cur);
-    cur = null;
-  };
+function collectRows(rows) {
+  const anchors = [];   // 項次列
+  const frags = [];     // 待歸屬的名稱片段
+
+  // 資料區從表頭列(項次/施工項目/單位…)之下開始。**頁首的校名、天氣、工程名稱、
+  // 工期、進度等文字也落在名稱欄的 x 範圍內**,不設這條界線就會被當成名稱片段
+  // 吸進第一個項次(實測:項次1 的名稱變成「雲林縣四湖鄉四湖國民小學9下午:上午:晴…」)。
+  const headerRow = rows.find((r) => {
+    const t = r.items.map((i) => i.s).join('');
+    return /項次/.test(t) && /施工項目/.test(t);
+  });
+  const 資料區上界 = headerRow ? headerRow.y : Infinity;
 
   for (const row of rows) {
-    const 項次 = text(between(row, 0, X.項次));
-    if (項次 != null && ITEM_NO_RE.test(項次)) {
-      const 本列名稱 = text(between(row, X.項次, X.名稱));
-      // 片段歸屬看的是**這一列自己的名稱欄有沒有值**:空的代表名稱被擠到上一列
-      // (項次 1 就是如此),此時 pending 屬於本列;有值則代表 pending 是上一個
-      // 項次的續行。只往前接或只往後接都會拼出別人的名稱。
-      if (本列名稱 == null) push([]);
-      else push(pending);
-      const 前段 = 本列名稱 == null ? pending : [];
-      pending = [];
-      cur = {
-        項次,
-        工程項目: [...前段, 本列名稱].filter(Boolean).join('') || null,
-        單位: text(between(row, X.名稱, X.單位)),
-        契約單價: null,        // 此格式不提供
-        契約數量: first(between(row, X.單位, X.契約數量)),
-        本日完成數量: first(between(row, X.契約數量, X.本日)),
-        本日完成金額: null,    // 此格式不提供
-        累計完成數量: first(between(row, X.本日, X.累計)),
-      };
-      continue;
-    }
-    const seg = text(between(row, X.項次, X.名稱));
-    if (seg) pending.push(seg);
+    if (row.y >= 資料區上界) continue;
+    const 項次item = row.items.find((i) => i.x < X.項次 && ITEM_NO_RE.test(String(i.s || '').trim()));
+    const segs = nameSegments(row.items);
+    if (!項次item) { frags.push(...segs); continue; }
+
+    // 名稱 item 與項次 item 幾乎同高**不代表同一列**:這個版面把數值垂直置中於
+    // 名稱區塊,所以多行名稱的中間那行必然與數值同高(項次4 的名稱三行是
+    // 570/561/552,數值在 560.1)。曾試過用 y 差判「自足」,反而把常見情況判錯。
+    // 一律當片段,由下方的「最近錨點」統一分配。
+    frags.push(...segs);
+    anchors.push({
+      y: row.y,
+      項次: String(項次item.s).trim(),
+      單位: text(between(row, X.名稱, X.單位)),
+      契約單價: null,        // 此格式不提供
+      契約數量: first(between(row, X.單位, X.契約數量)),
+      本日完成數量: first(between(row, X.契約數量, X.本日)),
+      本日完成金額: null,    // 此格式不提供
+      累計完成數量: first(between(row, X.本日, X.累計)),
+      frags: [],
+    });
   }
-  push(pending);
-  return out;
+  if (!anchors.length) return [];
+
+  // 每個名稱片段歸給 y 最近的項次列。名稱區塊以項次列為中心上下分佈,故距離即歸屬。
+  for (const f of frags) {
+    let best = anchors[0];
+    for (const a of anchors) {
+      if (Math.abs(a.y - f.y) < Math.abs(best.y - f.y)) best = a;
+    }
+    best.frags.push(f);
+  }
+
+  return anchors.map((a) => ({
+    項次: a.項次,
+    // 依版面由上而下(y 由大到小)接合,否則長名稱會前後顛倒
+    工程項目: a.frags.slice().sort((p, q) => q.y - p.y).map((f) => f.s).join('') || null,
+    單位: a.單位,
+    契約單價: a.契約單價,
+    契約數量: a.契約數量,
+    本日完成數量: a.本日完成數量,
+    本日完成金額: a.本日完成金額,
+    累計完成數量: a.累計完成數量,
+  }));
 }
 
 /** 西元「2026年4月23日」或「2025/4/23」→ ISO。此格式用西元,不需民國換算。 */
@@ -172,23 +207,36 @@ async function parse(filePath, ctx) {
 }
 
 function selfTest() {
-  const mk = (y, arr) => ({ y, items: arr.map(([x, s]) => ({ x, y, s })) });
+  // 第三個元素可指定該 item 自己的 y(groupRows 合併鄰近列後,items 仍保有原始 y);
+  // 省略則同該列的 y。項次 4 就靠這個表達「名稱 y=561、項次 y=560」的真實形狀。
+  const mk = (y, arr) => ({ y, items: arr.map(([x, s, iy]) => ({ x, y: iy == null ? y : iy, s })) });
+  // 座標**取自 fixture 實測**(2026-05 的日誌頁,項次 4/5),不是編的。
+  // 自己編一組等距的會驗不到真實版面的兩個形狀:①名稱片段以項次列為中心上下分佈
+  // ②其中一段的 y 與項次列只差 1,會先被 Y_TOL 併進項次列本身。
   const rows = [
-    mk(300, [[56, '項次'], [140, '施工項目'], [239, '單位'], [272, '契約數量']]),
-    mk(290, [[60, '壹'], [81, '直接工程費']]),
-    mk(280, [[81, '乙種施工圍籬、警示帶、安全警示燈']]),
-    mk(270, [[62, '1'], [243, '式'], [294, '1.00'], [369, '1.00'], [448, '1.00']]),
-    mk(260, [[81, '安全措施(租用)']]),
-    mk(250, [[62, '2'], [81, '工程告示牌'], [243, '式'], [294, '1.00']]),
+    // 頁首:校名/天氣等也落在名稱欄的 x 範圍內,必須被表頭列擋在資料區外
+    mk(700, [[220, '雲林縣四湖鄉四湖國民小學']]),
+    mk(680, [[112, '上午:'], [145, '晴']]),
+    mk(669, [[56, '項次'], [140, '施工項目'], [239, '單位'], [272, '契約數量']]),
+    mk(600, [[60, '壹'], [81, '直接工程費']]),
+    mk(570, [[81, '既有地坪、磁磚、衛生設備、給排水設施']]),
+    mk(561, [[81, '、搗擺及天花板等拆除(含切割)及運棄(含'], [62, '4', 560],
+      [243, '式', 560], [294, '1.00', 560], [369, '0.05', 560], [448, '0.40', 560]]),
+    mk(552, [[81, '合法證明);環境保護與清潔']]),
+    mk(534, [[81, '既有污水處理設施抽水肥(含清潔孔開']]),
+    mk(529, [[62, '5'], [243, '式'], [294, '1.00'], [448, '0.00']]),
+    mk(524, [[81, '挖與復原)']]),
   ];
   const out = collectRows(rows);
-  const r1 = out.find((r) => r.項次 === '1');
-  // 名稱片段在項次列的上一列與下一列都有,只往一邊接會得到殘缺名稱
-  if (!r1 || r1.工程項目 !== '乙種施工圍籬、警示帶、安全警示燈安全措施(租用)') return false;
-  if (r1.單位 !== '式' || r1.契約數量 !== 1 || r1.累計完成數量 !== 1) return false;
-  if (r1.契約單價 !== null || r1.本日完成金額 !== null) return false; // 此格式不提供
+  const r4 = out.find((r) => r.項次 === '4');
+  // 前段在上、中段被併進項次列、後段在下——三段都要接回同一個項次才是完整名稱
+  if (!r4 || r4.工程項目 !== '既有地坪、磁磚、衛生設備、給排水設施、搗擺及天花板等拆除(含切割)及運棄(含合法證明);環境保護與清潔') return false;
+  if (r4.單位 !== '式' || r4.契約數量 !== 1 || r4.本日完成數量 !== 0.05 || r4.累計完成數量 !== 0.4) return false;
+  if (r4.契約單價 !== null || r4.本日完成金額 !== null) return false; // 此格式不提供
+  const r5 = out.find((r) => r.項次 === '5');
+  if (!r5 || r5.工程項目 !== '既有污水處理設施抽水肥(含清潔孔開挖與復原)') return false;
   const 壹 = out.find((r) => r.項次 === '壹');
-  if (!壹 || 壹.單位 !== null) return false;
+  if (!壹 || 壹.單位 !== null || 壹.工程項目 !== '直接工程費') return false;
   if (toISO('2026年4月23日') !== '2026-04-23' || toISO('2025/4/23') !== '2025-04-23') return false;
   return true;
 }
