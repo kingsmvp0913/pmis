@@ -58,9 +58,12 @@ module.exports = {
 `data/vendor-parsers/`(app 原始碼樹外)時會斷。改由 **registry 注入**:
 - registry 自己 `require('./filetypes')`(正常相對路徑),於 `getParser` 包裝時把它當
   `ctx.filetypes` 傳給 `parse(filePath, ctx)` / `parseAll(filePath, ctx)`。
-- 讀取器一律經 `ctx.filetypes.<fn>` 取用:`ctx.filetypes.extractPages(...)`(PDF)、
+- 讀取器一律經 `ctx.filetypes.<fn>` 取用:`ctx.filetypes.extractItems(...)`(PDF 多欄表格,**首選**)、
+  `ctx.filetypes.extractPages(...)`(PDF 單欄/標籤-值版面)、
   `ctx.filetypes.readWorkbook(...)` / `colToIndex` / `excelSerialToISO` / `gridFromWorksheet`(Excel)。
-- `selfTest`:文字型(PDF)以內建小樣本呼叫內部 `parsePage`,**不需 ft**;檔型型(Excel)因需以
+- `selfTest`:PDF 型以內建小樣本呼叫內部 `parsePage`,**不需 ft**(座標版的樣本就是一組
+  `{x, y, w, s}` items,**座標要取自真實檔案**,別自己編一組整齊的——編的驗不到「一個 item
+  橫跨兩欄」這種真實版面才有的形狀);檔型型(Excel)因需以
   檔型工具建 grid,registry 於驗證時把同一份 filetypes 當參數傳入(`selfTest(ft)`),讀取器據此
   用 `ft.gridFromWorksheet` / `ft.colToIndex` 等(仍不 require 檔型檔)。
 
@@ -70,8 +73,10 @@ module.exports = {
 ```
 
 ## 分層架構(務必沿用,勿把檔型邏輯塞進廠商 reader)
-- **`app/server/parsers/filetypes/`**:檔型共用讀取器,回傳**原始結構**,可跨廠商重用。**讀取器經 `ctx.filetypes` 注入取用,不直接 require**(見上「檔型工具注入」)。`filetypes/index.js` re-export 各檔型工具(pdf 的 `extractPages` + xlsx 的公開函式),即注入的 `ctx.filetypes`。
-  - `pdf.js`(已存在):pdf-parse@1 + 自訂 `pagerender`(依 `transform[5]` y 座標換行)逐頁抽文字;**對每頁文字做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。
+- **`app/server/parsers/filetypes/`**:檔型共用讀取器,回傳**原始結構**,可跨廠商重用。**讀取器經 `ctx.filetypes` 注入取用,不直接 require**(見上「檔型工具注入」)。`filetypes/index.js` re-export 各檔型工具(pdf 的 `extractItems`/`extractPages` + xlsx 的公開函式),即注入的 `ctx.filetypes`。
+  - `pdf.js`(已存在)提供兩條路,**多欄表格一律走後者**:
+    - `extractPages(filePath)` → 每頁純文字(依 `transform[5]` y 座標換行);**對每頁做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。只適合單欄/標籤-值版面。
+    - **`extractItems(filePath)` → 每頁的原始 item `{x, y, w, s}`(座標版)**。多欄表格抽成文字後會變成「1.002,500.00」這種黏連字串,還原不回欄位;**沒有座標就只能靠 token 順序猜,而順序在多欄表格裡不成立**(見下方「每家要客製」第 2 點)。
   - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。⑥**error cell 陷阱**:SheetJS 對 `#REF!`/`#VALUE!` 格的 `.v` 是「錯誤代碼數字」(#REF!→23、#VALUE!→15),會偽裝成正常數字。**已在 `gridFromWorksheet` 於 grid 端把 `t==='e'` 轉 null**(所有 Excel 讀取器自動受保護),但仍要警覺:別去讀那些整片 `#REF!` 的 snapshot sheet(見上「多視圖選乾淨來源」)。
   - Word(`docx.js`):`mammoth` 或解 `word/document.xml`;回傳段落/表格。
 - **`app/server/parsers/vendors/samples/<key>.pmisparser.js`**:只放**該家版面規則**(從原始結構取值 → 統一 schema)。
@@ -84,6 +89,21 @@ module.exports = {
    凡是項目名稱含 RC/PVC/PC/SUS 這類工程縮寫的列都會中,而且**沒有任何錯誤訊息**。要 M/M2/M3 就把它們列進字典,不要用樣式猜。
 2. **列邊界 / 欄序規則**:
    - PDF/逐列型(金大):以「行首 token 是否為**項次 id**(中文大寫壹貳參… 或 1–2 位阿拉伯整數)」為列界;續行(名稱片段/單位/數字/`-`)併入當前列;再以「第一個單位 token」切「名稱 | 數字欄」。
+
+     ⚠️ **數值欄一律依 x 座標歸位,禁用 token 順序。** 靠順序在「廠商只填其中一欄、
+     其餘欄連『-』都沒印」時會整排左移:金大 2026-06-04 項次8 該列只印了一個 `62.0`,
+     它是累計完成數量,舊版當成本日完成數量,再由 SP3 的 A8 生出「本日有施工但金額
+     讀不到」這個假硬錯——看起來像廠商漏填,其實是讀取器猜錯欄。1280 列只中 1 列,
+     但靠順序推欄是系統性風險。做法:
+     1. `extractItems` 取回 `{x, y, w, s}`;依 y 分視覺行(y 一變就換行,與 `extractPages` 同規則)。
+     2. 從表頭 item 取欄界 `[x, x+w]`。**表頭各欄的 y 可能有浮點差異(不在同一視覺行),
+        掃全部 items 找,別假設同行。**
+     3. **單一 item 常橫跨多欄**(`"2250.00    1.0    "` 同時裝著金額與累計),故以
+        `w / s.length` 推每個字元的 x,再取 token 中心判斷落在哪一欄。
+     4. **中心落在欄與欄之間就不指派**,留 null 讓完整性關卡看得見——不要猜一個看起來
+        合理的欄位。
+     5. 取不到欄界的欄位(如金大的表頭「單位 契約單價 契約數量」是**單一 item**)才退回
+        token 順序,並在註解寫明為什麼只有這幾欄能這樣。
    - Excel 座標型(摯東:一天一 sheet;承昇:固定欄):直接依固定 row/col 座標取值。
    - 矩陣型(晉林:235 欄監造版):依表頭列定位欄索引,逐日在橫向或縱向展開——**最棘手,需個別處理**。實測晉林教訓:①item 欄可能分成**多個平行區塊**(如 Block1=完成數量、Block2=完成金額,欄名一字不差),先偵測區塊、確認欄序對齊再取值;②天可能佔**多列**(本日列 + 累計列);③**同一檔多視圖時,優先選 error-free 的乾淨來源**(晉林逐日底稿 `so` 零 error,而 `60項監工日報`/`施工日報表` 等 snapshot sheet 才是 `#REF!`/`#VALUE!` 集中地),別盲從來源分析文件先提到的座標表;殘留舊範本 sheet 直接不讀。
 3. **vendorKey(廠商名稱)**:`meta.vendorKey` = **該廠商正式名稱**(中文字串,如 `'金大營造有限公司'`)。安裝時 registry 依此名稱查 vendors 表自動歸位到同名廠商;**名稱必須與 vendors 表一字不差**,否則單家安裝被 `install()` 擋下、批次安裝標記 unmatched。名稱須通過 `isValidVendorKey`(無檔名危險字元/首尾空白、≤100 字)。
@@ -98,15 +118,26 @@ module.exports = {
 
    a. `cd app && npx jest` 全綠;`selfTest(ft)` 回 true。
 
-   b. **解析完整性**:`node scripts/check-parser.js <vendorKey> <樣本檔>`。它會解析**整份**樣本,
-      統計「非大類列中,單位/契約數量/契約單價任一為 null」的比例。**不是 0 就不得交付**——
-      要逐列列出並說明每一列為何抽不到(原文件真的沒有 vs 讀取器讀錯)。
-      為什麼需要這關:`selfTest` 的內建小樣本是**產生者自己挑的**,自然會挑解得出來的那幾列;
-      fixture 測試又只斷言「某幾個項次」。金大 17 列裡有 2 列全錯,卻沒有任何測試會紅。
+   b. **解析完整性 + 名稱形狀健檢**:`node scripts/check-parser.js <vendorKey> <樣本檔>`。
+      解析**整份**樣本,統計「非大類列中,單位/契約數量/契約單價任一為 null」的比例,
+      並掃描項目名稱的形狀。**兩者不是 0 就不得交付**——要逐列說明為何(原文件真的沒有
+      vs 讀取器讀錯)。
+      為什麼需要完整性這關:`selfTest` 的內建小樣本是**產生者自己挑的**,自然會挑解得出來
+      的那幾列;fixture 測試又只斷言「某幾個項次」。金大 17 列裡有 2 列全錯,卻沒有任何測試會紅。
+      為什麼還要名稱健檢:**名稱被切錯不會讓任何欄位變 null**,完整性統計完全看不到。
+      富森把長名稱跨行重組錯位(項次4 開頭被切掉、項次5 混進項次4 的尾巴),三關全過,
+      直到接上真契約表跑 pipeline 才現形——六成名稱是錯的。健檢抓三種形狀:標點開頭
+      (前段被切掉)、括號不對稱(中途被截斷)、名稱過短(只剩殘骸);八家實測零誤報。
 
    c. **跨層驗證**:同一支 `check-parser.js` 會把解析結果餵進 SP3 的 `validateDailyLog`(39 條規則)。
       **硬錯數 > 0 就要逐條確認是「廠商真的填錯」還是「讀取器讀錯」**,後者一律回頭修讀取器。
       金大當初若跑過這關,A7:160、J2:160、B3:318 在交付當下就會現形。
+
+      ⚠️ **預設是「自我基準」——拿日誌自己的第一次出現值當契約值,只看得到「同一項次跨天
+      不一致」,看不到系統性讀錯。** 讀取器若每天都用同樣方式讀錯,自我比對永遠一致,
+      這正是富森躲過關卡的方式。**只要手上有已建好契約詳細價目表的工程,就必須加
+      `--contract <工程id>` 再跑一次**,讓 E3/E4/E5/E6 有外部基準。實測富森:E3 從 1679
+      (自我)→ 3187(外部),多出的 1508 個系統性名稱錯誤只有這樣才看得見。
 
    三關都過之後,才回報**確實對不到的欄位**(標紅,不靜默略過)。
 6. **交付**:讀取器進 repo `parsers/vendors/samples/`,`meta.vendorKey` = **廠商正式名稱**(中文)。安裝方式二擇一:①廠商詳細頁「安裝讀取檔」單家上傳(vendorKey 須等於該廠商名稱);②`POST /api/parsers/bulk` 多檔批次上傳,registry 依 `meta.vendorKey` 名稱自動歸位到同名廠商(對不到者標 unmatched)。兩者安裝時都會自動跑 selfTest 驗證。
@@ -121,4 +152,15 @@ module.exports = {
 - 一次只做一家;不改其他階段的檔。
 
 ## 正典範例(注入式)
-`app/server/parsers/vendors/samples/jinda.pmisparser.js`(金大竹崎 PDF)+ `app/tests/parser-jinda.test.js` —— 第一支通過驗證的讀取器,`parse(filePath, ctx)` 用 `ctx.filetypes.extractPages`(不 require pdf.js)、PDF 逐列重組 + NFKC + 民國轉西元 + 80 天 parseAll、`meta.vendorKey='金大營造有限公司'` 皆已驗證。Excel 注入式範例參 `zhidong.pmisparser.js`(`ctx.filetypes.readWorkbook`/`selfTest(ft)`,`meta.vendorKey='摯東營造有限公司'`)。新家以此為樣板。
+`app/server/parsers/vendors/samples/jinda.pmisparser.js`(金大竹崎 PDF)+ `app/tests/parser-jinda.test.js`
+—— **PDF 座標版的正典**(v1.1.0 起):`parse(filePath, ctx)` 用 `ctx.filetypes.extractItems`
+(不 require pdf.js),依 y 分視覺行做逐列重組,數值三欄依表頭欄界以 token 中心歸位,
+外加 NFKC + 民國轉西元 + 80 天 parseAll。它的 `selfTest` 樣本是**真實座標**(取自 fixture
+第 1 頁,只換工程名稱)——自己編一組整齊的座標會驗不到真實版面的形狀,而「一個 item
+橫跨兩欄」正是最容易錯的地方。
+
+⚠️ 它在 v1.0.0 曾是純文字版(`extractPages` + token 順序),**那個版本不要拿來當樣板**;
+若讀到舊 commit 的寫法,以現行檔案為準。
+
+Excel 注入式範例參 `zhidong.pmisparser.js`(`ctx.filetypes.readWorkbook`/`selfTest(ft)`,
+`meta.vendorKey='摯東營造有限公司'`)。新家以此為樣板。
