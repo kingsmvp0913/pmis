@@ -4,6 +4,10 @@
  * Exports:
  *   PLACEHOLDERS            — 範本的 15 個佔位符名稱
  *   fillTemplate(values, templatePath?) → Promise<Buffer>
+ *   TEMPLATE_PATH           — 範本檔絕對路徑
+ *   toIsoDate(v)            — 轉為 YYYY-MM-DD(pg DATE 物件 / 字串皆可),無值回 null
+ *   toRocDate(v)            — 西元轉民國中文日期,無效日期回空字串
+ *   buildLogDescription(period, startDate, completionDate) — 組公文主旨的日誌期間描述
  *
  * .docx 是 zip + xml,故不需要 Word:jszip 解開 → 換掉 word/document.xml 的佔位符
  * → 重新打包。範本(app/templates/公文_空白範本.docx)產生時已把每個佔位符壓成

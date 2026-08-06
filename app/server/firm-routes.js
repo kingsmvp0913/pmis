@@ -70,9 +70,11 @@ function registerRoutes(app) {
         'SELECT id FROM firms WHERE name = $1 AND id != $2', [name, req.params.id]
       );
       if (dup[0]) return res.status(400).json({ error: '已有同名事務所' });
+      // 整份取代語意:body 沒帶到的欄位會被 SET 成 NULL。呼叫端(views/firms.js)
+      // 須送齊六欄——GET 已回傳全部欄位可供前端帶入表單。
       const { rows } = await query(
-        `UPDATE firms SET name = $1, address = $2, phone = $3, fax = $4, contact = $5, email = $6
-         WHERE id = $7 RETURNING ${RETURNING}`,
+        `UPDATE firms SET name = $1, ${DOC_FIELDS.map((f, i) => `${f} = $${i + 2}`).join(', ')}
+         WHERE id = $${DOC_FIELDS.length + 2} RETURNING ${RETURNING}`,
         [name, ...docValues(req.body), req.params.id]
       );
       if (!rows[0]) return res.status(404).json({ error: '事務所不存在' });

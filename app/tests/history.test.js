@@ -21,6 +21,7 @@ const {
   buildSubmissionStatus,
   safeResolve,
   DATA_DIR,
+  OUTPUT_DIR,
 } = require('../server/history-routes');
 
 function freshPool() {
@@ -260,10 +261,11 @@ describe('POST /api/submissions/:id/official-doc', () => {
       'INSERT INTO schools (name) VALUES ($1) RETURNING id', ['臺中市西區大勇國民小學']);
     const { rows: ven } = await db.query(
       'INSERT INTO vendors (name) VALUES ($1) RETURNING id', ['摯東營造有限公司']);
+    const supervisorFirm = 'supervisorFirm' in opts ? opts.supervisorFirm : '呂罡銘建築師事務所';
     const { rows: proj } = await db.query(
       `INSERT INTO projects (name, school_id, vendor_id, start_date, supervisor_firm)
        VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      ['114學年度南棟教室西側廁所整修工程', sch[0].id, ven[0].id, '2026-01-26', '呂罡銘建築師事務所']);
+      ['114學年度南棟教室西側廁所整修工程', sch[0].id, ven[0].id, '2026-01-26', supervisorFirm]);
     const { rows: sub } = await db.query(
       `INSERT INTO submission_history (project_id, period, type) VALUES ($1,$2,'monthly') RETURNING id`,
       [proj[0].id, '2026-06']);
@@ -305,10 +307,17 @@ describe('POST /api/submissions/:id/official-doc', () => {
     expect(res.status).toBe(200);
   });
 
-  // 只驗回應碼會漏掉「擋了但檔案已經產出去」
+  // 只驗回應碼會漏掉「擋了但檔案已經產出去」;只驗 DB 欄位是代理指標,不是磁碟狀態
+  // (若日後有人把「寫檔」與「UPDATE DB」順序顛倒,只驗 DB 的測試照樣綠)。
   test('我方日期早於廠商日期 → 400 且不留下檔案', async () => {
     const { app, token } = await makeApp();
-    const { submissionId } = await seed(token, app);
+    const { projectId, submissionId } = await seed(token, app);
+    // 每個測試各自起一個全新的 pg-mem pool,id 會從頭編號,故不同測試之間 projectId/
+    // submissionId 常常重複;但 OUTPUT_DIR 是整個測試檔共用同一個暫存目錄不會被清空,
+    // 先確保目標路徑乾淨,才不會誤把別支測試留下的舊檔當成「這次請求寫出來的」。
+    const abs = path.join(OUTPUT_DIR, `proj_${projectId}`, `2026-06_公文_${submissionId}.docx`);
+    fs.rmSync(abs, { force: true });
+
     const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
       .set('Authorization', 'Bearer ' + token)
       .send({ ...BODY, our_doc_date: '2026-06-29', vendor_doc_date: '2026-06-30' });
@@ -317,6 +326,8 @@ describe('POST /api/submissions/:id/official-doc', () => {
     const { rows } = await db.query(
       'SELECT official_doc_path FROM submission_history WHERE id = $1', [submissionId]);
     expect(rows[0].official_doc_path).toBeFalsy();
+
+    expect(fs.existsSync(abs)).toBe(false);
   });
 
   // 公文正文寫「檢送施工日誌」,沒有日誌卻發文 = 發出一份不實的函
@@ -341,5 +352,32 @@ describe('POST /api/submissions/:id/official-doc', () => {
     const { rows } = await db.query(
       'SELECT our_doc_no FROM submission_history WHERE id = $1', [submissionId]);
     expect(rows[0].our_doc_no).toBe('銘第9999-5070112號');
+  });
+
+  // 建案時 projects.supervisor_firm 不會自動寫入(project-routes.js 的 COLUMNS 沒有這欄),
+  // 只靠承辦人另外進基本資料頁存檔才有值。沒有 settings 預設 fallback 時應擋下,
+  // 而不是靜默產出一份信頭全空的公文。
+  test('工程與系統皆無監造單位 → 400,不產出空白信頭的公文', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app, { supervisorFirm: null });
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(res.status).toBe(400);
+
+    const { rows } = await db.query(
+      'SELECT official_doc_path FROM submission_history WHERE id = $1', [submissionId]);
+    expect(rows[0].official_doc_path).toBeFalsy();
+  });
+
+  // 工程層沒填但 settings 有系統預設 → 吊預設值放行(既有慣例:專案層有值用專案層,空則吊 settings 預設)。
+  test('工程無監造單位但 settings 有預設 → 吊預設值放行', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app, { supervisorFirm: null });
+    await request(app).put('/api/settings/firms')
+      .set('Authorization', 'Bearer ' + token)
+      .send({ supervisor_firm: '呂罡銘建築師事務所' });
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(res.status).toBe(200);
   });
 });

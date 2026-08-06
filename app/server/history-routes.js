@@ -23,7 +23,7 @@ const path = require('path');
 const multer = require('multer');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
-const { getSettlementDay } = require('./settings');
+const { getSettlementDay, getFirmDefaults } = require('./settings');
 const registry = require('./parsers/registry');
 const { fillTemplate, toIsoDate, toRocDate, buildLogDescription } = require('./official-doc');
 
@@ -235,6 +235,11 @@ function registerRoutes(app) {
       if (!ourDate) missing.push('我方發文日期');
       if (!vendorNo) missing.push('廠商文號');
       if (!vendorDate) missing.push('廠商公文日期');
+      // toIsoDate 對不合法字串(如 'abc')會原樣截斷回傳,truthy 但非日期,
+      // 沒有這道檢查會讓後面 ourDate < vendorDate 變成字串比大小、發文日期整格空白仍回 200。
+      const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+      if (ourDate && !DATE_RE.test(ourDate)) missing.push('我方發文日期格式不合法');
+      if (vendorDate && !DATE_RE.test(vendorDate)) missing.push('廠商公文日期格式不合法');
       if (missing.length) {
         return res.status(400).json({ error: '缺必填欄位', fields: missing });
       }
@@ -278,12 +283,23 @@ function registerRoutes(app) {
         return res.status(400).json({ error: `${sub.period} 這期沒有任何施工日誌,不產公文` });
       }
 
+      // 專案層有值用專案層,空則吊 settings 預設(同 project-basics-routes.js 的既有慣例)。
+      // 建立工程時 supervisor_firm 不會自動寫入,只靠承辦人另外進基本資料頁存檔才有值,
+      // 沒有這道 fallback 剛建好的工程產公文會信頭全空、firms 也必然查無。
+      const firmDefaults = await getFirmDefaults();
+      const supervisorFirmName = proj.supervisor_firm || firmDefaults.supervisor_firm || '';
       const { rows: firmRows } = await query(
-        'SELECT * FROM firms WHERE name = $1', [proj.supervisor_firm || '']);
-      const firm = firmRows[0] || {};
+        'SELECT * FROM firms WHERE name = $1', [supervisorFirmName]);
+      const firm = firmRows[0];
+      if (!supervisorFirmName || !firm) {
+        return res.status(400).json({
+          error: '監造單位尚未設定,請先於工程基本資料或系統設定中指定監造單位,否則公文信頭無法產出',
+          fields: ['監造單位'],
+        });
+      }
 
       const values = {
-        發文單位: proj.supervisor_firm || '',
+        發文單位: supervisorFirmName,
         發文地址: firm.address || '',
         電話: firm.phone || '',
         傳真: firm.fax || '',
@@ -303,7 +319,9 @@ function registerRoutes(app) {
       const buffer = await fillTemplate(values);
       const dir = path.join(OUTPUT_DIR, `proj_${sub.project_id}`);
       fs.mkdirSync(dir, { recursive: true });
-      const abs = path.join(dir, `${sub.period}_公文.docx`);
+      // 檔名帶紀錄 id:submission_history 沒有 (project_id, period) 唯一約束,同一期
+      // 兩列各自產公文若同名會互相覆蓋(重下載會拿到另一列的文號,或刪一列牽連另一列)。
+      const abs = path.join(dir, `${sub.period}_公文_${sub.id}.docx`);
       fs.writeFileSync(abs, buffer);
 
       // 一期一份公文,重產直接覆蓋;欄位值一併更新,下次開彈窗才帶得出上次填的值。
