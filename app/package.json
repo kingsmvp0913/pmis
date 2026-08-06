@@ -11,6 +11,7 @@
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
+    "jszip": "^3.10.1",
     "multer": "^2.2.0",
     "pdf-parse": "^1.1.4",
     "pg": "^8.22.0",

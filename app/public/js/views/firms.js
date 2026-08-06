@@ -5,15 +5,26 @@
 
   async function renderEdit(content, id) {
     const isNew = id === 'new';
-    let firm = { name: '' };
+    let firm = { name: '', address: '', phone: '', fax: '', contact: '', email: '' };
     if (!isNew) {
       try { firm = await Api.get('firms/' + id); }
       catch (e) { showToast(e.message, 'error'); window.location.hash = '/firms'; return; }
     }
     content.appendChild(el('div', { class: 'page-title' }, isNew ? '新增事務所' : '編輯事務所'));
     const nameI = el('input', { class: 'form-control', type: 'text', value: firm.name || '' });
+    const addressI = el('input', { class: 'form-control', type: 'text', value: firm.address || '' });
+    const phoneI = el('input', { class: 'form-control', type: 'text', value: firm.phone || '' });
+    const faxI = el('input', { class: 'form-control', type: 'text', value: firm.fax || '' });
+    const contactI = el('input', { class: 'form-control', type: 'text', value: firm.contact || '' });
+    const emailI = el('input', { class: 'form-control', type: 'text', value: firm.email || '' });
     content.appendChild(el('div', { class: 'card' }, [
       el('div', { class: 'form-group' }, [el('label', {}, '事務所名稱'), nameI]),
+      // 以下五欄會直接印在公文上(地址/電話/傳真/聯絡人/信箱),留空則公文該處為空白
+      el('div', { class: 'form-group' }, [el('label', {}, '地址(公文用)'), addressI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '電話(公文用)'), phoneI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '傳真(公文用)'), faxI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '聯絡人(公文用)'), contactI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '電子信箱(公文用)'), emailI]),
       el('div', { class: 'form-actions' }, [
         el('button', { class: 'btn btn-primary', onClick: save }, '儲存'),
         el('button', { class: 'btn btn-outline', onClick: () => { window.location.hash = '/firms'; } }, '取消')
@@ -23,9 +34,17 @@
     async function save() {
       const name = nameI.value.trim();
       if (!name) { showToast('請輸入事務所名稱', 'warn'); return; }
+      const payload = {
+        name,
+        address: addressI.value.trim(),
+        phone: phoneI.value.trim(),
+        fax: faxI.value.trim(),
+        contact: contactI.value.trim(),
+        email: emailI.value.trim(),
+      };
       try {
-        if (isNew) await Api.post('firms', { name });
-        else await Api.put('firms/' + id, { name });
+        if (isNew) await Api.post('firms', payload);
+        else await Api.put('firms/' + id, payload);
         showToast('已儲存', 'success');
         window.location.hash = '/firms';
       } catch (e) { showToast(e.message, 'error'); }

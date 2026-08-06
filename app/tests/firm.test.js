@@ -168,3 +168,53 @@ describe('firm routes', () => {
     expect(rows[0].name).toBe('同一家事務所');
   });
 });
+
+describe('firms 發文資訊五欄', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  // 公文的地址/電話/傳真/聯絡人/信箱直接印在函上,存不進去就等於公文產不出來
+  test('新增時可帶入五欄並回傳', async () => {
+    const res = await request(app).post('/api/firms')
+      .set('Authorization', 'Bearer ' + token)
+      .send({
+        name: '呂罡銘建築師事務所',
+        address: '403台中市西區中華路一段7號3樓',
+        phone: '04-22238088',
+        fax: '04-22230988',
+        contact: '呂罡銘',
+        email: 'arch.kmlu@gmail.com',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.address).toBe('403台中市西區中華路一段7號3樓');
+    expect(res.body.phone).toBe('04-22238088');
+    expect(res.body.fax).toBe('04-22230988');
+    expect(res.body.contact).toBe('呂罡銘');
+    expect(res.body.email).toBe('arch.kmlu@gmail.com');
+  });
+
+  test('編輯時可更新五欄', async () => {
+    const created = await request(app).post('/api/firms')
+      .set('Authorization', 'Bearer ' + token)
+      .send({ name: '大墩規劃設計顧問有限公司' });
+    const res = await request(app).put('/api/firms/' + created.body.id)
+      .set('Authorization', 'Bearer ' + token)
+      .send({ name: '大墩規劃設計顧問有限公司', address: '403台中市西區柳川西路二段140巷8號12樓之2' });
+    expect(res.status).toBe(200);
+    expect(res.body.address).toBe('403台中市西區柳川西路二段140巷8號12樓之2');
+  });
+
+  // 五欄都是選填:既有事務所資料沒有這些值,不能因此擋住儲存
+  test('五欄可留空', async () => {
+    const res = await request(app).post('/api/firms')
+      .set('Authorization', 'Bearer ' + token)
+      .send({ name: '只有名字的事務所' });
+    expect(res.status).toBe(201);
+    expect(res.body.address == null || res.body.address === '').toBe(true);
+  });
+});

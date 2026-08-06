@@ -91,3 +91,33 @@ describe('db.migrate', () => {
     expect(rows[0].active).toBe(true);
   });
 });
+
+describe('SP4 公文欄位', () => {
+  afterEach(() => db._setPoolForTesting(null));
+
+  // 公文的發文資訊必須綁事務所:兩家事務所共用同一組電話/傳真/聯絡人/信箱,
+  // 只有名稱與地址不同,存成全域設定會讓其中一家的地址永遠是錯的。
+  test('firms 有發文資訊五欄', async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    const { rows } = await db.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'firms'"
+    );
+    const cols = rows.map((r) => r.column_name);
+    for (const c of ['address', 'phone', 'fax', 'contact', 'email']) {
+      expect(cols).toContain(c);
+    }
+  });
+
+  test('submission_history 有公文五欄', async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    const { rows } = await db.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'submission_history'"
+    );
+    const cols = rows.map((r) => r.column_name);
+    for (const c of ['our_doc_no', 'our_doc_date', 'vendor_doc_no', 'vendor_doc_date', 'copies']) {
+      expect(cols).toContain(c);
+    }
+  });
+});
