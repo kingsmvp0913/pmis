@@ -33,6 +33,49 @@ function escapeXml(v) {
     .replace(/>/g, '&gt;');
 }
 
+// pg 的 DATE 欄位回傳「伺服器在地時區午夜」的 Date 物件,toISOString() 轉 UTC
+// 會讓台北時間整批日期退一天(SP3 踩過,見 memory sp3-daily-log-findings)。
+// 純 YYYY-MM-DD 字串沒有時區資訊,原樣截斷即可。
+function toIsoDate(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
+  return String(v).slice(0, 10);
+}
+
+// 西元 → 民國。月/日不補零:三份樣本都是「115年7月1日」而非「115年07月01日」。
+function toRocDate(v) {
+  const iso = toIsoDate(v);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return '';
+  return `${Number(m[1]) - 1911}年${Number(m[2])}月${Number(m[3])}日`;
+}
+
+/**
+ * 主旨裡的日誌期間。一律用起迄(spec §8「一條被推翻的推論」:樣本的兩種句構
+ * 與整月與否無關,不猜)。起迄取日曆期間而非日誌實際首尾——廠商假日不填,
+ * 用首尾會寫出「6月2日至6月29日」這種與樣本不符的期間。
+ * 首月自開工日起、末月至竣工日止,否則公文會宣稱檢送了不存在的日期區間。
+ */
+function buildLogDescription(period, startDate, completionDate) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(period || ''));
+  if (!m) throw new Error(`period 格式須為 YYYY-MM,收到:${period}`);
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const first = `${m[1]}-${m[2]}-01`;
+  // Date.UTC(y, month, 0) = 該月最後一天(month 已是 1-based,故不減一)
+  const lastDay = String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0');
+  const last = `${m[1]}-${m[2]}-${lastDay}`;
+
+  const start = toIsoDate(startDate);
+  const done = toIsoDate(completionDate);
+  const from = start && start > first ? start : first;
+  const to = done && done < last ? done : last;
+  return `施工日誌(${toRocDate(from)}至${toRocDate(to)})`;
+}
+
 async function fillTemplate(values, templatePath = TEMPLATE_PATH) {
   const zip = await JSZip.loadAsync(fs.readFileSync(templatePath));
   const entry = zip.file('word/document.xml');
@@ -51,4 +94,4 @@ async function fillTemplate(values, templatePath = TEMPLATE_PATH) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-module.exports = { PLACEHOLDERS, fillTemplate, TEMPLATE_PATH };
+module.exports = { PLACEHOLDERS, fillTemplate, TEMPLATE_PATH, toIsoDate, toRocDate, buildLogDescription };

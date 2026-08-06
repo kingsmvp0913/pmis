@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
-const { fillTemplate, PLACEHOLDERS } = require('../server/official-doc');
+const { fillTemplate, PLACEHOLDERS, toIsoDate, toRocDate, buildLogDescription } = require('../server/official-doc');
 
 const TEMPLATE = path.resolve(__dirname, '../templates/公文_空白範本.docx');
 
@@ -79,5 +79,63 @@ describe('fillTemplate', () => {
     const tmp = path.join(require('os').tmpdir(), 'pmis-tpl-unknown.docx');
     fs.writeFileSync(tmp, await zip.generateAsync({ type: 'nodebuffer' }));
     await expect(fillTemplate(VALUES, tmp)).rejects.toThrow('沒人認得的欄位');
+  });
+});
+
+describe('toIsoDate', () => {
+  // pg 把 DATE 解析成「在地午夜的 Date」,toISOString() 會讓台北時間退一天。
+  // 公文上的日期錯一天,是會被學校退件的錯。
+  test('Date 物件取在地年月日,不經 UTC', () => {
+    expect(toIsoDate(new Date(2026, 6, 1))).toBe('2026-07-01');
+  });
+
+  test('純日期字串原樣截斷', () => {
+    expect(toIsoDate('2026-07-01')).toBe('2026-07-01');
+  });
+
+  test('null/空值回 null', () => {
+    expect(toIsoDate(null)).toBeNull();
+    expect(toIsoDate('')).toBeNull();
+  });
+});
+
+describe('toRocDate', () => {
+  test('西元轉民國,月日不補零(與樣本一致)', () => {
+    expect(toRocDate('2026-07-01')).toBe('115年7月1日');
+    expect(toRocDate('2026-12-25')).toBe('115年12月25日');
+  });
+
+  test('吃 Date 物件', () => {
+    expect(toRocDate(new Date(2026, 5, 30))).toBe('115年6月30日');
+  });
+});
+
+describe('buildLogDescription', () => {
+  // 樣本 doc_b/doc_c 寫的就是完整日曆月;不取日誌實際首尾,因為廠商本來就
+  // 不會逐日填(假日無工),用首尾會寫出「6月2日至6月29日」這種與樣本不符的期間。
+  test('一般月:整個日曆月', () => {
+    expect(buildLogDescription('2026-06', '2026-01-26', null))
+      .toBe('施工日誌(115年6月1日至115年6月30日)');
+  });
+
+  // 首月若不從開工日起算,公文會宣稱檢送了開工前那幾天的日誌
+  test('首月:自開工日起', () => {
+    expect(buildLogDescription('2026-01', '2026-01-26', null))
+      .toBe('施工日誌(115年1月26日至115年1月31日)');
+  });
+
+  // 末月同理:不裁切就會宣稱檢送了竣工後的日誌
+  test('末月:至竣工日止', () => {
+    expect(buildLogDescription('2026-08', '2026-01-26', '2026-08-15'))
+      .toBe('施工日誌(115年8月1日至115年8月15日)');
+  });
+
+  test('二月要算對天數', () => {
+    expect(buildLogDescription('2026-02', null, null))
+      .toBe('施工日誌(115年2月1日至115年2月28日)');
+  });
+
+  test('period 格式不對就擲錯,不要默默產出錯的期間', () => {
+    expect(() => buildLogDescription('2026/06', null, null)).toThrow('period');
   });
 });
