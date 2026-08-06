@@ -159,6 +159,20 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 契約表以項次為鍵。SP2 建的契約詳細價目表是**唯一權威基準**——
   // 日誌自己填的契約數量/單價只是待驗資料,不能拿來當基準。
   const contractByNo = new Map(contract.map((c) => [String(c.項次), c]));
+  // 項次對不上時的後備索引:項目名稱 → 契約項目。**只收名稱唯一的**——
+  // 同名兩筆以上就無從判斷對到哪一筆,寧可維持 E1 硬錯也不猜,猜錯會把
+  // 單位/數量/單價比到別的項目上,錯得比報 E1 更隱蔽。
+  //
+  // 為什麼需要這層:契約表(來自發包經費總表)把費用項目編成中文大寫(貳~陸),
+  // 而廠商日誌把同一批編成接續的阿拉伯數字(32~36),是實測到的常態(南陽案)。
+  // 只比項次的話,同一批項目每天都被判成「契約表中不存在」——105 天 × 5 項
+  // = 525 個假硬錯,而硬錯整份擋下,承辦人被永久卡住且看不出真正原因。
+  const contractByName = new Map();
+  for (const c of contract) {
+    const key = squash(c.項目);
+    if (!key) continue;
+    contractByName.set(key, contractByName.has(key) ? null : c); // 撞名則標記為不可用
+  }
   const seenItemNos = new Set();
   const seenDates = new Set();
 
@@ -218,10 +232,24 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       }
 
       // E 類:與 SP2 建好的契約詳細價目表逐項核對
-      const c = 項次 == null ? null : contractByNo.get(項次);
+      let c = 項次 == null ? null : contractByNo.get(項次);
+      // 項次查無 → 退而以項目名稱對應(見 contractByName 的說明)。
+      let 依名稱對應 = false;
+      if (!c && 項次 != null && contract.length && !isBlank(r.工程項目)) {
+        const byName = contractByName.get(squash(r.工程項目));
+        if (byName) { c = byName; 依名稱對應 = true; }
+      }
       if (項次 != null && contract.length && !c) {
         hard('E1', 日期, 項次, '此項次在契約詳細價目表中不存在');
       } else if (c) {
+        // 編號對不上仍要讓承辦人知道(兩份文件的編號體系不同),但不擋:
+        // 名稱唯一相同已足以確認是同一項,擋下來只會讓整份日誌無法歸檔。
+        if (依名稱對應) {
+          soft('E1', 日期, 項次, `項次與契約表不同(契約表為「${c.項次}」),已依項目名稱對應`);
+          // 對應成功代表這個契約項目其實有出現,只是編號不同。不補記的話
+          // E2 會再補一刀「整期未出現」,同一件事被判錯兩次。
+          seenItemNos.add(String(c.項次));
+        }
         if (squash(r.工程項目) !== squash(c.項目)) {
           soft('E3', 日期, 項次, `項目名稱與契約表不一致(契約表:${c.項目})`);
         }
