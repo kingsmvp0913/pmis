@@ -238,3 +238,108 @@ describe('safeResolve(防 Path Traversal)', () => {
     expect(safeResolve(undefined)).toBeNull();
   });
 });
+
+describe('POST /api/submissions/:id/official-doc', () => {
+  // 與「history routes」describe 同樣的模式:每一測試都要獨立的 pg-mem pool,
+  // 否則 db.query 會落回真的 pg.Pool(brief 原始程式碼漏了這段,補上避免撞真資料庫)。
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  // 建一組「可以產公文」的完整資料:事務所 + 學校 + 廠商 + 工程 + 繳交紀錄 + 該期日誌
+  async function seed(token, app, opts = {}) {
+    await db.query(
+      `INSERT INTO firms (name, address, phone, fax, contact, email)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      ['呂罡銘建築師事務所', '403台中市西區中華路一段7號3樓', '04-22238088',
+       '04-22230988', '呂罡銘', 'arch.kmlu@gmail.com']
+    );
+    const { rows: sch } = await db.query(
+      'INSERT INTO schools (name) VALUES ($1) RETURNING id', ['臺中市西區大勇國民小學']);
+    const { rows: ven } = await db.query(
+      'INSERT INTO vendors (name) VALUES ($1) RETURNING id', ['摯東營造有限公司']);
+    const { rows: proj } = await db.query(
+      `INSERT INTO projects (name, school_id, vendor_id, start_date, supervisor_firm)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      ['114學年度南棟教室西側廁所整修工程', sch[0].id, ven[0].id, '2026-01-26', '呂罡銘建築師事務所']);
+    const { rows: sub } = await db.query(
+      `INSERT INTO submission_history (project_id, period, type) VALUES ($1,$2,'monthly') RETURNING id`,
+      [proj[0].id, '2026-06']);
+    if (!opts.noDailyRecords) {
+      await db.query(
+        `INSERT INTO daily_records (project_id, log_date, item_no, qty) VALUES ($1,$2,$3,$4)`,
+        [proj[0].id, '2026-06-15', '1', 1]);
+    }
+    return { projectId: proj[0].id, submissionId: sub[0].id };
+  }
+
+  const BODY = {
+    our_doc_no: '銘第4131-5070112號',
+    our_doc_date: '2026-07-01',
+    vendor_doc_no: '摯勇字第1150701001號',
+    vendor_doc_date: '2026-07-01',
+    copies: '乙',
+  };
+
+  test('產出後檔案存在,且下載端點由 409 變 200', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app);
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(res.status).toBe(200);
+
+    const dl = await request(app).get(`/api/submissions/${submissionId}/download/official_doc`)
+      .set('Authorization', 'Bearer ' + token);
+    expect(dl.status).toBe(200);
+  });
+
+  // 樣本三份裡三份的我方日期都等於廠商日期,寫成嚴格大於整套當場不能用
+  test('我方日期 = 廠商日期 → 放行', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app);
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token)
+      .send({ ...BODY, our_doc_date: '2026-06-30', vendor_doc_date: '2026-06-30' });
+    expect(res.status).toBe(200);
+  });
+
+  // 只驗回應碼會漏掉「擋了但檔案已經產出去」
+  test('我方日期早於廠商日期 → 400 且不留下檔案', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app);
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token)
+      .send({ ...BODY, our_doc_date: '2026-06-29', vendor_doc_date: '2026-06-30' });
+    expect(res.status).toBe(400);
+
+    const { rows } = await db.query(
+      'SELECT official_doc_path FROM submission_history WHERE id = $1', [submissionId]);
+    expect(rows[0].official_doc_path).toBeFalsy();
+  });
+
+  // 公文正文寫「檢送施工日誌」,沒有日誌卻發文 = 發出一份不實的函
+  test('該期沒有任何施工日誌 → 400', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app, { noDailyRecords: true });
+    const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(res.status).toBe(400);
+  });
+
+  // 文號填錯要能重來,一期一份公文,舊的沒有保留價值
+  test('重產覆蓋同一列,欄位值一併更新', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app);
+    await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token)
+      .send({ ...BODY, our_doc_no: '銘第9999-5070112號' });
+
+    const { rows } = await db.query(
+      'SELECT our_doc_no FROM submission_history WHERE id = $1', [submissionId]);
+    expect(rows[0].our_doc_no).toBe('銘第9999-5070112號');
+  });
+});

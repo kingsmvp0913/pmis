@@ -25,6 +25,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { getSettlementDay } = require('./settings');
 const registry = require('./parsers/registry');
+const { fillTemplate, toIsoDate, toRocDate, buildLogDescription } = require('./official-doc');
 
 // 資料根:相對本檔求出(app/server → repo/data),禁止寫死絕對路徑。
 // 測試可用 PMIS_DATA_DIR 覆寫,避免污染真 data/。
@@ -220,6 +221,105 @@ function registerRoutes(app) {
     }
   });
 
+  // 產我方公文。文號一律人工輸入(事務所收發文簿可能與非本系統的案子共用流水,
+  // 系統編不出來);廠商公文不解析(三家三種字號格式),只收文號與日期。
+  app.post('/api/submissions/:id/official-doc', verifyToken, async (req, res) => {
+    try {
+      const ourNo = String(req.body.our_doc_no || '').trim();
+      const vendorNo = String(req.body.vendor_doc_no || '').trim();
+      const ourDate = toIsoDate(req.body.our_doc_date);
+      const vendorDate = toIsoDate(req.body.vendor_doc_date);
+      const copies = String(req.body.copies || '').trim() || '乙';
+      const missing = [];
+      if (!ourNo) missing.push('我方文號');
+      if (!ourDate) missing.push('我方發文日期');
+      if (!vendorNo) missing.push('廠商文號');
+      if (!vendorDate) missing.push('廠商公文日期');
+      if (missing.length) {
+        return res.status(400).json({ error: '缺必填欄位', fields: missing });
+      }
+      // 我方發文日期不得早於廠商公文日期(相等放行——樣本三份皆同日)。
+      if (ourDate < vendorDate) {
+        return res.status(400).json({
+          error: `我方發文日期(${ourDate})不得早於廠商公文日期(${vendorDate})`,
+          fields: ['我方發文日期'],
+        });
+      }
+
+      const { rows: subRows } = await query(
+        'SELECT * FROM submission_history WHERE id = $1', [req.params.id]);
+      const sub = subRows[0];
+      if (!sub) return res.status(404).json({ error: '紀錄不存在' });
+      if (!sub.period) return res.status(400).json({ error: '此紀錄沒有繳交週期,無法產公文' });
+
+      const { rows: projRows } = await query(
+        `SELECT p.*, s.name AS school_name, v.name AS vendor_name
+         FROM projects p
+         LEFT JOIN schools s ON s.id = p.school_id
+         LEFT JOIN vendors v ON v.id = p.vendor_id
+         WHERE p.id = $1`, [sub.project_id]);
+      const proj = projRows[0];
+      if (!proj) return res.status(404).json({ error: '工程不存在' });
+
+      // 公文正文寫的是「檢送施工日誌」,該期沒有日誌卻發文等於發出一份不實的函。
+      // 用日期區間而非 to_char(log_date,'YYYY-MM'):測試用的 pg-mem 不支援 to_char
+      // (同理見 project-routes.js 對 COUNT(DISTINCT …) 的迴避)。
+      const pm = /^(\d{4})-(\d{2})$/.exec(sub.period);
+      if (!pm) return res.status(400).json({ error: `週期格式不合法:${sub.period}` });
+      const periodStart = `${pm[1]}-${pm[2]}-01`;
+      const nextMo = Number(pm[2]) === 12 ? 1 : Number(pm[2]) + 1;
+      const nextYear = Number(pm[2]) === 12 ? Number(pm[1]) + 1 : Number(pm[1]);
+      const periodEnd = `${nextYear}-${String(nextMo).padStart(2, '0')}-01`;
+      const { rows: logRows } = await query(
+        `SELECT COUNT(*)::int AS n FROM daily_records
+         WHERE project_id = $1 AND log_date >= $2 AND log_date < $3`,
+        [sub.project_id, periodStart, periodEnd]);
+      if (!logRows[0] || logRows[0].n === 0) {
+        return res.status(400).json({ error: `${sub.period} 這期沒有任何施工日誌,不產公文` });
+      }
+
+      const { rows: firmRows } = await query(
+        'SELECT * FROM firms WHERE name = $1', [proj.supervisor_firm || '']);
+      const firm = firmRows[0] || {};
+
+      const values = {
+        發文單位: proj.supervisor_firm || '',
+        發文地址: firm.address || '',
+        電話: firm.phone || '',
+        傳真: firm.fax || '',
+        聯絡人: firm.contact || '',
+        電子信箱: firm.email || '',
+        受文者: proj.school_name || '',
+        發文日期: toRocDate(ourDate),
+        發文字號: ourNo,
+        工程名稱: proj.name || '',
+        日誌描述: buildLogDescription(sub.period, proj.start_date, proj.actual_completion_date),
+        份數: copies,
+        廠商名稱: proj.vendor_name || '',
+        廠商公文日期: toRocDate(vendorDate),
+        廠商文號: vendorNo,
+      };
+
+      const buffer = await fillTemplate(values);
+      const dir = path.join(OUTPUT_DIR, `proj_${sub.project_id}`);
+      fs.mkdirSync(dir, { recursive: true });
+      const abs = path.join(dir, `${sub.period}_公文.docx`);
+      fs.writeFileSync(abs, buffer);
+
+      // 一期一份公文,重產直接覆蓋;欄位值一併更新,下次開彈窗才帶得出上次填的值。
+      await query(
+        `UPDATE submission_history
+         SET official_doc_path = $1, our_doc_no = $2, our_doc_date = $3,
+             vendor_doc_no = $4, vendor_doc_date = $5, copies = $6
+         WHERE id = $7`,
+        [relToData(abs), ourNo, ourDate, vendorNo, vendorDate, copies, req.params.id]);
+
+      res.json({ ok: true, path: relToData(abs) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // 下載:daily_log 正常;report / official_doc 尚未產出 → 409
   app.get('/api/submissions/:id/download/:kind', verifyToken, async (req, res) => {
     try {
@@ -230,13 +330,9 @@ function registerRoutes(app) {
       const { rows } = await query('SELECT * FROM submission_history WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '紀錄不存在' });
 
-      // 公文另做(待範本):一律 409。
-      if (kind === 'official_doc') {
-        return res.status(409).json({ error: '公文尚未產出(待範本)' });
-      }
-      // 監造報表:有檔才給,沒值才 409。
-      if (kind === 'report' && !rows[0][col]) {
-        return res.status(409).json({ error: '監造報表尚未產生' });
+      // 公文/監造報表:有檔才給,沒值才 409。
+      if ((kind === 'report' || kind === 'official_doc') && !rows[0][col]) {
+        return res.status(409).json({ error: kind === 'report' ? '監造報表尚未產生' : '公文尚未產出' });
       }
 
       const rel = rows[0][col];
