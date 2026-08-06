@@ -75,24 +75,11 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 
 ## 6. 跑測試（`app/` Node 專案）
 
-> 數字為 2026-08-01 在本機實測，非套用他案結論。
+> 只記兩件「不看就會賠一輪」的事。跑法看 `app/package.json`，輸出精簡看全域規則，測試數字一律當場跑。
 
-**日常全跑**（跳過 Excel 整合測）：
-
-```bash
-cd app && SP0_SKIP_EXCEL=1 npx jest --runInBand --silent --noStackTrace --no-color
-```
-
-**含 Excel 整合測**（碰到 `template-engine.js` / `excel-com-driver.ps1` / 範本寫入時才需要）：把 `SP0_SKIP_EXCEL=1` 拿掉。
-
-- **這裡真正貴的是「時間」不是「token」**。全跑 272 秒，其中 **225 秒**全花在 `tests/template-engine.integration.test.js`（真的開 Excel）；跳過它剩約 47 秒。輸出量本身很小（預設 2,595 bytes / 66 行；加 `--silent --noStackTrace --no-color` 降到 1,749 bytes / 46 行），**沒到需要為省 token 而大動干戈的程度**——加旗標只是順手，別為此花力氣。
-- **兩段式**：全跑只求知道哪支紅；**紅了才對那一支單獨跑完整輸出**——log 在全綠時是噪音，在除錯時是線索。
-
-### 既有紅燈（乾淨 HEAD 也會紅，不要 debug）
-
-- **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅。** 實測連跑兩次紅的是不同子集（第一次 `copyRowDown`；第二次 `setCell` + `setRange`），錯誤都是「Excel 驅動重試 3 次仍失敗」＝ Excel COM 間歇回 null（見 memory `xlsm-excel-com-findings`）。**該檔紅了先重跑一次確認是否換一支紅；換了就是 flaky，不要追。**
-- 用 `SP0_SKIP_EXCEL=1` 跑「日常全跑」指令時，`tests/template-engine.integration.test.js` 與 `tests/project-basics.integration.test.js` 這兩支整支被 `describe.skip` 跳過（非執行後判定綠/紅）。
-- **不要在本檔記「確切通過數」。** 任何新增測試的 commit 都會讓它過期，下個 session 讀到過期數字反而要花一輪確認是不是有東西壞了——它製造的正是它想防止的困惑。（2026-08-01 記過 426，2026-08-02 就已經是 431。）要基線就當場跑一次。
-- **要記的是「哪些紅/跳過是預期的」**，這才不會隨 commit 漂移：
-  - **日常全跑（`SP0_SKIP_EXCEL=1`）**：應為 0 紅、**5 skipped**。那 5 支是上述兩個整檔被 `describe.skip` 跳過的預期值，**不是漏跑**——看到就別再診斷一輪。
-  - **完整模式（不設旗標，含 Excel 整合測）**：0 skipped。唯一的浮動來源是 `tests/template-engine.integration.test.js` 那 3 支（Excel COM 間歇失敗）。宣稱「全套綠」前先確認紅的是不是這支。
+- **日常全跑帶 `SP0_SKIP_EXCEL=1`**（此旗標只存在於測試碼裡，`package.json` 查不到）。它讓
+  `tests/template-engine.integration.test.js` 與 `tests/project-basics.integration.test.js` 整檔 `describe.skip`——
+  **skipped 是預期的，不是漏跑**。這兩檔會真的開 Excel，佔掉全跑絕大部分時間。碰
+  `template-engine.js` / `excel-com-driver.ps1` / 範本寫入時才拿掉旗標。
+- **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅**：Excel COM 間歇回 null，連跑兩次紅的是不同子集
+  （見 memory `xlsm-excel-com-findings`）。**紅了先重跑一次；換一支紅就是 flaky，不要追。**
