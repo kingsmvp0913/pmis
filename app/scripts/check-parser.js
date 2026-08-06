@@ -22,6 +22,48 @@ const { validateDailyLog, isCategoryRow } = require('../server/daily-log-validat
 
 const REQUIRED_ROW_FIELDS = ['單位', '契約數量', '契約單價'];
 
+// ── 名稱形狀健檢 ─────────────────────────────────────────
+// 上面的完整性關卡只看「單位/契約數量/契約單價是否為 null」,而**名稱被切錯不會讓
+// 任何欄位變 null**;下面的跨層驗證又是拿日誌自己的第一次出現值當契約基準,讀取器
+// 若每天都用同樣方式讀錯,自我比對永遠一致。富森讀取器把長名稱跨行重組錯位
+// (項次4 的開頭被切掉、項次5 混進項次4 的尾巴)就這樣三關全過,直到接上真實契約表
+// 跑 pipeline 才現形——六成的項目名稱是錯的。
+//
+// 這裡的規則刻意都**不需要外部基準**,單看名稱本身的形狀就能抓到錯位。
+const countOf = (s, re) => (s.match(re) || []).length;
+const NAME_RULES = [
+  { code: '標點開頭', why: '名稱前段可能被切掉(接到上一列去了)',
+    test: (n) => /^[、，,;；。:：)）\]】}]/.test(n) },
+  { code: '括號不對稱', why: '名稱可能在括號中途被截斷',
+    test: (n) => countOf(n, /[(（]/g) !== countOf(n, /[)）]/g) },
+  { code: '名稱過短', why: '可能只剩被切碎的殘骸',
+    test: (n) => n.length < 3 },
+];
+
+/**
+ * 掃描明細列的項目名稱形狀,回報疑似跨行重組錯位的列。
+ * 同一項次的同一種異常只回報一次——同個項次通常每天都出現,重複 119 次只會淹掉輸出。
+ * @param {Array<object>} rows dailyRows(可跨多天串接)
+ * @returns {Array<{項次:string, code:string, why:string, 名稱:string}>}
+ */
+function detectNameAnomalies(rows) {
+  const out = [];
+  const seen = new Set();
+  for (const r of rows || []) {
+    if (isCategoryRow(r)) continue;              // 大類列本來就只有類別名,不是明細
+    const name = r.工程項目 == null ? '' : String(r.工程項目).trim();
+    if (!name) continue;                          // 空名稱由既有的 A5 必填檢查負責
+    for (const rule of NAME_RULES) {
+      if (!rule.test(name)) continue;
+      const key = `${r.項次}|${rule.code}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ 項次: String(r.項次), code: rule.code, why: rule.why, 名稱: name });
+    }
+  }
+  return out;
+}
+
 function loadParser(ref) {
   const direct = path.resolve(ref);
   if (fs.existsSync(direct)) return require(direct);
@@ -33,10 +75,41 @@ function loadParser(ref) {
   throw new Error(`找不到讀取器:${ref}`);
 }
 
+/**
+ * 從 DB 取某工程已建好的契約詳細價目表(SP2 的產出)當**外部基準**。
+ *
+ * 為什麼需要它:預設的自我基準(見關卡 c)是拿日誌自己的第一次出現值當契約值,
+ * 讀取器若每天都用同樣方式讀錯,自我比對永遠一致——系統性讀錯完全看不見。
+ * 接上真實契約表之後,E3(名稱)/E4(單位)/E5(數量)/E6(單價)才有第二個來源可比。
+ *
+ * 連線設定讀 data/config.json(同 scripts/start.js 的作法),不寫死絕對路徑。
+ */
+async function loadContractFromDb(projectId) {
+  const cfgPath = path.resolve(__dirname, '..', '..', 'data', 'config.json');
+  if (!fs.existsSync(cfgPath)) throw new Error(`找不到 ${cfgPath},無法連 DB 取契約表`);
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+  if (cfg.DATABASE_URL) process.env.DATABASE_URL = cfg.DATABASE_URL;
+  const { query } = require('../server/db');
+  const { rows } = await query(
+    `SELECT item_no, name, unit, quantity, unit_price FROM contract_items
+      WHERE project_id = $1 ORDER BY seq`, [projectId]);
+  if (!rows.length) throw new Error(`工程 ${projectId} 沒有契約詳細價目表(SP2 尚未建立?)`);
+  return rows.map((r) => ({
+    項次: String(r.item_no), 項目: r.name, 單位: r.unit,
+    數量: Number(r.quantity), 單價: Number(r.unit_price),
+  }));
+}
+
 async function main() {
-  const [ref, samplePath] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const ci = argv.indexOf('--contract');
+  const contractRef = ci >= 0 ? argv[ci + 1] : null;
+  // 沒有 --contract 時 ci 是 -1,不可拿 ci+1 當索引過濾——那會把第一個參數濾掉。
+  const [ref, samplePath] = ci >= 0 ? argv.filter((_, i) => i !== ci && i !== ci + 1) : argv;
   if (!ref || !samplePath) {
-    console.error('用法:node scripts/check-parser.js <讀取器路徑或 vendorKey> <施工日誌樣本檔>');
+    console.error('用法:node scripts/check-parser.js <讀取器路徑或 vendorKey> <施工日誌樣本檔> [--contract <工程id>]');
+    console.error('  --contract:改用該工程已建好的契約詳細價目表當基準(預設是拿日誌自身的值當基準,');
+    console.error('              看不到系統性讀錯——每天都用同樣方式讀錯時,自我比對永遠一致)');
     process.exit(2);
   }
   const mod = loadParser(ref);
@@ -91,26 +164,48 @@ async function main() {
       console.log(`  ✗ 項次 ${k} — 缺 ${[...v.缺].join('/')}(${v.次數} 天)`);
     }
   }
+  // 名稱形狀健檢:缺漏統計看不到「名稱被切錯」,因為錯位不會讓任何欄位變 null。
+  const nameAnomalies = detectNameAnomalies(allRows);
+  if (nameAnomalies.length) {
+    console.log(`\n  ⚠ 疑似名稱錯位 ${nameAnomalies.length} 項(名稱被切錯不會讓欄位變 null,缺漏統計看不到):`);
+    for (const a of nameAnomalies.slice(0, 10)) {
+      console.log(`    項次 ${a.項次} [${a.code}] ${a.why}`);
+      console.log(`      「${a.名稱.slice(0, 40)}${a.名稱.length > 40 ? '…' : ''}」`);
+    }
+    if (nameAnomalies.length > 10) console.log(`    …另有 ${nameAnomalies.length - 10} 項`);
+  }
+
   const headerAllMissing = Object.entries(headerMissing).filter(([, n]) => n === days.length);
   if (headerAllMissing.length) {
     console.log(`  header 整份皆空:${headerAllMissing.map(([k]) => k).join('、')}`);
   }
 
   // ── 關卡 c:跨層驗證(SP3 的 39 條)────────────────────────
-  // 契約表用該份日誌自己的契約值當基準:這裡要的是「讀取器有沒有讀錯」,
-  // 不是「廠商有沒有填錯」,故不需要真的 SP2 契約表。
-  const contract = [];
-  const seen = new Set();
-  for (const d of days) {
-    for (const r of d.dailyRows || []) {
-      if (isCategoryRow(r) || r.項次 == null || seen.has(String(r.項次))) continue;
-      if (r.單位 == null || r.契約數量 == null) continue;
-      seen.add(String(r.項次));
-      contract.push({
-        項次: String(r.項次), 項目: r.工程項目, 單位: r.單位,
-        數量: Number(r.契約數量), 單價: Number(r.契約單價),
-      });
+  // 預設基準:該份日誌自己的第一次出現值。這樣不需要真的 SP2 契約表就能跑,
+  // 但**只看得到「同一項次跨天不一致」,看不到系統性讀錯**——讀取器若每天都用
+  // 同樣方式讀錯,自我比對永遠一致(富森的名稱錯位就是這樣躲過三道關卡的)。
+  // 要抓系統性讀錯,用 --contract <工程id> 接上真實的契約詳細價目表當外部基準。
+  let contract;
+  let 基準說明;
+  if (contractRef) {
+    contract = await loadContractFromDb(contractRef);
+    基準說明 = `外部基準:工程 ${contractRef} 的契約詳細價目表(${contract.length} 項)`;
+  } else {
+    contract = [];
+    const seen = new Set();
+    for (const d of days) {
+      for (const r of d.dailyRows || []) {
+        if (isCategoryRow(r) || r.項次 == null || seen.has(String(r.項次))) continue;
+        if (r.單位 == null || r.契約數量 == null) continue;
+        seen.add(String(r.項次));
+        contract.push({
+          項次: String(r.項次), 項目: r.工程項目, 單位: r.單位,
+          數量: Number(r.契約數量), 單價: Number(r.契約單價),
+        });
+      }
     }
+    基準說明 = '自我基準:日誌自身的第一次出現值 —— 看不到系統性讀錯,'
+      + '要抓請加 --contract <工程id>';
   }
   const result = validateDailyLog({ days, contract, project: {} });
   const tally = (arr) => {
@@ -119,6 +214,7 @@ async function main() {
     return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(' ') || '(無)';
   };
   console.log('\n── 關卡 c:跨層驗證(SP3 39 條)──');
+  console.log(`  ${基準說明}`);
   console.log(`硬錯 ${result.errors.length} 項 → ${tally(result.errors)}`);
   console.log(`軟警告 ${result.warnings.length} 項 → ${tally(result.warnings)}`);
   console.log(`未檢查 → ${result.skipped.map((s) => s.code).join(' ')}`);
@@ -126,9 +222,17 @@ async function main() {
     console.log(`  例:${e.code} ${e.日期 || ''} 項次${e.項次 || '-'} ${e.訊息}`);
   }
 
-  const pass = missing.length === 0 && result.errors.length === 0;
+  // 名稱異常一併納入判定:八家實測零誤報(只有富森 10 項、陳宏鈞 1 項命中,都是真的
+  // 被切錯),而名稱錯了會讓下游的「依名稱對應契約項目」失效——那是項次對不上時
+  // 唯一的退路,退路也錯就沒有東西接得住了。
+  const pass = missing.length === 0 && nameAnomalies.length === 0 && result.errors.length === 0;
   console.log(`\n結果:${pass ? '通過' : '未通過 —— 逐條確認是廠商填錯還是讀取器讀錯,後者一律回頭修讀取器'}`);
   process.exit(pass ? 0 : 1);
 }
 
-main().catch((e) => { console.error('失敗:', e.message); process.exit(2); });
+// 只有直接執行才跑;被 require(測試)時不得自己啟動,否則會吃到呼叫端的 argv。
+if (require.main === module) {
+  main().catch((e) => { console.error('失敗:', e.message); process.exit(2); });
+}
+
+module.exports = { detectNameAnomalies };
