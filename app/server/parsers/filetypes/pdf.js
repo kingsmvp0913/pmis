@@ -148,8 +148,13 @@ async function extractRows(fileOrBuffer) {
  * 廠商讀取器需要的是原始座標,自己依該家版面分欄——同 SP1B 對 OCR 的結論:
  * 把座標丟掉之後,下游只能靠順序猜,而順序在多欄表格裡不成立。
  *
+ * 一併回傳 `w`(item 繪製寬度)。單一 item 常橫跨多欄——金大第二聯的
+ * `"-   124.0    "` 就同時裝著金額欄的「-」與累計欄的「124.0」,只有 x(左端)
+ * 無法判斷欄內某個 token 的位置;有 w 才能用 w/s.length 推每個字元的 x,
+ * 進而算出 token 中心落在哪一欄。
+ *
  * @param {string|Buffer} fileOrBuffer
- * @returns {Promise<Array<{page:number, items:Array<{x:number,y:number,s:string}>}>>}
+ * @returns {Promise<Array<{page:number, items:Array<{x:number,y:number,w:number,s:string}>}>>}
  */
 async function extractItems(fileOrBuffer) {
   const buffer = Buffer.isBuffer(fileOrBuffer) ? fileOrBuffer : fs.readFileSync(fileOrBuffer);
@@ -161,6 +166,7 @@ async function extractItems(fileOrBuffer) {
         pages.push(tc.items.map((it) => ({
           x: it.transform[4],
           y: it.transform[5],
+          w: typeof it.width === 'number' ? it.width : 0,
           // 與 extractPages 一致地做 NFKC:CID 字型會把「年」等字映到 CJK 相容區,
           // 不正規化則下游 regex 抓不到(見本檔頭註)。
           s: fixCjkRadicals(String(it.str == null ? '' : it.str).normalize('NFKC')),

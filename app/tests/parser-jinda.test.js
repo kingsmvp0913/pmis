@@ -139,6 +139,39 @@ describe('sample-jinda parse(第一天/第一頁)', () => {
   });
 });
 
+// 廠商只填一欄、其餘欄連「-」都沒印時,靠 token 順序推欄位會把值掛到第一個數值欄。
+// 2026-06-04 項次8 實測:該列只印了一個 62.0,座標落在累計完成數量欄(464.1–518.1),
+// 本日完成數量欄(344.3–398.3)整格是空的——但舊解析把它讀成本日完成數量,再由
+// SP3 的 A8 生出「本日有施工但金額讀不到」這個假硬錯,看起來像廠商漏填金額。
+// 判準是右端對齊:該列的數值 item 右端 525.8 與同頁所有正常列一致,62.0 的字元位置
+// 與正常列的累計值(如項次7 的 124.0)重疊。
+describe('sample-jinda 只填一欄的列必須依座標歸位', () => {
+  let day;
+  beforeAll(async () => {
+    const all = await jinda.parseAll(FIXTURE, ctx);
+    day = all.find((d) => d.header.填報日期 === '2026-06-04');
+  });
+
+  test('2026-06-04 存在於樣本中', () => {
+    expect(day).toBeTruthy();
+  });
+
+  test('項次8:62.0 是累計完成數量,不是本日完成數量', () => {
+    const r8 = day.dailyRows.find((r) => r.項次 === '8');
+    expect(r8).toBeTruthy();
+    expect(r8.累計完成數量).toBe(62.0);
+    expect(r8.本日完成數量).toBeNull();
+    expect(r8.本日完成金額).toBeNull();
+  });
+
+  test('同頁正常列(項次7)不受影響:本日兩欄為 null、累計 124', () => {
+    const r7 = day.dailyRows.find((r) => r.項次 === '7');
+    expect(r7.本日完成數量).toBeNull();
+    expect(r7.本日完成金額).toBeNull();
+    expect(r7.累計完成數量).toBe(124.0);
+  });
+});
+
 describe('sample-jinda parseAll(逐日彙總)', () => {
   let all;
   beforeAll(async () => {
