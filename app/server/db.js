@@ -220,6 +220,21 @@ async function migrate() {
     // 放在主檔而非聯絡人表:地址屬於機構本身,同一機構的多個聯絡人共用一個地址。
     ['schools', 'address', 'TEXT'],
     ['vendors', 'address', 'TEXT'],
+    // SP4 公文:發文資訊綁事務所——兩家事務所共用同一組電話/傳真/聯絡人/信箱,
+    // 只有名稱與地址不同(見 spec 2026-08-06-SP4-公文-design §2),存全域設定
+    // 會讓其中一家的地址永遠是錯的。
+    ['firms', 'address', 'TEXT'],
+    ['firms', 'phone', 'TEXT'],
+    ['firms', 'fax', 'TEXT'],
+    ['firms', 'contact', 'TEXT'],
+    ['firms', 'email', 'TEXT'],
+    // 公文文號一律人工輸入整串:樣本裡連「銘第」vs「墩字第」都不一致,
+    // 拆欄位等於把一個不成立的格式寫死。
+    ['submission_history', 'our_doc_no', 'TEXT'],
+    ['submission_history', 'our_doc_date', 'DATE'],
+    ['submission_history', 'vendor_doc_no', 'TEXT'],
+    ['submission_history', 'vendor_doc_date', 'DATE'],
+    ['submission_history', 'copies', 'TEXT'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
