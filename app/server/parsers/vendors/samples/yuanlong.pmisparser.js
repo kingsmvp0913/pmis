@@ -354,8 +354,10 @@ function parsePage(items) {
   const hCrewCum = find(/^累計人數$/);
   const hMach = find(/^機具名稱$/);
   const hMachToday = find(/^本日使用數量$/);
+  const hMachCum = find(/^累計使用數量$/);
   if (hCrew && hCrewToday && hCrewCum && hMach && hMachToday) {
-    const xs = [-Infinity, hCrewToday.x, hCrewCum.x, hMach.x, hMachToday.x];
+    // 沒有「累計使用數量」這一界的話,機具的本日與累計會併成同一格(1 與 1 變成 11)
+    const xs = [-Infinity, hCrewToday.x, hCrewCum.x, hMach.x, hMachToday.x, hMachCum ? hMachCum.x : Infinity];
     const stop = all.find((b) => b.y < hCrew.y && /^四、/.test(despace(bandText(b))));
     const bottom = stop ? stop.y : -Infinity;
     const 出工明細 = [];
