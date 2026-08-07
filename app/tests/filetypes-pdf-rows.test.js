@@ -71,6 +71,66 @@ describe('rowsFromItems — 決標公告兩欄表座標分欄(純函式)', () =>
   });
 });
 
+// ── 欄界推導 ────────────────────────────────────────────────
+// 寫死 x 常數撐不住:48 份決標公告實測,標籤欄 x 有 7 種值(50.2 佔 41 案,
+// 另有 48.3/49.8/46.7/45.7/44.9/17.4)。饒平只差 0.1(44.9 < 45)就被當成區塊直排字
+// 整份丟掉、元長整頁左移到 17.4,兩案的 5 個欄位全部抽不到,而 parseAwardNotice
+// 不會 throw——輸出是「每欄都 null」的合法結構,看起來像文件沒填。
+describe('columnBounds — 由文件自身推導欄界', () => {
+  const { columnBounds, rowsFromItems } = require('../server/parsers/filetypes/pdf');
+
+  // 造一份「標籤欄 x=labelX、值欄 x=valueX」的文件,附少量區塊直排字
+  const doc = (labelX, valueX, blockX) => {
+    const items = [];
+    for (let i = 0; i < 20; i++) {
+      items.push({ x: labelX, y: 700 - i * 10, s: `標籤${i}` });
+      items.push({ x: valueX, y: 700 - i * 10, s: `值${i}` });
+    }
+    for (let i = 0; i < 4; i++) items.push({ x: blockX, y: 700 - i * 10, s: '資' });
+    return items;
+  };
+
+  test('元長版面(整頁左移到 x=17.4)也分得出標籤與值', () => {
+    const items = doc(17.4, 118.3, 2.6);
+    const b = columnBounds(items);
+    expect(b.blockMax).toBeGreaterThan(2.6);
+    expect(b.blockMax).toBeLessThanOrEqual(17.4);
+    expect(b.labelMax).toBeGreaterThan(17.4);
+    expect(b.labelMax).toBeLessThanOrEqual(118.3);
+    expect(rowsFromItems(items)[0]).toEqual({ label: '標籤0', value: '值0' });
+  });
+
+  test('饒平版面(標籤欄 x=44.9,只差 0.1 就落在舊常數外)也分得出來', () => {
+    const items = doc(44.9, 138.5, 30.7);
+    expect(rowsFromItems(items)[0]).toEqual({ label: '標籤0', value: '值0' });
+  });
+
+  test('主流版面(50.2/168.7)行為不變', () => {
+    const items = doc(50.2, 168.7, 32.2);
+    expect(rowsFromItems(items)[0]).toEqual({ label: '標籤0', value: '值0' });
+  });
+
+  // 推導需要夠多的 item 才有意義。少量 item(如單元測試的三兩筆)推出來的
+  // 「欄界」只是噪音,寧可退回實測主流版面的常數,也不要用猜的欄界靜默切錯。
+  test('item 太少時退回預設常數,不用推導出的噪音', () => {
+    const b = columnBounds([{ x: 31, y: 1, s: '機' }, { x: 49, y: 1, s: '機關名稱' }, { x: 166, y: 1, s: 'X' }]);
+    expect(b).toEqual({ blockMax: 45, labelMax: 130 });
+  });
+
+  test('完全沒有 item 時也回預設常數,不得 throw', () => {
+    expect(columnBounds([])).toEqual({ blockMax: 45, labelMax: 130 });
+  });
+
+  // extractRows 是逐頁呼叫 rowsFromItems 的。欄界若各頁自己推,短頁(item 不足)
+  // 會退回常數,同一份文件的前後頁用不同欄界切,結果不一致。
+  test('bounds 可外部傳入,讓整份文件共用同一組欄界', () => {
+    const short = [{ x: 17.4, y: 1, s: '標案名稱' }, { x: 118.3, y: 1, s: '某工程' }];
+    expect(rowsFromItems(short)[0]).not.toEqual({ label: '標案名稱', value: '某工程' }); // 自己推 → 退回常數 → 切錯
+    expect(rowsFromItems(short, { blockMax: 12.4, labelMax: 113.3 })[0])
+      .toEqual({ label: '標案名稱', value: '某工程' });
+  });
+});
+
 describe('rowsFromItems — CJK 部首補充區誤映還原(決標公告字型缺陷)', () => {
   // 用碼位跳脫(\uXXXX)而非直接貼字元:直接貼字元的話,檔案編碼一變(或編輯器
   // 自動正規化)差異就會消失,測試會失去意義、看不出還原是否真的發生。

@@ -10,7 +10,8 @@
  *
  * Exports:
  *   extractPages(filePath) -> Promise<Array<{ page:number, text:string }>>
- *   rowsFromItems(items)   -> Array<{label,value}>(純函式,供兩欄表版面用)
+ *   columnBounds(items)    -> {blockMax,labelMax}(由 x 分布推導欄界;證據不足回預設常數)
+ *   rowsFromItems(items, bounds?) -> Array<{label,value}>(純函式,供兩欄表版面用)
  *   extractRows(fileOrBuffer) -> Promise<Array<{page, rows:[{label,value}]}>>
  */
 const fs = require('fs');
@@ -60,6 +61,44 @@ const BLOCK_MAX_X = 45;
 const LABEL_MAX_X = 130;
 const Y_TOLERANCE = 3;
 
+// 欄界推導所需的最少同 x item 數。低於此表示證據不足(如單元測試的三兩筆),
+// 推出來的只是噪音,寧可退回上面兩個實測主流值。
+const MIN_CLUSTER = 10;
+// 欄界往左讓的距離。實測各案「標籤欄 x − 區塊直排字 x」最小 14.2(饒平),
+// 讓 5pt 足以把直排字排除又不會咬到標籤欄。
+const COLUMN_MARGIN = 5;
+
+/**
+ * 由 item 的 x 分布推導「區塊/標籤」與「標籤/值」兩道欄界。
+ *
+ * 為何不能寫死:48 份決標公告實測,標籤欄 x 有 **7 種值**(50.2 佔 41 案,另有
+ * 48.3/49.8/46.7/45.7/44.9/17.4)。饒平的 44.9 只差 0.1 就落在舊常數 45 之外,
+ * 整份被當成區塊直排字丟掉;元長整頁左移到 17.4。兩案的 5 個欄位全部抽不到,
+ * 而 parseAwardNotice **不會 throw**——輸出是「每欄都 null」的合法結構,
+ * 看起來像文件沒填,是拿讀取器自己的輸出當基準時驗不出來的那一類。
+ *
+ * 推導依據:標籤欄與值欄各自是一大票 item 的左對齊點,x 頻次的前兩名就是它們,
+ * 且與第三名(區塊直排字)差距懸殊——實測古坑 143/120 vs 21、元長 127/102 vs 21。
+ * 兩者中 x 較小的是標籤欄(48 案皆然)。
+ *
+ * @param {Array<{x:number,s:string}>} items 整份文件(非單頁)的 item
+ * @returns {{blockMax:number, labelMax:number}}
+ */
+function columnBounds(items) {
+  const cnt = new Map();
+  for (const it of items || []) {
+    if (!String(it && it.s != null ? it.s : '').trim()) continue;
+    const k = Math.round(it.x * 10) / 10;
+    cnt.set(k, (cnt.get(k) || 0) + 1);
+  }
+  const top = [...cnt.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
+  if (top.length < 2 || top[1][1] < MIN_CLUSTER) {
+    return { blockMax: BLOCK_MAX_X, labelMax: LABEL_MAX_X };
+  }
+  const [labelX, valueX] = [top[0][0], top[1][0]].sort((a, b) => a - b);
+  return { blockMax: labelX - COLUMN_MARGIN, labelMax: valueX - COLUMN_MARGIN };
+}
+
 // 決標公告 PDF 的內嵌字型 ToUnicode CMap 把下列漢字誤映到 CJK 部首補充區
 // (U+2E80–U+2EFF),而非標準統一漢字。NFKC 對這個區塊沒有相容分解(它只
 // 還原得了 U+F9xx 相容漢字),不額外映射的話,這些字下游與專案主檔
@@ -86,10 +125,14 @@ function fixCjkRadicals(s) {
  * NFKC 正規化後再做 CJK 部首補充區誤映還原(見 CJK_RADICAL_FIXUPS),
  * 修正決標公告字型的已知缺陷。
  *
- * @param {Array<{x:number,y:number,s:string}>} items
+ * @param {Array<{x:number,y:number,s:string}>} items 單頁的 item
+ * @param {{blockMax:number,labelMax:number}} [bounds] 欄界;省略則由本頁 item 自行推導。
+ *   **整份文件應由 extractRows 算一次再傳進來**:逐頁各自推導的話,item 不足的短頁
+ *   會退回預設常數,同一份文件的前後頁用不同欄界切,結果不一致。
  * @returns {Array<{label:string,value:string}>} 由上而下
  */
-function rowsFromItems(items) {
+function rowsFromItems(items, bounds) {
+  const { blockMax, labelMax } = bounds || columnBounds(items);
   const buckets = [];
   // 先依 y 由大到小排序再分組:bucket 錨點取自「第一個放入的 item」,
   // 若不先排序,items 原始順序不同(如 y 鏈狀相近的 415/413/411/409,
@@ -113,7 +156,7 @@ function rowsFromItems(items) {
       .join('')
       .normalize('NFKC')
       .trim());
-    return { label: join(BLOCK_MAX_X, LABEL_MAX_X), value: join(LABEL_MAX_X, Infinity) };
+    return { label: join(blockMax, labelMax), value: join(labelMax, Infinity) };
   });
 }
 
@@ -135,7 +178,10 @@ async function extractRows(fileOrBuffer) {
         return '';
       }),
   });
-  return pages.map((items, i) => ({ page: i + 1, rows: rowsFromItems(items) }));
+  // 欄界由**整份文件**的 item 算一次:逐頁各自推導的話,item 不足的短頁會退回
+  // 預設常數,同一份文件的前後頁用不同欄界切。
+  const bounds = columnBounds(pages.flat());
+  return pages.map((items, i) => ({ page: i + 1, rows: rowsFromItems(items, bounds) }));
 }
 
 /**
@@ -177,4 +223,4 @@ async function extractItems(fileOrBuffer) {
   return pages.map((items, i) => ({ page: i + 1, items }));
 }
 
-module.exports = { extractPages, rowsFromItems, extractRows, extractItems };
+module.exports = { extractPages, columnBounds, rowsFromItems, extractRows, extractItems };
