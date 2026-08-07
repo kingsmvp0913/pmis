@@ -13,6 +13,14 @@ test('selfTest 以內建 grid 通過,不需注入', () => {
   expect(mod.selfTest()).toBe(true);
 });
 
+// vendorKey 曾被推定成「玉森營造有限公司」(樣本檔沒有廠商全名),而 5 個舊案的
+// 決標公告一致是「玉森土木包工業」。org-match.findByName 是逐字相等,名字錯了
+// 讀取器就永遠叫不出來——**而且沒有任何錯誤訊息**,看起來像這家還沒有讀取器。
+// 71 份日誌因此閒置了一整輪。釘住它,不要再靠人記得去核對。
+test('vendorKey 是決標公告上的得標廠商名', () => {
+  expect(mod.meta.vendorKey).toBe('玉森土木包工業');
+});
+
 describe('yusen parse(第一天)', () => {
   let out;
   beforeAll(async () => { out = await mod.parse(FIXTURE, ctx); });
