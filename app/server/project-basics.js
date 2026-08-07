@@ -110,4 +110,9 @@ function basicsToOperations(values) {
   return ops;
 }
 
-module.exports = { COMPARABLE, compareBasics, CELL_OF, basicsToOperations };
+// normalizeText/normalizeAmount 對外露出,是給 scripts/check-against-truth.js 用的:
+// 那支拿舊案的人工報表當外部基準比對讀取器,「哪些差異算等價」必須與這裡同一份判定。
+// 各寫一份就會漂移——報告說「等價」而系統實際判 diff(或反之)。
+module.exports = {
+  COMPARABLE, compareBasics, CELL_OF, basicsToOperations, normalizeText, normalizeAmount,
+};
