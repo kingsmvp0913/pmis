@@ -75,11 +75,11 @@ When the user types `/getSQL`, invoke the Skill tool with `skill: "getSQL"` befo
 
 ## 6. 跑測試（`app/` Node 專案）
 
-> 只記兩件「不看就會賠一輪」的事。跑法看 `app/package.json`，輸出精簡看全域規則，測試數字一律當場跑。
+**測試的實測結論與注意事項一律寫進記憶，不要寫進本檔。** 哪支 flaky、哪支要帶什麼旗標、
+目前有幾支測試、已知紅燈是什麼——這些都會隨 commit 漂移，寫進規則檔遲早變成**錯的指令**，
+而錯的規則比沒有規則更貴（下個 session 會照著錯的做，還以為有權威依據）。
+本檔只留這條「去哪裡看」的規定。
 
-- **日常全跑帶 `SP0_SKIP_EXCEL=1`**（此旗標只存在於測試碼裡，`package.json` 查不到）。它讓
-  `tests/template-engine.integration.test.js` 與 `tests/project-basics.integration.test.js` 整檔 `describe.skip`——
-  **skipped 是預期的，不是漏跑**。這兩檔會真的開 Excel，佔掉全跑絕大部分時間。碰
-  `template-engine.js` / `excel-com-driver.ps1` / 範本寫入時才拿掉旗標。
-- **`tests/template-engine.integration.test.js` 是 flaky，不是固定紅**：Excel COM 間歇回 null，連跑兩次紅的是不同子集
-  （見 memory `xlsm-excel-com-findings`）。**紅了先重跑一次；換一支紅就是 flaky，不要追。**
+- 跑法看 `app/package.json`；輸出精簡看全域規則；**測試數字一律當場跑，不記在任何文件裡**。
+- 其餘（必帶的環境旗標、已知 flaky、已知紅燈、隔離陷阱）看記憶索引 `MEMORY.md` 裡
+  「跑測試」那一則。
