@@ -176,15 +176,22 @@ describe('history routes', () => {
     expect(jul.status).toBe('submitted');
   });
 
-  test('report / official_doc 下載回 409(尚未產出)', async () => {
+  test('official_doc 下載回 409(尚未產出)', async () => {
     const up = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
       .field('type', 'monthly').field('period', '2026-07')
       .attach('daily_log', Buffer.from('m'), 'm.txt');
-    const sid = up.body.id;
-    const rep = await auth(request(app).get(`/api/submissions/${sid}/download/report`));
-    expect(rep.status).toBe(409);
-    const doc = await auth(request(app).get(`/api/submissions/${sid}/download/official_doc`));
+    const doc = await auth(request(app).get(`/api/submissions/${up.body.id}/download/official_doc`));
     expect(doc.status).toBe(409);
+  });
+
+  // 監造報表已不在繳交紀錄這條路徑上(工程層常駐檔,走 /api/projects/:id/report/download)。
+  // 釘住 400 而非 409:留著 409 等於還承認有這條路,前端就會有人再接一顆鈕上去。
+  test('report 已退役,下載回 400 未知類型', async () => {
+    const up = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
+      .field('type', 'monthly').field('period', '2026-07')
+      .attach('daily_log', Buffer.from('m'), 'm.txt');
+    const rep = await auth(request(app).get(`/api/submissions/${up.body.id}/download/report`));
+    expect(rep.status).toBe(400);
   });
 
   test('daily_log 下載成功回檔內容', async () => {

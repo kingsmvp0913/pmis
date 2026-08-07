@@ -10,7 +10,7 @@
  * 路由:
  *   POST   /api/projects/:id/submissions          multipart 上傳施工日誌,建立 submission_history
  *   GET    /api/projects/:id/history              繳交狀態清單 + 所有紀錄
- *   GET    /api/submissions/:id/download/:kind    下載 daily_log / report / official_doc
+ *   GET    /api/submissions/:id/download/:kind    下載 daily_log / official_doc
  *   DELETE /api/submissions/:id                   刪紀錄並連同實體檔一起刪
  *
  * 繳交狀態邏輯(§5.2):
@@ -132,9 +132,12 @@ function safeResolve(rel) {
   return abs;
 }
 
+// report 已於本次退役:submission_history.report_path 自 2026-08-05 起就沒有任何寫入端,
+// 留著只是讓那顆下載鈕必定回 409。監造報表是**工程層**的常駐 .xlsm(非單期產物),
+// 下載走 GET /api/projects/:id/report/download。DB 欄位保留(db.js 只有 CREATE TABLE
+// IF NOT EXISTS、無 ALTER 機制,拿掉只會讓新舊 DB 分岔),現存值全是 NULL。
 const KIND_COLUMN = {
   daily_log: 'daily_log_path',
-  report: 'report_path',
   official_doc: 'official_doc_path',
 };
 
@@ -144,7 +147,6 @@ function periodOfDate(iso) {
   return m ? `${m[1]}-${m[2]}` : null;
 }
 
-// 由工程主檔列組出 report.js 期望的「工程」欄位。缺欄留空(不編造)。
 // 舊的「上傳施工日誌即自動產監造報表」已退役(2026-08-05)。那條路線從零手刻 xlsx、
 // **完全不跑 SP3 的 39 條驗證**,也沒有 SP2 的契約基準,與新路線並存時承辦人從畫面上
 // 看不出兩顆按鈕的差別,按錯就產出一份沒驗證過的報表。監造報表一律走
@@ -348,9 +350,9 @@ function registerRoutes(app) {
       const { rows } = await query('SELECT * FROM submission_history WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '紀錄不存在' });
 
-      // 公文/監造報表:有檔才給,沒值才 409。
-      if ((kind === 'report' || kind === 'official_doc') && !rows[0][col]) {
-        return res.status(409).json({ error: kind === 'report' ? '監造報表尚未產生' : '公文尚未產出' });
+      // 公文:有檔才給,沒值才 409。
+      if (kind === 'official_doc' && !rows[0][col]) {
+        return res.status(409).json({ error: '公文尚未產出' });
       }
 
       const rel = rows[0][col];
@@ -371,7 +373,7 @@ function registerRoutes(app) {
       if (!rows[0]) return res.status(404).json({ error: '紀錄不存在' });
       const rec = rows[0];
 
-      for (const col of ['daily_log_path', 'official_doc_path', 'report_path']) {
+      for (const col of ['daily_log_path', 'official_doc_path']) {
         const rel = rec[col];
         if (!rel) continue;
         const abs = safeResolve(rel);

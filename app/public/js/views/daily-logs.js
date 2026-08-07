@@ -14,6 +14,9 @@ const DailyLogs = (() => {
     const parseBtn = el('button', { class: 'btn', type: 'button' }, '驗證施工日誌');
     const confirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' },
       '確認並寫入監造報表');
+    // 常駐 .xlsm 是 SP1/SP2/SP3 一路寫進去的同一份,不是「這次上傳」的產物,
+    // 所以不隨驗證流程顯示/隱藏——承辦人任何時候都該拿得到目前的報表。
+    const downloadBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '下載監造報表');
     const err = el('div', { class: 'error-msg', style: 'display:none' });
     const summary = el('div', { class: 'hint', style: 'display:none' });
     const skipBox = el('div', { class: 'hint', style: 'display:none' });
@@ -141,11 +144,24 @@ const DailyLogs = (() => {
       }
     });
 
+    downloadBtn.addEventListener('click', async () => {
+      err.style.display = 'none';
+      downloadBtn.disabled = true;
+      try {
+        await Api.download(`projects/${projectId}/report/download`);
+      } catch (e) {
+        // 尚未建立(409)的訊息本身就寫了該先做什麼,直接照顯示
+        showErr(e.message);
+      } finally {
+        downloadBtn.disabled = false;
+      }
+    });
+
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-title' }, '施工日誌'),
       hint,
       el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案'), fileI]),
-      el('div', { class: 'form-actions' }, [parseBtn, confirmBtn]),
+      el('div', { class: 'form-actions' }, [parseBtn, confirmBtn, downloadBtn]),
       err,
       summary,
       skipBox,

@@ -17,10 +17,12 @@
  *   pct      → 實際金額 = award_amount × design_fee_pct / 100(四捨五入到整數,half-up)
  *              award_amount 為空(未招標)→ 回 null 並標記 unbid=true
  */
+const fs = require('fs');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const multer = require('multer');
 const { saveAttachment } = require('./project-attachments-routes');
+const { workbookPath } = require('./report-workbook');
 
 // 決標公告先進記憶體:落檔目錄需要 project id,而 id 要 INSERT 之後才有。
 const upload = multer({ storage: multer.memoryStorage() });
@@ -35,6 +37,13 @@ const AWARD_REQUIRED = ['project_no', 'name', 'award_amount', 'school_id', 'vend
 // 得到 'a,b' 就這樣穿透必填檢查,再被當成單一值寫進 DB。
 function isBlank(v) {
   return v == null || !(typeof v === 'number' || typeof v === 'string') || String(v).trim() === '';
+}
+
+// 工程名稱是承辦人自由輸入的,直接拿來當下載檔名的話,`/` `:` 這類字元會讓
+// Content-Disposition 被解成路徑或整個下載失敗。只清字元、不截斷長度。
+function safeFileName(name) {
+  // eslint-disable-next-line no-control-regex
+  return String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').trim() || '監造報表';
 }
 
 // 台灣四捨五入(half-up),避免 JS Math.round 對負數/浮點誤差的偏差。
@@ -279,6 +288,26 @@ function registerRoutes(app) {
       const { rows } = await query('DELETE FROM projects WHERE id = $1 RETURNING id', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
       res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 下載該工程的常駐監造報表。掛在工程主檔路由而非 SP1/SP2/SP3 任一支:那三支都是
+  // 「寫入」報表的語意,把唯一的「讀出」掛進其中一支,另外兩支就看起來少了一半。
+  //
+  // 走 workbookPath 而**不是** ensureWorkbook:下載不得有副作用。若按下載就由公版範本
+  // 複製一份空報表出來,承辦人拿到的是空表卻以為 pipeline 跑過了——比 409 更糟。
+  app.get('/api/projects/:id/report/download', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query('SELECT name FROM projects WHERE id = $1', [req.params.id]);
+      if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
+
+      const abs = workbookPath(req.params.id);
+      if (!fs.existsSync(abs)) {
+        return res.status(409).json({ error: '監造報表尚未建立,請先送出工程基本資料' });
+      }
+      res.download(abs, `${safeFileName(rows[0].name)}_監造報表.xlsm`);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
