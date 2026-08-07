@@ -10,7 +10,7 @@
  *   a+1  欄0=天氣(整句「本日天氣：上午：晴 下午：晴」) 欄10=填表日期(Excel 序號)
  *   a+2  欄3=工程名稱  欄10=承攬廠商名稱
  *   a+4  欄3=開工日期(民國點號字串 114.9.27)
- *   a+5  欄3=預定進度  欄10=實際進度(**分數**,0.393=39.3%)
+ *   a+5  欄3=預定進度  欄10=實際進度(**分數**,0.393=39.3%,保留原值不換算)
  *   a+7  明細表頭      a+8 起是明細,到「二、工地材料管理概況」為止
  * 欄位落點一律**由表頭標籤定位**,不寫死:同一份檔裡的表頭是穩定的,但抄別家
  * 範本改的檔常常整欄平移。
@@ -73,11 +73,13 @@ const unitOf = (v) => {
   return s && KNOWN_UNITS.has(s) ? s : null;
 };
 
-/** 進度欄存的是分數(0.393),表頭寫的是 (%)。×100 後修掉浮點尾巴。 */
-const pct = (v) => {
-  const n = num(v);
-  return n == null ? null : Math.round(n * 1e6) / 1e4;
-};
+/**
+ * 進度欄存的是分數(0.393 = 39.3%),表頭寫的是 (%)。**保留原值不換算**:
+ * 這是 Excel 系讀取器的既有慣例(skill 的 Excel 坑②;摯東/晉林/齊全/承昇都這樣),
+ * 而且 SP3 的 H1 正是照「值 <= 1 就當分數」在判——換算成百分數反而會讓開工頭幾天
+ * (進度不到 1%)每天噴一個假的「實際落後預定超過 10%」。
+ */
+const pct = (v) => num(v);
 
 /** 民國點號日期「114.9.27」→ 西元 ISO。 */
 function rocDot(v) {
@@ -333,8 +335,8 @@ function selfTest(ft) {
   if (ft && ft.excelSerialToISO && d.header.填報日期 !== '2025-12-01') return false;
   if (d.header.開工日期 !== '2025-09-27') return false;
   if (d.header.天氣_上午 !== '晴' || d.header.天氣_下午 !== '陰') return false;
-  // 分數要換算成百分數,且不留浮點尾巴
-  if (d.header.預定進度 !== 30 || d.header.實際進度 !== 39.3) return false;
+  // 進度保留來源的分數(0.3 = 30%),不換算 —— 見 pct() 的說明
+  if (d.header.預定進度 !== 0.3 || d.header.實際進度 !== 0.3930000000000002) return false;
   if (d.header.出工總人數 !== 4) return false;           // 累計 42 不可混進來
   if (d.extras.出工明細.length !== 1) return false;
   if (d.extras.主要材料) return false;                    // 材料表全空
