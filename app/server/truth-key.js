@@ -9,7 +9,9 @@
  *
  * Exports:
  *   LABELS               「工程基本資料」分頁 A1..A10 的預期標籤(順序即列號)
+ *   ITEM_HEADERS         「契約詳細價目表」分頁的預期欄序
  *   readTruthKey(path)   讀成品 .xlsm → { 工程名稱, 監造單位, ..., 工程編號 }
+ *   readTruthItems(path) 讀成品 .xlsm → [{ 項次, 名稱, 單位, 數量, 單價, 複價 }]
  */
 const XLSX = require('xlsx');
 const { excelSerialToISO } = require('./parsers/filetypes/xlsx');
@@ -80,4 +82,56 @@ function readTruthKey(xlsmPath) {
   return out;
 }
 
-module.exports = { LABELS, readTruthKey };
+// ── 契約詳細價目表 ──────────────────────────────────────────
+const ITEM_SHEET = '契約詳細價目表';
+
+// 表頭固定在第 1 列,欄序 A..F。49 案實測皆然。
+// 成品的表頭帶字間空白與換行(「工 程 項 目」「契約\n數量」),故比對前一律去空白。
+const ITEM_HEADERS = ['項次', '工程項目', '單位', '契約數量', '契約單價', '契約複價'];
+const ITEM_KEYS = ['項次', '名稱', '單位', '數量', '單價', '複價'];
+
+const COL = (i) => String.fromCharCode(65 + i); // 0→A
+
+/**
+ * 讀成品報表的「契約詳細價目表」分頁。
+ *
+ * 表頭驗證與 readTruthKey 同理,是報告正確性的唯一防線:欄序若變了而靜默照抽,
+ * 數量與單價會對調,報告會列出一整片「不一致」而全是抽錯造成的。
+ *
+ * @param {string} xlsmPath 成品報表路徑
+ * @returns {Array<{項次,名稱,單位,數量,單價,複價}>} 依表上順序;缺值為 null
+ * @throws {Error} 無該分頁,或表頭欄序與預期不符
+ */
+function readTruthItems(xlsmPath) {
+  const wb = XLSX.readFile(xlsmPath, { sheetStubs: true, cellDates: false });
+  const ws = wb.Sheets[ITEM_SHEET];
+  if (!ws) {
+    throw new Error(`找不到「${ITEM_SHEET}」分頁(有:${wb.SheetNames.join('、')})`);
+  }
+
+  ITEM_HEADERS.forEach((expected, i) => {
+    const addr = `${COL(i)}1`;
+    const got = cellValue(ws, addr);
+    if (String(got || '').replace(/[\s　]/g, '') !== expected) {
+      throw new Error(`版面不符:${addr} 應為「${expected}」,實為「${got == null ? '(空)' : got}」`);
+    }
+  });
+
+  const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:A1');
+  const out = [];
+  for (let r = 2; r <= ref.e.r + 1; r++) {
+    // 以「工程項目」有值判定是資料列:沒有名稱就不是項目。
+    if (cellValue(ws, `B${r}`) == null) continue;
+    const row = {};
+    ITEM_KEYS.forEach((k, i) => { row[k] = cellValue(ws, `${COL(i)}${r}`); });
+    // 表尾的「(合計)」列:名稱有值但項次/單位/數量/單價全空,複價是總額。
+    // 那是總計不是項目。收進來的話每案的項數都會比讀取器多 1,報告會列出一整排
+    // 「項數不同」而全是這一列造成的,真正的差異被淹掉。
+    // 判定用結構(四欄皆空)而非名稱字串——各案的合計列寫法未必都是「(合計)」。
+    if (row.項次 == null && row.單位 == null && row.數量 == null && row.單價 == null) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+module.exports = { LABELS, ITEM_HEADERS, readTruthKey, readTruthItems };

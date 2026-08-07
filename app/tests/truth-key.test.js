@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const XLSX = require('xlsx');
-const { readTruthKey, LABELS } = require('../server/truth-key');
+const { readTruthKey, readTruthItems, LABELS, ITEM_HEADERS } = require('../server/truth-key');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-truth-'));
 afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ } });
@@ -70,4 +70,78 @@ test('空白儲存格回 null 而非空字串', () => {
   const k = readTruthKey(makeBook({ values: v }));
   expect(k.契約工期).toBeNull();
   expect(k.工程編號).toBeNull();
+});
+
+// ── 契約詳細價目表 ────────────────────────────────────────
+// 49 案實測:表頭固定在第 1 列,欄序 項次/工程項目/單位/契約數量/契約單價/契約複價,
+// 資料 10~47 列,無空案。
+describe('readTruthItems — 契約詳細價目表', () => {
+  // 成品的表頭帶換行與字間空白(「工 程 項 目」「契約\n數量」),驗證時要吃得下
+  const HDR = ['項次', '工 程 項 目', '單位', '契約\n數量', '契約\n單價', '契約\n複價'];
+
+  function makeItemBook({ header = HDR, rows = [] } = {}) {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['封面']]), '封面');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([header, ...rows]), '契約詳細價目表');
+    const p = path.join(TMP, `i${Math.floor(process.hrtime()[1])}.xlsx`);
+    XLSX.writeFile(wb, p);
+    return p;
+  }
+
+  const ROWS = [
+    ['壹.1', '工程告示牌與交通管制設施(租用)', '式', 1, 25664, 25664],
+    ['壹.2', '施工動線開闢與損害復原', '式', 1, 3952, 3952],
+  ];
+
+  test('抽出逐項的六個欄位', () => {
+    const items = readTruthItems(makeItemBook({ rows: ROWS }));
+    expect(items).toHaveLength(2);
+    expect(items[0]).toEqual({
+      項次: '壹.1', 名稱: '工程告示牌與交通管制設施(租用)', 單位: '式',
+      數量: 1, 單價: 25664, 複價: 25664,
+    });
+  });
+
+  // 同 readTruthKey:表頭驗證是報告正確性的唯一防線。欄序若變了而靜默照抽,
+  // 單價與數量會對調,報告會列出一整片「不一致」而全是抽錯造成的。
+  test('欄序與預期不符時 throw,不猜', () => {
+    const bad = [...HDR];
+    [bad[3], bad[4]] = [bad[4], bad[3]]; // 數量與單價對調
+    expect(() => readTruthItems(makeItemBook({ header: bad, rows: ROWS })))
+      .toThrow(/契約數量/);
+  });
+
+  test('工程項目為空的列不算資料列(表尾空白列)', () => {
+    const items = readTruthItems(makeItemBook({ rows: [...ROWS, ['', '', '', null, null, null], ['貳.1', 'X', '式', 2, 5, 10]] }));
+    expect(items.map(i => i.項次)).toEqual(['壹.1', '壹.2', '貳.1']);
+  });
+
+  // 49 案的表尾都有一列「(合計)」:名稱有值但項次/單位/數量/單價全空,複價是總額。
+  // 那是總計不是項目。收進來的話每案的項數都會比讀取器多 1,報告會列出 40 個
+  // 「項數不同」而全是這一列造成的——真正的差異會被淹掉。
+  test('表尾的合計列不算項目', () => {
+    const items = readTruthItems(makeItemBook({
+      rows: [...ROWS, [null, '(合計)', null, null, null, 29616]],
+    }));
+    expect(items).toHaveLength(2);
+    expect(items.map(i => i.名稱)).not.toContain('(合計)');
+  });
+
+  // 但「有項次、只是某幾欄沒填」的列仍是項目,不得一起濾掉
+  test('有項次但數量/單價空白的列仍算項目', () => {
+    const items = readTruthItems(makeItemBook({ rows: [...ROWS, ['貳', '假設工程小計', null, null, null, 999]] }));
+    expect(items.map(i => i.項次)).toEqual(['壹.1', '壹.2', '貳']);
+  });
+
+  test('缺分頁時 throw', () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['x']]), '封面');
+    const p = path.join(TMP, 'noitems.xlsx');
+    XLSX.writeFile(wb, p);
+    expect(() => readTruthItems(p)).toThrow(/契約詳細價目表/);
+  });
+
+  test('ITEM_HEADERS 是對外的欄序契約,供比對層對齊', () => {
+    expect(ITEM_HEADERS).toEqual(['項次', '工程項目', '單位', '契約數量', '契約單價', '契約複價']);
+  });
 });
