@@ -834,7 +834,9 @@
           el('span', { class: 'spacer' }),
           el('button', { class: 'btn btn-outline', onClick: () => makeOfficialDoc(p, r, cell) }, '產公文'),
           el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'official_doc') }, '公文'),
-          el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'report') }, '監造報表'),
+          // 這裡曾有一顆「監造報表」——它指向 submission_history.report_path,而那條
+          // 產報表的路線 2026-08-05 就退役了,該欄再也沒有寫入端,按下去必定 409。
+          // 監造報表是工程層的常駐 .xlsm(非單期產物),下載入口在施工日誌區塊。
           el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'daily_log') }, '施工日誌'),
           el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => removeRec(p, r, cell) }, '刪除')
         ]));
