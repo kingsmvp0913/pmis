@@ -131,6 +131,21 @@ function parsePeriod(v) {
  * @param {Array<{label,value}>} rows
  * @returns {string|null}
  */
+// 廠商在採購網登記的名稱可能帶英文別名(實測:聖隆營造有限公司 (Shenglong
+// Construction Co., Ltd.))。org-match.findByName 是**逐字相等**才命中,帶著別名
+// 建案時就綁不到 vendors 裡的中文名;寫進監造報表也與人工填法不一致
+// (48 案的人工報表 0 案帶括號)。
+//
+// 只去「結尾 + 括號內純 ASCII」:中文括號是名稱本身的一部分(大有營造(股)公司、
+// 甲營造(台北分公司)),去掉就變成另一家公司;不在結尾的括號同理不動。
+const ENGLISH_ALIAS_TAIL = /\s*[(（][\x20-\x7E]+[)）]\s*$/;
+
+function stripEnglishAlias(name) {
+  const s = String(name == null ? '' : name).trim();
+  const out = s.replace(ENGLISH_ALIAS_TAIL, '').trim();
+  return out || s; // 整個名稱就是括號時不得清空
+}
+
 function winningVendor(rows) {
   let name = null;
   for (const r of rows || []) {
@@ -138,7 +153,7 @@ function winningVendor(rows) {
     if (/^投標廠商\d+$/.test(r.label)) { name = null; continue; }
     if (r.label === '廠商名稱') { name = r.value || null; continue; }
     if (r.label === '是否得標') {
-      if (r.value === '是' && name) return name;
+      if (r.value === '是' && name) return stripEnglishAlias(name);
       name = null;
     }
   }

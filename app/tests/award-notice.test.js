@@ -149,6 +149,39 @@ describe('winningVendor — 得標廠商必須靠「是否得標」判定', () =
     expect(winningVendor(rows)).toBe(null);
   });
 
+  // 廠商在採購網登記的名稱可能帶英文別名。org-match.findByName 是**逐字相等**才命中,
+  // 帶著別名的話建案時綁不到 vendors 裡的中文名。48 案實測只有聖隆營造 2 案帶括號、
+  // 內容純 ASCII;人工報表那邊 0 案帶括號,一律只留中文。
+  test('廠商名結尾的英文別名括號要去掉', () => {
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '聖隆營造有限公司 (Shenglong Construction Co., Ltd.)' },
+      { label: '是否得標', value: '是' },
+    ];
+    expect(winningVendor(rows)).toBe('聖隆營造有限公司');
+  });
+
+  // 只去 ASCII 內容的括號。中文括號是名稱的一部分,去掉就變成另一家公司。
+  test('括號內是中文時不得去掉(那是名稱的一部分)', () => {
+    for (const name of ['大有營造(股)公司', '甲營造(台北分公司)', '乙營造（第二廠）']) {
+      const rows = [
+        { label: '投標廠商1', value: '' },
+        { label: '廠商名稱', value: name },
+        { label: '是否得標', value: '是' },
+      ];
+      expect(winningVendor(rows)).toBe(name);
+    }
+  });
+
+  test('括號不在結尾時不動(避免砍掉名稱中段)', () => {
+    const rows = [
+      { label: '投標廠商1', value: '' },
+      { label: '廠商名稱', value: '甲(A)營造有限公司' },
+      { label: '是否得標', value: '是' },
+    ];
+    expect(winningVendor(rows)).toBe('甲(A)營造有限公司');
+  });
+
   test('決標品項區塊的「得標廠商」不得污染判定', () => {
     // 決標公告後段「決標品項」也會出現廠商名,但那不是投標廠商群組
     const rows = [
