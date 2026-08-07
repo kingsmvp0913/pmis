@@ -66,6 +66,41 @@ describe('parseDirectFields — 標籤與值同列的 4 個錨點', () => {
     expect(out.工程名稱).toBe('114年南陽國小北棟教室廁所整修工程');
   });
 
+  // 長標案名稱在公告版面上會換行,續行是一列 label='' 的獨立列。不接回來的話
+  // 工程名稱被截斷——而截斷後仍是合法字串,舊的驗收方式(拿讀取器自己的輸出當基準)
+  // 永遠驗不到。49 個舊案對照人工報表才抓出 4 案(古坑/中和/林內射箭場/麥寮)。
+  test('標案名稱換行時把續行接回來', () => {
+    const wrapped = [
+      { label: '標案名稱', value: 'Danas-E-05-01-007-雲林縣古坑國中小棒球場圍籬倒塌損壞及車棚毀' },
+      { label: '', value: '損災後復建工程' },
+      { label: '決標資料類別', value: '決標公告' },
+    ];
+    expect(parseDirectFields(wrapped).工程名稱)
+      .toBe('Danas-E-05-01-007-雲林縣古坑國中小棒球場圍籬倒塌損壞及車棚毀損災後復建工程');
+  });
+
+  test('標案名稱換行超過一次時全部接回來', () => {
+    const wrapped = [
+      { label: '標案名稱', value: 'AAA' },
+      { label: '', value: 'BBB' },
+      { label: '', value: 'CCC' },
+      { label: '決標資料類別', value: '決標公告' },
+    ];
+    expect(parseDirectFields(wrapped).工程名稱).toBe('AAABBBCCC');
+  });
+
+  // 這條是上面那個修法的護欄。48 案實測:「總決標金額」後面 46/46 都接一列
+  // label='' 的國字大寫金額(壹佰零柒萬元)——那是**另一個欄位**,不是續行。
+  // 對金額也接續行的話,值會變成 '1,070,000元壹佰零柒萬元',parseAmount 回 null,
+  // 於是每一案的契約金額都變成讀不到。
+  test('總決標金額後面的國字大寫列不得被當成續行接回來', () => {
+    const withChinese = [
+      { label: '總決標金額', value: '1,070,000元' },
+      { label: '', value: '壹佰零柒萬元' },
+    ];
+    expect(parseDirectFields(withChinese).契約金額).toBe(1070000);
+  });
+
   test('工程編號照抄,不得做格式驗證或推導', () => {
     // 實測案號格式各機關自訂:1150113 / A1150608 / TKPS-A1150603 / ywjh11504 / 114-17
     for (const no of ['A1150608', 'TKPS-A1150603', 'DRJH-1140923', 'ywjh11504', '114-17']) {

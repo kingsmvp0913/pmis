@@ -19,10 +19,20 @@ const COMPARABLE = ['工程名稱', '主辦機關', '承包廠商', '契約金�
 /**
  * 空白正規化與空值統一,所有欄位共用:承辦人輸入與公告排版的半形/全形空白
  * 差異不是實質不一致,一併去除;空字串視同缺值。
+ *
+ * NFKC 排在去空白**之前**:它會把全形空白 U+3000 折成半形空白,順序顛倒的話
+ * 那個空白會留下來。NFKC 同時把全形標點與全形英數折成半形——決標公告的文字在
+ * pdf.js 已做過 NFKC,主檔的值卻是承辦人打的、常留全形,兩邊不同層做正規化就會
+ * 把同一個名稱判成 diff。49 個舊案對照人工報表抓到的實例:
+ * 「校園環境安全改善～文安國小…」vs 同名的半形波浪號版本。
+ * 同型問題 SP3 的 daily-log-validate 已於 454ba35 修過,這層當時漏了。
+ *
+ * NFKC **不做數值轉換**,故識別碼的前導零原樣保留('0123' 不會變 '123')——
+ * 那個折疊會把兩個不同的案號當成同一個,見 normalizeAmount 的說明。
  */
 function normalizeText(v) {
   if (v == null) return null;
-  const s = String(v).replace(/[\s　]/g, '');
+  const s = String(v).normalize('NFKC').replace(/[\s　]/g, '');
   return s === '' ? null : s;
 }
 

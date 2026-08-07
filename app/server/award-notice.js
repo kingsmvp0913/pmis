@@ -11,6 +11,7 @@
  * Exports:
  *   flattenRows(pages)        把 extractRows 的逐頁結構攤平成單一列陣列
  *   firstValue(rows, label)   取某標籤第一個「有值」的列(標籤換行續行無值,須跳過)
+ *   valueWithContinuation(rows, label)  同上但把「值換行」的續行接回來;**不可用於金額**
  *   parseAmount(v)            '3,122,168元' -> 3122168;非此格式回 null
  *   parseVenue(v)             '雲林縣(非原住民地區)' -> '雲林縣';去括號註記供 SP1B 階段二比對
  *   parsePeriod(v)            '115/06/16 - 115/11/12 (預估)' -> {起,迄};拆日期並去預估標記供 SP1B 階段二比對
@@ -49,6 +50,35 @@ function flattenRows(pages) {
 function firstValue(rows, label) {
   const hit = (rows || []).find((r) => r && r.label === label && r.value);
   return hit ? hit.value : null;
+}
+
+/**
+ * 同 firstValue,但把「值本身換行」的續行接回來。
+ *
+ * 版面上長值換行後,續行是一列 label 為空的獨立列(標籤欄那格是空的),
+ * 下一個有標籤的列才是新欄位。firstValue 只取第一列,值就被截斷——而截斷後
+ * 仍是合法字串,拿讀取器自己的輸出當基準的驗收永遠驗不到。49 個舊案對照
+ * 人工報表才抓出 4 案(古坑/中和/林內射箭場/麥寮)。
+ *
+ * ⚠️ **不可用於金額**:48 案實測「總決標金額」後面 46/46 都接一列 label 為空的
+ * 國字大寫金額(壹佰零柒萬元)——那是**另一個欄位**,不是續行。對金額套用的話值會變成
+ * '1,070,000元壹佰零柒萬元',parseAmount 回 null,於是每一案的契約金額都讀不到。
+ * 同理,機關名稱/標案案號實測 46/46 後接空值列,套不套用結果相同,故不動。
+ *
+ * @returns {string|null} 找不到回 null(不回空字串)
+ */
+function valueWithContinuation(rows, label) {
+  const all = rows || [];
+  const i = all.findIndex((r) => r && r.label === label && r.value);
+  if (i < 0) return null;
+  let out = all[i].value;
+  for (let j = i + 1; j < all.length; j++) {
+    const r = all[j];
+    if (!r || r.label) break;      // 有標籤 → 新欄位開始
+    if (!r.value) continue;        // 空列不中斷續行(同一格內的空白行)
+    out += r.value;
+  }
+  return out;
 }
 
 /**
@@ -122,7 +152,13 @@ function winningVendor(rows) {
  */
 function parseDirectFields(rows) {
   const out = { 工程名稱: null, 主辦機關: null, 工程編號: null, 契約金額: null };
-  for (const [label, field] of DIRECT_ANCHORS) out[field] = firstValue(rows, label);
+  for (const [label, field] of DIRECT_ANCHORS) {
+    // 只有標案名稱實測會換行(48 案裡 4 案)。機關名稱/標案案號 46/46 後接空值列,
+    // 接不接結果相同,故沿用 firstValue——沒有證據支持的地方不擴大行為。
+    out[field] = label === '標案名稱' ? valueWithContinuation(rows, label) : firstValue(rows, label);
+  }
+  // 金額**必須**用 firstValue:後面那列 label 為空的國字大寫金額是另一個欄位,
+  // 接回來會讓 parseAmount 回 null(見 valueWithContinuation 的警告)。
   out.契約金額 = parseAmount(firstValue(rows, '總決標金額'));
   return out;
 }
@@ -197,5 +233,5 @@ async function readAwardNotice(fileOrBuffer) {
 }
 
 module.exports = {
-  flattenRows, firstValue, parseAmount, parseVenue, parsePeriod, parseDirectFields, winningVendor, parseContacts, parseAwardNotice, readAwardNotice,
+  flattenRows, firstValue, valueWithContinuation, parseAmount, parseVenue, parsePeriod, parseDirectFields, winningVendor, parseContacts, parseAwardNotice, readAwardNotice,
 };

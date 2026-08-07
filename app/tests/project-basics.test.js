@@ -28,6 +28,33 @@ describe('compareBasics — 決標公告值 vs PMIS 專案主檔', () => {
     expect(hit.狀態).toBe('match');
   });
 
+  // 決標公告的文字在 pdf.js 已做 NFKC(全形標點折成半形),主檔的值卻是承辦人
+  // 或人工報表打的,常留全形。兩邊不同層做正規化就會把同一個名稱判成 diff。
+  // 49 個舊案對照人工報表抓到的實例:「校園環境安全改善～」vs「～」的半形版。
+  // 同型問題 SP3 的 daily-log-validate 已於 454ba35 修過,這層當時漏了。
+  test('全形/半形標點差異不算不一致', () => {
+    const project = { ...award, 工程名稱: '115年度宜梧國中～老舊廁所整修工程' };
+    const a = { ...award, 工程名稱: '115年度宜梧國中~老舊廁所整修工程' };
+    const hit = compareBasics(a, project).find((r) => r.欄位 === '工程名稱');
+    expect(hit.狀態).toBe('match');
+  });
+
+  test('全形英數的工程編號與半形視為相同', () => {
+    const project = { ...award, 工程編號: 'ｙｗｊｈ１１５０４' };
+    const a = { ...award, 工程編號: 'ywjh11504' };
+    const hit = compareBasics(a, project).find((r) => r.欄位 === '工程編號');
+    expect(hit.狀態).toBe('match');
+  });
+
+  // NFKC 不做數值轉換,所以識別碼的前導零必須原樣保留——'0123' 與 '123'
+  // 是兩個不同的案號,折在一起等於把兩個案子當成同一個。
+  test('工程編號的前導零不得被正規化吃掉', () => {
+    const a = { ...award, 工程編號: '0123' };
+    const project = { ...award, 工程編號: '123' };
+    const hit = compareBasics(a, project).find((r) => r.欄位 === '工程編號');
+    expect(hit.狀態).toBe('diff');
+  });
+
   test('兩邊都有值但不同 → diff,且原值原樣附上供畫面顯示', () => {
     const project = { ...award, 承包廠商: '晉林土木包工業' };
     const hit = compareBasics(award, project).find((r) => r.欄位 === '承包廠商');
