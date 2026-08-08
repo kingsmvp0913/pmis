@@ -57,8 +57,8 @@ d('fillTemplate 端對端(Excel COM)', () => {
       { type: 'insertRowsBelow', sheet: '監造報表', srcRow: 40, count: 3 },
     ]);
     const after = XLSX.readFile(OUT).Sheets['監造報表'];
-    expect(after.A41.f).toMatch(/INDEX\(契約詳細價目表/); // 新列是複製來的公式
-    expect(after.A43.f).toMatch(/INDEX\(契約詳細價目表/);
+    expect(after.A41.f).toMatch(/契約詳細價目表!A33/); // 新列是複製來的公式,列號跟著位移
+    expect(after.A43.f).toMatch(/契約詳細價目表!A35/);
     expect(String(after.A44.v)).toMatch(/^二、監督/);     // 正文被推到第 44 列,沒被吃掉
   }, 180000);
 
@@ -73,5 +73,37 @@ d('fillTemplate 端對端(Excel COM)', () => {
     expect(ct.A2.v).toBe('甲.1');
     expect(ct.F2.v).toBe(600);   // ROUND(200*3,0)
     expect(ct.F3.v).toBe(300);   // ROUND(150*2,0)
+  }, 180000);
+
+  // 範本原本用 MATCH 把項目名稱「自己查自己」再取回同一欄,而 MATCH(...,0) 對文字
+  // 會啟用萬用字元、`~` 是跳脫字元 → 名稱含 `~` 的項目查不到自己,名稱欄整格 #N/A
+  // (報表上就是一列沒有名稱的項目,數量卻照印)。49 案的舊資料裡有 57 對這種名稱。
+  test('名稱含萬用字元(~ * ?)的項目,名稱與當日數量都不會掉', async () => {
+    const 名稱 = '施做抿石子(1~2分AK石,抿石子專用泥)';
+    const 開工日 = 46099;                 // Excel 序列值
+    await fillTemplate(FIX, OUT, [
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B7', value: 150 },
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B8', value: 開工日 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'A2', value: '1' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'B2', value: 名稱 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'C2', value: '式' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'D2', value: 10 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'E2', value: 1000 },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'J2', value: 3 }, // 開工日做了 3
+      { type: 'setCell', sheet: '監造報表', addr: 'N8', value: 開工日 }, // 報表要印的日期
+    ]);
+    const wb = XLSX.readFile(OUT);
+    const day = wb.Sheets['每日施工紀錄'];
+    const rep = wb.Sheets['監造報表'];
+
+    expect(day.B2.v).toBe(名稱);
+    expect(rep.B10.v).toBe(名稱);
+    // 監造報表的「當日數量」是唯一一條真的跨表查找(拿名稱去每日施工紀錄找列),
+    // 名稱欄修好了它仍可能獨立失效,所以分開斷言。
+    expect(rep.I10.v).toBe(3);
+
+    // 沒用到的列維持 #N/A 而不是 0:範本現況如此,變成 0 會讓空白列印出一排零。
+    expect(day.B20.t).toBe('e');
+    expect(rep.B20.t).toBe('e');
   }, 180000);
 });
