@@ -93,6 +93,13 @@ function cnNumToNumber(v) {
   return n > 0 ? n : null;
 }
 
+// OCR 會把千分位逗號讀成句點(實測「3,122,168」被讀成「3.122,168」)。
+// 下面那條 `[\d,]+` 遇到句點就停,回一個看起來完全合法的 3 —— 比對層攔不住。
+//
+// 判準必須可稽核,不能「看到句點就當逗號」:**每個分隔符後面都剛好三位數**
+// 才算千分位。「2590.00」(小數兩位)與「1.5」都不符合,不會被誤改成 259000。
+const THOUSANDS = /\d{1,3}(?:[.,]\d{3})+(?![.,]?\d)/;
+
 /**
  * 金額:阿拉伯數字(含千分位)與國字大寫都吃。讀不到一律 null,不編造。
  * @returns {number|null}
@@ -101,6 +108,11 @@ function parseMoney(v) {
   if (v == null) return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   const s = stripSpace(v);
+  const th = THOUSANDS.exec(s);
+  if (th) {
+    const n = Number(th[0].replace(/[.,]/g, ''));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
   const m = /^[^\d]*?([\d,]+)/.exec(s);
   if (m && /\d/.test(m[1])) {
     const n = Number(m[1].replace(/,/g, ''));

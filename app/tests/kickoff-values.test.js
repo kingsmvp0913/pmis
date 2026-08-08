@@ -35,6 +35,12 @@ describe('parseMoney', () => {
   // 而 3 是個「看起來合法」的金額 —— 比對層攔不住,會一路寫進歸檔後的工程資料。
   test('全形千分位不得截斷成第一段', () => expect(parseMoney('新台幣3，122，168元')).toBe(3122168));
   test('全形數字', () => expect(parseMoney('４４１６２７０')).toBe(4416270));
+  // 千分位被讀成句點(南陽 PP-OCRv5 實測)。舊邏輯的 [\d,]+ 遇到句點就停,會回 3。
+  test('千分位讀成句點', () => expect(parseMoney('新台幣3.122,168元')).toBe(3122168));
+  test('千分位混句點與逗號', () => expect(parseMoney('3.122.168')).toBe(3122168));
+  // 反面:分隔符後不是剛好三位數,就不是千分位,不得動它。
+  test('小數兩位不得當千分位', () => expect(parseMoney('2590.00')).toBe(2590));
+  test('一位小數不得當千分位', () => expect(parseMoney('1.5')).toBe(1));
 });
 
 describe('parseDuration', () => {
