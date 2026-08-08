@@ -90,6 +90,14 @@ try {
             # so existing consumers keep working unchanged.
             $lines = @()
             $boxes = @()
+            # Word-level boxes as well. A construction daily log is a dense
+            # table: the line box is useless there (one line spans the whole
+            # row), while each word's rect is what lets the coordinate-based
+            # vendor parsers treat a scanned page exactly like a text-layer
+            # one. `lines`/`boxes` stay as they were so the kickoff-report
+            # consumer keeps working unchanged.
+            $words = @()
+            $li = 0
             foreach ($ln in $result.Lines) {
                 $lines += $ln.Text
                 $x0 = $null; $y0 = $null; $x1 = $null; $y1 = $null
@@ -99,7 +107,13 @@ try {
                     if ($null -eq $y0 -or $r.Y -lt $y0) { $y0 = $r.Y }
                     if ($null -eq $x1 -or ($r.X + $r.Width) -gt $x1) { $x1 = $r.X + $r.Width }
                     if ($null -eq $y1 -or ($r.Y + $r.Height) -gt $y1) { $y1 = $r.Y + $r.Height }
+                    $words += @{
+                        t = $wd.Text; line = $li
+                        x = [Math]::Round($r.X, 1); y = [Math]::Round($r.Y, 1)
+                        w = [Math]::Round($r.Width, 1); h = [Math]::Round($r.Height, 1)
+                    }
                 }
+                $li = $li + 1
                 # A line with no words has no box; emit nulls rather than
                 # dropping the entry, so boxes stays index-aligned with lines.
                 if ($null -eq $x0) { $boxes += @{ x = $null; y = $null; w = $null; h = $null } }
@@ -110,7 +124,17 @@ try {
                     }
                 }
             }
-            $pages += @{ page = ($i + 1); width = $Width; lines = $lines; boxes = $boxes }
+            # Page size (DIPs) so the caller can map pixels back to PDF points:
+            # the coordinate parsers work in points and their band tolerances are
+            # in points too, so the scale must not be guessed.
+            $pages += @{
+              page = ($i + 1); width = $Width; lines = $lines; boxes = $boxes; words = $words
+              pw = [Math]::Round($page.Size.Width, 2); ph = [Math]::Round($page.Size.Height, 2)
+              # The bitmaps ACTUAL pixel size. DestinationWidth is only a request:
+              # on a 125% display-scaling machine asking for 2200 yields 2750, and
+              # using the requested value as the scale shifts every x by 1.25x.
+              bw = [int]$decoder.PixelWidth; bh = [int]$decoder.PixelHeight
+            }
         }
         catch {
             # A single page failing (e.g. a corrupt embedded image) must not

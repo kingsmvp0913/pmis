@@ -104,6 +104,13 @@ async function ocrPdf(pdfPath, opts) {
           width: p.width,
           lines: toArray(p.lines).map(collapseCjkSpaces),
           boxes: toArray(p.boxes),
+          // word 級的框(給座標型讀取器用)與頁面尺寸(像素→點的比例尺)。
+          // 行級的框對密集表格沒有用:一行橫跨整列。
+          words: toArray(p.words),
+          pw: p.pw,
+          ph: p.ph,
+          bw: p.bw,
+          bh: p.bh,
         });
       }
       failedPages.push(...failed);

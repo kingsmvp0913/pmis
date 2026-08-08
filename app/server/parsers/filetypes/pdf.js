@@ -224,3 +224,127 @@ async function extractItems(fileOrBuffer) {
 }
 
 module.exports = { extractPages, columnBounds, rowsFromItems, extractRows, extractItems };
+
+/* ───────────────────────── 掃描件:OCR 版的 extractItems ───────────────────────── */
+
+/**
+ * OCR 的 word 框 → 與 `extractItems` **同一種形狀**的 items(`{x, y, w, s}`,
+ * PDF 點座標、y 由下往上)。目的是讓既有的座標型讀取器**原封不動**吃掃描件。
+ *
+ * 三件事非做不可,少一件就對不上:
+ * ① **像素→點的比例尺要用點陣圖的真實寬度**(driver 回報的 `bw`),不能拿
+ *    DestinationWidth。這台機器顯示縮放 125%,要求 2200 實際給 2750,
+ *    用要求值換算會讓所有 x 偏移到 1.247 倍(實測)。
+ * ② **y 用「該行所有字的框底中位數」**,不是每個字自己的框底。同一行裡有無下緣的字
+ *    (一、二)與有下緣的字(誌、期),各自的框底差好幾點,逐字換算會讓同一列
+ *    在讀取器的分帶裡被拆成兩三列。OCR 本來就把字分好行了,直接用那個分組最穩。
+ * ③ **相鄰的字要併成詞**。Windows OCR 的 CJK「word」是一個字一個框,不併的話
+ *    讀取器那些 `find(/^施工項目$/)` 的表頭比對永遠找不到。判準用「字距 < 0.8 倍字高」:
+ *    同一格內的字距是 2~10px、跨欄的空白是上百 px,兩者差一個數量級。
+ *
+ * @param {string} filePath
+ * @param {{ocr:{ocrPdf:Function}, width?:number, gapRatio?:number}} opts
+ *   ocr 由呼叫端注入(filetypes 不直接 require server/ocr,維持分層)
+ * @returns {Promise<Array<{page:number, items:Array<{x:number,y:number,w:number,s:string}>}>>}
+ */
+/**
+ * OCR 修補層。只做兩件**可稽核**的事,不碰其他任何字:
+ * ① 標點/字形:OCR 常把小數點讀成中點(`0·65`)、把 l/O 讀進數字裡。
+ *    只在「整個 token 看起來就是數字」時才套用,避免把項目名稱裡的字改掉。
+ * ② 表頭標籤:工程會標準表單的欄位標籤是**固定小字彙**,OCR 認錯一兩個字
+ *    (`累計完` → `…計元`)就會讓讀取器的 `find(/^累計完成數量$/)` 整個表頭找不到。
+ *    與字彙比對,長度相近且**至少七成字元相同**才吸附過去。
+ * 兩者都刻意保守:寧可留著錯字讓完整性關卡看得見,也不要猜一個看起來合理的值。
+ */
+const OCR_LABELS = [
+  '項次', '合約項次', '工程項目', '施工項目', '契約項目', '材料名稱', '單位', '單 位',
+  '契約數量', '合約數量', '設計數量', '數量', '契約單價', '單價', '複價',
+  '本日完成數量', '累計完成數量', '本日完成金額', '累計完成金額', '本日完成', '完成金額',
+  '本日使用數量', '累計使用數量', '本日使用量', '累計使用量', '備註',
+  '工別', '本日人數', '累計人數', '機具名稱',
+  '第一聯', '第二聯', '表報編號', '表單編號', '填報日期', '填表日期', '本日天氣', '本日氣候',
+  '工程名稱', '承攬廠商名稱', '核定工期', '契約工期', '累計工期', '剩餘工期',
+  '開工日期', '完工日期', '預定進度', '實際進度', '累計預定進度', '累計實際進度',
+  '營造業專業工程特定施工項目',
+];
+const NUMISH = /^[\d.,·•．・oOlI]+$/;
+function repairNum(s) {
+  return s.replace(/[·•．・]/g, '.').replace(/[oO]/g, '0').replace(/[lI]/g, '1');
+}
+function snapLabel(s) {
+  const t = s.replace(/[\s　]/g, '');
+  if (t.length < 2 || t.length > 14) return s;
+  let best = null; let bestScore = 0;
+  for (const lab of OCR_LABELS) {
+    const L = lab.replace(/[\s　]/g, '');
+    if (Math.abs(L.length - t.length) > 1) continue;
+    let same = 0;
+    for (let i = 0; i < Math.min(L.length, t.length); i++) if (L[i] === t[i]) same += 1;
+    const score = same / L.length;
+    if (score > bestScore) { bestScore = score; best = L; }
+  }
+  return bestScore >= 0.7 && bestScore < 1 ? best : s;
+}
+function repairOcrText(s) {
+  const t = String(s);
+  if (NUMISH.test(t.replace(/[\s　]/g, '')) && /\d/.test(t)) return repairNum(t);
+  return snapLabel(t);
+}
+
+async function extractItemsOcr(filePath, opts = {}) {
+  const ocr = opts.ocr;
+  if (!ocr || typeof ocr.ocrPdf !== 'function') throw new Error('extractItemsOcr 需要注入 ocr.ocrPdf');
+  const width = opts.width || 2200;
+  const gapRatio = opts.gapRatio == null ? 0.8 : opts.gapRatio;
+
+  const { pages } = await ocr.ocrPdf(filePath, { widths: [width] });
+  const out = [];
+  for (const p of pages) {
+    const words = (p.words || []).filter((w) => w && w.t != null && w.x != null);
+    // 比例尺:點 = 像素 × (頁寬點 / 點陣圖像素寬)。Windows 的 Size 是 DIP(1/96 吋),
+    // PDF 點是 1/72 吋,故 ×0.75。
+    const pageW = Number(p.pw) * 0.75;
+    const pageH = Number(p.ph) * 0.75;
+    const bw = Number(p.bw) || Math.round(Number(p.width) * 1.25);
+    if (!(pageW > 0) || !(pageH > 0) || !(bw > 0)) continue;
+    const k = pageW / bw;
+
+    const byLine = new Map();
+    for (const w of words) {
+      const key = w.line == null ? 0 : w.line;
+      if (!byLine.has(key)) byLine.set(key, []);
+      byLine.get(key).push(w);
+    }
+    const items = [];
+    for (const ws of byLine.values()) {
+      ws.sort((a, b) => a.x - b.x);
+      const bottoms = ws.map((w) => w.y + w.h).sort((a, b) => a - b);
+      const mid = bottoms[Math.floor(bottoms.length / 2)];
+      // 併字的門檻用**整行字高的中位數**,不能用單一個字的高:像「一」「二」這種
+      // 只有一橫的字框高只有 7px,拿它當基準會把「第/一聯」拆開,而讀取器的表頭
+      // 比對(find(/^第一聯$/))就永遠找不到。
+      const hs = ws.map((w) => w.h).sort((a, b) => a - b);
+      const mh = hs[Math.floor(hs.length / 2)] || 1;
+      const y = pageH - mid * k;                       // ②:整行共用一個 y
+      let cur = null;
+      for (const w of ws) {
+        const gap = cur ? w.x - (cur.x1) : 0;
+        if (cur && gap <= gapRatio * mh) {             // ③:字距小於 0.8 倍字高就併
+          cur.s += w.t;
+          cur.x1 = w.x + w.w;
+        } else {
+          if (cur) items.push({ x: cur.x0 * k, y, w: (cur.x1 - cur.x0) * k, s: repairOcrText(cur.s) });
+          cur = { x0: w.x, x1: w.x + w.w, s: String(w.t) };
+        }
+      }
+      if (cur) items.push({ x: cur.x0 * k, y, w: (cur.x1 - cur.x0) * k, s: repairOcrText(cur.s) });
+    }
+    items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+    out.push({ page: p.page, items });
+  }
+  out.sort((a, b) => a.page - b.page);
+  return out;
+}
+
+module.exports.extractItemsOcr = extractItemsOcr;
+module.exports._ocrRepair = { repairOcrText, snapLabel, repairNum, OCR_LABELS };
