@@ -39,12 +39,18 @@ try {
   spawn('cmd', ['/c', 'start', '', `http://localhost:${port}`], { detached: true, stdio: 'ignore' });
 } catch { /* 無瀏覽器可開時略過 */ }
 
-// 啟動 server(env 已就緒 → createApp + migrate + listen)
+// 啟動 server(env 已就緒 → createApp + migrate + onboarding + listen)
 const { createApp } = require(path.join(ROOT, 'app', 'server', 'index.js'));
 const { migrate } = require(path.join(ROOT, 'app', 'server', 'db.js'));
+const { runStartupOnboarding } = require(path.join(ROOT, 'app', 'server', 'parser-onboarding.js'));
 const app = createApp();
 migrate()
-  .then(() => app.listen(port, () => console.log(`PMIS 已啟動:http://localhost:${port}(關閉此視窗即停止)`)))
+  .then(async () => {
+    // 啟動即 git pull + 掃描安裝讀取器並 upsert 廠商(best-effort,不擋啟動)。
+    await runStartupOnboarding().catch((err) =>
+      console.warn('[onboarding] 略過:', err.message));
+    app.listen(port, () => console.log(`PMIS 已啟動:http://localhost:${port}(關閉此視窗即停止)`));
+  })
   .catch((err) => {
     console.error('啟動失敗(資料庫連線或初始化錯誤):' + err.message);
     console.error('請確認 PostgreSQL 已啟動,且 data/config.json 的 DATABASE_URL 帳密正確。');
