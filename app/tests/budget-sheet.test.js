@@ -52,6 +52,24 @@ test('項次照原樣保留,不重新編號', () => {
   expect(items.map((i) => i.項次)).toEqual(['1', '2', '貳', '陸']);
 });
 
+// 一份經費總表含兩個子工程(古坑:A 棒球場圍籬 / B 車棚)時,項次會帶前綴變成
+// 「A.壹.1」「A.貳」。只認純數字/純大寫的規則會讓**整份**收 0 項、候選為 0,
+// SP2 直接卡死在「選不出契約詳細價目表」。判定改看以「.」切開後的最後一段。
+test('子工程前綴的項次照樣收錄(A.壹.1 / A.貳)', () => {
+  const items = parseItems([
+    HEAD,
+    ['A.壹.1', '施工圍籬(租用)', 'M', '58.00 ', '247.00 ', '14,326 '],
+    ['A.貳', '職業安全衛生管理費(壹*2%)', '式', '1 ', '15,219 ', '15,219 '],
+  ]);
+  expect(items.map((i) => i.項次)).toEqual(['A.壹.1', 'A.貳']);
+});
+
+// 「壹 不收」的意圖必須跟著前綴一起成立:A.壹 的最後一段就是「壹」,
+// 它仍是沒有數量單價的大類標題。
+test('帶前綴的大類列「A.壹」一樣不收錄', () => {
+  expect(parseItems([HEAD, ['A.壹', '直接工程費', '', '', '', '']])).toEqual([]);
+});
+
 // 異體字「参」與全形波浪號在 31 份樣本裡混用,不認就會漏掉整個費用項目
 test('異體字「参」視同「參」', () => {
   const items = parseItems([HEAD, ['参', '公共工程品質管制作業費', '式', '1', '9,024', '9,024']]);
@@ -89,6 +107,16 @@ test('雙表案例兩張都列為候選,合計各自算出', () => {
 
 test('沒有明細的檔案回空候選', () => {
   expect(findCandidates(fx('taichung-nodetail').sheets)).toEqual([]);
+});
+
+// 端到端釘住上面那條規則:古坑整份的項次都帶子工程前綴,規則沒放寬時候選是 0。
+test('項次全部帶前綴的檔案也選得出候選', () => {
+  const cands = findCandidates(fx('gukeng-fence').sheets);
+  expect(cands.length).toBeGreaterThan(0);
+  const 標單 = cands.find((c) => c.name.includes('(標單)'));
+  expect(標單.items.length).toBe(30);
+  // 大類標題(A/B、A.壹/B.壹)不能混進來——它們沒有數量單價
+  expect(標單.items.every((i) => Number.isFinite(i.數量) && Number.isFinite(i.單價))).toBe(true);
 });
 
 // 四湖跳遠多了柒、捌、玖三個費用項目,規則不能寫死「五個」

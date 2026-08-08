@@ -25,6 +25,12 @@ const x = require('xlsx');
 const FEE_NO = /^[貳贰參参叁肆伍陸陆柒捌玖拾]$/;
 const ITEM_NO = /^\d+$/;
 
+// 一份經費總表含兩個子工程時(古坑:A 棒球場圍籬 / B 車棚),項次會帶前綴變成
+// `A.壹.1`、`A.貳`。只認純數字/純大寫會讓**整份**收 0 項、候選為 0,SP2 直接卡在
+// 「選不出契約詳細價目表」。判定改看最後一段——「壹 是大類標題不收」也自動保持,
+// 因為 `A.壹` 的最後一段就是「壹」。
+const noKey = (項次) => String(項次).split('.').pop();
+
 // 小計/合計/總計列是公式結果。收下它們,累計金額與完成百分比會整份重複計算。
 const SUBTOTAL = /小計|合計|總計/;
 
@@ -58,7 +64,8 @@ function parseItems(rows) {
     const 項次 = text(row[0]);
     const 項目 = text(row[1]);
     if (SUBTOTAL.test(項次) || SUBTOTAL.test(項目)) continue;
-    if (!ITEM_NO.test(項次) && !FEE_NO.test(項次)) continue;
+    const key = noKey(項次);
+    if (!ITEM_NO.test(key) && !FEE_NO.test(key)) continue;
     const 數量 = toNum(row[3]);
     const 單價 = toNum(row[4]);
     const 複價 = toNum(row[5]);
@@ -81,7 +88,7 @@ function findCandidates(sheets) {
   const out = [];
   for (const s of sheets || []) {
     const items = parseItems(s.rows);
-    if (items.filter((i) => ITEM_NO.test(i.項次)).length < MIN_ITEMS) continue;
+    if (items.filter((i) => ITEM_NO.test(noKey(i.項次))).length < MIN_ITEMS) continue;
     out.push({ name: s.name, items, 合計: items.reduce((sum, i) => sum + i.複價, 0) });
   }
   return out;
