@@ -88,6 +88,23 @@ const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 // 硬統一是把一種誤判換成另一種。實測也顯示多做這層沒有額外效益。
 const squash = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[\s　]/g, '');
 
+// 項次比對用的正規化。除了 squash,還要把**中文數字大寫的異體字**折成同一個字:
+// 同一個工程的兩份文件會各寫各的(實測宜謙:發包後經費總表寫「参」U+53C2、
+// 簡易棒球場的日誌寫「參」U+53C3)。NFKC 不折這一組(它們是異體字不是相容字),
+// 於是 contractByNo 逐字相等永遠對不上、名稱又剛好也不同 → 名稱後備索引也救不了,
+// 結果是**每天一個 E1 硬錯、86 天整份被擋**。
+// 只折「同一個數字的不同寫法」,不碰語意不同的字。
+const NO_VARIANTS = { 参: '參', 貮: '貳', 弍: '貳', 弐: '貳', 叁: '參', 佰: '百', 仟: '千', 萬: '万' };
+const normNo = (s) => squash(s).replace(/[参貮弍弐叁佰仟萬]/g, (c) => NO_VARIANTS[c]);
+
+// 費用項目也要認名字,不能只看「項次不是阿拉伯數字」。
+// 有一整類格式**沒有項次欄**,讀取器只能用出現序補(德信 14~18、以勒 5~9),
+// 於是費用項的項次變成純數字,B2/F1/B3/C1 的降級分支就全部失效——
+// 以勒實測:廠商把費用項的累計填成 1.028(契約數量 1),生出 5 個假硬錯。
+// 名稱刻意只收工程會標準表單那幾個固定費用名目,不含「環境保護與清潔」這種
+// 可能是真施工項目的字眼。
+const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費)/;
+
 const MS_PER_DAY = 86400000;
 const dayNum = (iso) => {
   const t = Date.parse(`${iso}T00:00:00Z`);
@@ -165,9 +182,25 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
 
+  // 進度欄的單位:**看整份的最大值,不看單一天**。
+  // 舊寫法是逐值判「<= 1 就當比例」,在工期兩端都會誤判:
+  //   開工頭幾天真的只有 0.28%(百分數)→ 被放大成 28%,每天噴假的 H1(宜謙實測);
+  //   完工那幾天比例制跑到 1.0000007 → 被當成 1%,同樣噴假的 H1(久木實測)。
+  // 一整份的最大值就沒有這個歧義:比例制的序列頂多到 1.0 出頭(捨入),
+  // 百分數制的序列會上到幾十。門檻取 1.05 留給捨入,兩者之間差了兩個數量級。
+  // 兩個欄位各自判——同一列一個是百分數、另一個是比例是實測到的(國謙)。
+  const progressScale = (field) => {
+    const vals = days.map((d) => num((d.header || {})[field])).filter((v) => v != null);
+    if (!vals.length) return 1;
+    return Math.max(...vals.map(Math.abs)) <= 1.05 ? 100 : 1;
+  };
+  const 預定Scale = progressScale('預定進度');
+  const 實際Scale = progressScale('實際進度');
+
   // 契約表以項次為鍵。SP2 建的契約詳細價目表是**唯一權威基準**——
   // 日誌自己填的契約數量/單價只是待驗資料,不能拿來當基準。
-  const contractByNo = new Map(contract.map((c) => [String(c.項次), c]));
+  // 鍵一律走 normNo:兩份文件常把同一個中文數字寫成異體字(参/參),逐字相等對不上。
+  const contractByNo = new Map(contract.map((c) => [normNo(c.項次), c]));
   // 項次對不上時的後備索引:項目名稱 → 契約項目。**只收名稱唯一的**——
   // 同名兩筆以上就無從判斷對到哪一筆,寧可維持 E1 硬錯也不猜,猜錯會把
   // 單位/數量/單價比到別的項目上,錯得比報 E1 更隱蔽。
@@ -241,7 +274,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       }
 
       // E 類:與 SP2 建好的契約詳細價目表逐項核對
-      let c = 項次 == null ? null : contractByNo.get(項次);
+      let c = 項次 == null ? null : contractByNo.get(normNo(項次));
       // 項次查無 → 退而以項目名稱對應(見 contractByName 的說明)。
       let 依名稱對應 = false;
       if (!c && 項次 != null && contract.length && !isBlank(r.工程項目)) {
@@ -287,7 +320,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // 費用項目(貳~陸)的數量欄語意各家不一:金大填「完成比例」、玉森的累計欄
       // 填的是本日值(天1 與天2 都是 0.012233,而同一天的施工項目正確累加)。
       // 硬套會生出 238 個假硬錯,把施工項目真正的累計錯誤淹掉。
-      const 是費用項目 = !/^\d+$/.test(項次 || '');
+      const 是費用項目 = !/^\d+$/.test(項次 || '') || FEE_NAME.test(squash(r.工程項目));
       const 前一日 = prevCum.get(項次);
       if (累計量 != null && 本日量 != null && 前一日 != null
         && !approx(累計量, 前一日 + 本日量)) {
@@ -328,9 +361,14 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         }
       }
 
-      // C1/C3 逐列範圍檢查
+      // C1/C3 逐列範圍檢查。
+      // C1 與 B2/F1/B3 同樣要放過費用項目:那幾列的「完成數量」各家語意不一,
+      // 有的填比例、有的直接填金額(國謙實測填 56.53 元而契約數量是 1 式),
+      // 判硬錯會生出 210 個假警報(5 項 × 42 天)把真問題淹掉。降為軟警告但仍要報。
       if (累計量 != null && 契約量 != null && gt(累計量, 契約量)) {
-        hard('C1', 日期, 項次, `累計完成數量 ${累計量} 超過契約數量 ${契約量}`);
+        const m = `累計完成數量 ${累計量} 超過契約數量 ${契約量}`;
+        if (是費用項目) soft('C1', 日期, 項次, `${m}(費用項目的完成數量欄語意各家不一,僅供參考)`);
+        else hard('C1', 日期, 項次, m);
       }
       for (const [欄, v] of [['本日完成數量', 本日量], ['本日完成金額', 本日金額],
         ['累計完成數量', 累計量]]) {
@@ -362,12 +400,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     }
     if (實際 != null) prevProgress = 實際;
 
-    // H1 落後門檻:實際比預定低 10 個百分點以上。實測各家給的是比例(0.75)或
-    // 百分數(75),故先統一換算再比,否則比例制的案子永遠不會觸發。
+    // H1 落後門檻:實際比預定低 10 個百分點以上。各家給的是比例(0.75)或
+    // 百分數(75),要先統一單位再比。**單位一律看整份的最大值決定,不看單一天**
+    // (見 progressScale 的說明)。
     const 預定 = num(h.預定進度);
     if (實際 != null && 預定 != null) {
-      const toPct = (v) => (Math.abs(v) <= 1 ? v * 100 : v);
-      if (toPct(實際) - toPct(預定) < -10) {
+      if (實際 * 實際Scale - 預定 * 預定Scale < -10) {
         soft('H1', 日期, null,
           `實際進度落後預定超過 10%(預定 ${預定}、實際 ${實際})`);
       }
