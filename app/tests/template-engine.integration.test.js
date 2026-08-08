@@ -106,4 +106,49 @@ d('fillTemplate 端對端(Excel COM)', () => {
     expect(day.B20.t).toBe('e');
     expect(rep.B20.t).toBe('e');
   }, 180000);
+
+  // 一份經費總表可以含兩個子工程(古坑:A 棒球場圍籬 / B 車棚),兩邊會有**同名**
+  // 項目而金額不同。監造報表的「當日數量」若拿名稱查列,只會抓到第一列 —— 第二個
+  // 子工程那列會靜默顯示別人的數量,報表看起來完全正常。項次才是唯一鍵。
+  test('同名項目各自抓到自己的當日數量(用項次定位,不是名稱)', async () => {
+    const 名稱 = '工程告示牌、職業安全衛生告示牌與管制措施(租用)';
+    const 開工日 = 46099;
+    await fillTemplate(FIX, OUT, [
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B7', value: 150 },
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B8', value: 開工日 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'A2', value: 'A.壹.1' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'B2', value: 名稱 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'D2', value: 1 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'E2', value: 2837 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'A3', value: 'B.壹.1' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'B3', value: 名稱 }, // 同名,不同子工程
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'D3', value: 1 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'E3', value: 5543 },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'J2', value: 3 },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'J3', value: 7 },
+      { type: 'setCell', sheet: '監造報表', addr: 'N8', value: 開工日 },
+    ]);
+    const rep = XLSX.readFile(OUT).Sheets['監造報表'];
+    expect(rep.I10.v).toBe(3);
+    expect(rep.I11.v).toBe(7); // 用名稱查的話這裡會是 3
+  }, 180000);
+
+  // 項次寫進儲存格後多半是數值型(Excel 把 "1" 解析成 1)。若查找值被 SUBSTITUTE
+  // 之類的文字函式包過,回傳一定是文字,文字 "1" 配不到數值 1,整條查找回 #N/A。
+  // 這與 B 欄名稱需要跳脫的情況完全相反,所以單獨釘住。
+  test('純數字項次(數值型)也查得到當日數量', async () => {
+    const 開工日 = 46099;
+    await fillTemplate(FIX, OUT, [
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B7', value: 150 },
+      { type: 'setCell', sheet: '工程基本資料', addr: 'B8', value: 開工日 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'A2', value: '1' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'B2', value: '施工圍籬' },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'D2', value: 58 },
+      { type: 'setCell', sheet: '契約詳細價目表', addr: 'E2', value: 247 },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'J2', value: 12 },
+      { type: 'setCell', sheet: '監造報表', addr: 'N8', value: 開工日 },
+    ]);
+    const rep = XLSX.readFile(OUT).Sheets['監造報表'];
+    expect(rep.I10.v).toBe(12);
+  }, 180000);
 });
