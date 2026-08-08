@@ -31,6 +31,10 @@ describe('parseMoney', () => {
   test('國字大寫', () => expect(parseMoney('貳佰肆拾伍萬陸仟元整')).toBe(2456000));
   test('純數值', () => expect(parseMoney(3122168)).toBe(3122168));
   test('讀不到回 null', () => expect(parseMoney('__J_?O_')).toBeNull());
+  // OCR 把千分位讀成全形逗號(南陽/元長舖面實測)。不做 NFKC 的話這裡會回 3,
+  // 而 3 是個「看起來合法」的金額 —— 比對層攔不住,會一路寫進歸檔後的工程資料。
+  test('全形千分位不得截斷成第一段', () => expect(parseMoney('新台幣3，122，168元')).toBe(3122168));
+  test('全形數字', () => expect(parseMoney('４４１６２７０')).toBe(4416270));
 });
 
 describe('parseDuration', () => {
