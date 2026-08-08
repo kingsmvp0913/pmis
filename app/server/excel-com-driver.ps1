@@ -9,6 +9,11 @@
 param([Parameter(Mandatory = $true)][string]$JobPath)
 $ErrorActionPreference = 'Stop'
 
+# Without this, Chinese in a COM error message comes back to Node as mojibake
+# (the shell's OEM codepage bytes decoded as UTF-8), e.g. the null-reference
+# error arrives as "???i?b?Ȭ? Null" and is useless for diagnosis.
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+
 function Emit($obj) { $obj | ConvertTo-Json -Compress -Depth 6 | Write-Output }
 
 # PInvoke: map an Excel window handle to its owning process id, so on teardown
@@ -38,10 +43,40 @@ try {
     $xl.AutomationSecurity = 1   # msoAutomationSecurityLow
     [void][Native.Win32Api]::GetWindowThreadProcessId($xl.Hwnd, [ref]$excelPid)
 
-    $wb = $xl.Workbooks.Open($job.templatePath)
+    # Back-to-back runs hit a COM race: Open succeeds and hands back a workbook
+    # object, but its .Worksheets is still null (measured — the failure is
+    # "workbook opened but .Worksheets is null, ReadOnly=False", not a null Open
+    # and not a missing sheet name). Reopening inside the same Excel instance
+    # clears it, and is far cheaper than failing the whole job so the Node layer
+    # can respawn PowerShell + Excel — which was landing ~40% of back-to-back
+    # runs in "retried 3 times and still failed".
+    # Two distinct races were measured here, so both have to be absorbed:
+    #   1. Open succeeds but .Worksheets is null
+    #   2. Open throws RPC_E_CALL_REJECTED (0x80010001) — Excel busy
+    # $ErrorActionPreference is Stop, so (2) must be caught inside the loop or it
+    # escapes on the first try.
+    $wb = $null
+    $openErr = ''
+    for ($open = 1; $open -le 4; $open++) {
+        try {
+            $wb = $xl.Workbooks.Open($job.templatePath)
+            if ($null -ne $wb -and $null -ne $wb.Worksheets) { break }
+        }
+        catch { $openErr = $_.Exception.Message }
+        if ($null -ne $wb) { try { $wb.Close($false) } catch {} }
+        $wb = $null
+        Start-Sleep -Milliseconds (400 * $open)
+    }
+    # Keep naming the failing step: the generic "cannot call a method on a
+    # null-valued expression" says nothing about which call broke.
+    if ($null -eq $wb) { throw "Workbooks.Open failed after 4 attempts: $openErr" }
+    if ($null -eq $wb.Worksheets) { throw "workbook opened but .Worksheets stayed null after 4 attempts (ReadOnly=$($wb.ReadOnly))" }
 
+    $i = 0
     foreach ($op in $job.operations) {
         $ws = $wb.Worksheets.Item($op.sheet)
+        if ($null -eq $ws) { throw "Worksheets.Item returned null at operation #$i (sheet count=$($wb.Worksheets.Count))" }
+        $i++
         switch ($op.type) {
             'setCell' {
                 $cell = $ws.Range($op.addr)
