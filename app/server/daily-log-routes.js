@@ -20,7 +20,7 @@ const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const registry = require('./parsers/registry');
 const { validateDailyLog } = require('./daily-log-validate');
-const { daysToOperations, diffDays } = require('./daily-log-write');
+const { daysToOperations, diffDays, feeItemsPlan } = require('./daily-log-write');
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { saveAttachment } = require('./project-attachments-routes');
@@ -223,7 +223,10 @@ function registerRoutes(app) {
 
         const dest = ensureWorkbook(req.params.id);
         tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
-        await fillTemplate(dest, tmp, daysToOperations(days, ctx.contract, ctx.開工日));
+        // 竣工日期是費用項目推算的分母(見 daily-log-write.js)。承辦人還沒填時
+        // 傳 null,那幾列就維持照日誌的原行為,不會擋住這份日誌寫入。
+        await fillTemplate(dest, tmp,
+          daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期));
         // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await(同 project-basics-routes.js:152)
         fs.renameSync(tmp, dest);
         tmp = null;
@@ -252,7 +255,16 @@ function registerRoutes(app) {
           userId: req.userId || null,
         });
 
-        res.json({ ok: true, 天數: days.length, 筆數: rows.length, warnings: result.warnings });
+        // 承辦人選的是「報表版面不動,改在系統畫面標示」,所以哪幾列是系統推算的
+        // 必須在這裡講清楚——報表本身看不出來。
+        const plan = feeItemsPlan(ctx.contract, ctx.開工日, ctx.project.竣工日期);
+        res.json({
+          ok: true,
+          天數: days.length,
+          筆數: rows.length,
+          warnings: result.warnings,
+          費用推算: { 工期天數: plan.工期天數, 項目: plan.items.map((f) => f.項目) },
+        });
       } catch (err) {
         if (/projectId 不合法/.test(err.message || '')) {
           return res.status(400).json({ error: '網址中的工程 id 不合法' });

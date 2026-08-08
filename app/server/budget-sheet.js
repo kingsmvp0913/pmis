@@ -31,6 +31,15 @@ const ITEM_NO = /^\d+$/;
 // 因為 `A.壹` 的最後一段就是「壹」。
 const noKey = (項次) => String(項次).split('.').pop();
 
+/**
+ * 這一項是不是「費用項目」(職安衛管理費/品管費/包商管理費/保險費/營業稅…)。
+ * 這類項目沒有施工實體,施工日誌不會記,每日進度由 SP3 依契約工期推算
+ * (見 daily-log-write.js)。判定與收錄規則共用同一個項次正規化,兩邊不會漂移。
+ * @param {string} 項次
+ * @returns {boolean}
+ */
+const isFeeItem = (項次) => FEE_NO.test(noKey(項次));
+
 // 小計/合計/總計列是公式結果。收下它們,累計金額與完成百分比會整份重複計算。
 const SUBTOTAL = /小計|合計|總計/;
 
@@ -123,4 +132,4 @@ function readSheets(filePath) {
   }));
 }
 
-module.exports = { readSheets, parseItems, findCandidates };
+module.exports = { readSheets, parseItems, findCandidates, isFeeItem };

@@ -94,6 +94,23 @@ const DailyLogs = (() => {
       ]));
     }
 
+    // 職安衛管理費、營業稅這類費用項目沒有施工實體,施工日誌不會記,每日進度是
+    // 系統依契約工期推算的。報表版面刻意不加註記(承辦人的決定),所以「哪幾列
+    // 不是工地回報的數字」只剩這裡會講——不講的話報表上完全看不出來。
+    function renderFeeNote(fee) {
+      if (!fee) return;
+      if (!fee.工期天數) {
+        diffBox.appendChild(el('div', { class: 'hint' },
+          '※ 尚未填竣工日期,職業安全衛生管理費等費用項目算不出每日進度,這幾列維持依施工日誌寫入。'
+          + '在工程基本資料補上竣工日期後重新寫入即可。'));
+        return;
+      }
+      if (!fee.項目 || !fee.項目.length) return;
+      diffBox.appendChild(el('div', { class: 'hint' },
+        `※ ${fee.項目.join('、')} 共 ${fee.項目.length} 項沒有施工實體,施工日誌不會記載,`
+        + `每日進度由系統依契約工期 ${fee.工期天數} 天平均推算——不是工地回報的數字。`));
+    }
+
     const fd = () => { const f = new FormData(); f.append('daily_log', file); return f; };
 
     parseBtn.addEventListener('click', async () => {
@@ -136,6 +153,7 @@ const DailyLogs = (() => {
         showToast(`已寫入 ${r.天數} 天、${r.筆數} 筆逐日資料`, 'success');
         confirmBtn.style.display = 'none';
         diffBox.innerHTML = '';
+        renderFeeNote(r.費用推算);
       } catch (e) {
         showErr(e.message);
       } finally {
