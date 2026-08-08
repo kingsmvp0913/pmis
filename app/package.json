@@ -7,13 +7,16 @@
     "test": "jest --runInBand --forceExit"
   },
   "dependencies": {
+    "@hyzyla/pdfium": "^2.1.13",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
     "multer": "^2.2.0",
+    "onnxruntime-node": "^1.27.0",
     "pdf-parse": "^1.1.4",
     "pg": "^8.22.0",
+    "ppu-paddle-ocr": "^6.3.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

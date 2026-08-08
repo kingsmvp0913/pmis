@@ -90,6 +90,15 @@ async function main() {
   await db.migrate();
   console.log('[OK] 資料表 migration 完成');
 
+  // OCR 模型是選配:抓不到(沒網路、GitHub 擋掉)就沿用 Windows 內建引擎,
+  // 功能仍完整、只是辨識率較差,所以**不得讓它擋住整個安裝**。
+  try {
+    await require('./fetch-ocr-models.js').main();
+  } catch (err) {
+    console.warn(`[跳過] OCR 模型未取得(${err.message});將沿用 Windows 內建引擎。`);
+    console.warn('       日後可單獨補跑:node app/scripts/fetch-ocr-models.js');
+  }
+
   console.log('安裝完成。請雙擊「啟動.bat」啟動(首次啟動會導向建立管理員)。');
 }
 
