@@ -1,25 +1,24 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
 echo ============================================
-echo    PMIS å®‰è£(ç¬¬ä¸€æ¬¡ä½¿ç”¨åŸ·è¡Œé€™å€‹å°±å¥½)
+echo    PMIS ¦w¸Ë(²Ä¤@¦¸¨Ï¥Î°õ¦æ³o­Ó´N¦n)
 echo ============================================
 echo.
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [1/4] å®‰è£ Node.js ...
+  echo [1/4] ¦w¸Ë Node.js ...
   winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [1/4] Node.js å·²å®‰è£,ç•¥éŽ
+  echo [1/4] Node.js ¤w¦w¸Ë,²¤¹L
 )
 
 where psql >nul 2>nul
 if errorlevel 1 (
-  echo [2/4] å®‰è£ PostgreSQL 17 ...
+  echo [2/4] ¦w¸Ë PostgreSQL 17 ...
   winget install -e --id PostgreSQL.PostgreSQL.17 --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [2/4] PostgreSQL å·²å®‰è£,ç•¥éŽ
+  echo [2/4] PostgreSQL ¤w¦w¸Ë,²¤¹L
 )
 
 call :refreshpath
@@ -27,24 +26,24 @@ call :refreshpath
 where node >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo Node å·²å®‰è£å®Œæˆ,ä½†éœ€è¦é‡æ–°é–‹å•Ÿè¦–çª—æ‰æœƒç”Ÿæ•ˆã€‚
-  echo è«‹é—œé–‰é€™å€‹è¦–çª—,å†é›™æ“Šä¸€æ¬¡ã€Œå®‰è£.batã€å³å¯ç¹¼çºŒã€‚
+  echo Node ¤w¦w¸Ë§¹¦¨,¦ý»Ý­n­«·s¶}±Òµøµ¡¤~¯à¥Í®Ä¡C
+  echo ½ÐÃö³¬³o­Óµøµ¡,¦AÂùÀ»¤@¦¸¡u¦w¸Ë.bat¡v§Y¥iÄ~Äò¡C
   echo.
   pause
   exit /b 1
 )
 
-echo [3/4] å®‰è£ç›¸ä¾å¥—ä»¶ ...
+echo [3/4] ¦w¸Ë¬Û¨Ì®M¥ó ...
 pushd app
 call npm install
 popd
 
-echo [4/4] å»ºç«‹è³‡æ–™åº«ä¸¦åˆå§‹åŒ– ...
+echo [4/4] «Ø¥ß¸ê®Æ®w¨Ãªì©l¤Æ ...
 node "app\scripts\setup.js"
 if errorlevel 1 (
   echo.
-  echo è³‡æ–™åº«åˆå§‹åŒ–å¤±æ•—ã€‚è‹¥ä½ é›»è…¦å·²æœ‰ PostgreSQL ä¸”å¯†ç¢¼ä¸æ˜¯ postgres,
-  echo è«‹é–‹å•Ÿ data\config.json ä¿®æ”¹ DATABASE_URL æˆæ­£ç¢ºå¸³å¯†å¾Œ,å†åŸ·è¡Œä¸€æ¬¡æœ¬æª”ã€‚
+  echo ¸ê®Æ®wªì©l¤Æ¥¢±Ñ¡C­Y§A¹q¸£¤w¦³ PostgreSQL ¥B±K½X¤£¬O postgres,
+  echo ½Ð¶}±Ò data\config.json ­×§ï DATABASE_URL ¦¨¥¿½T±b±K«á,¦A°õ¦æ¤@¦¸¥»ÀÉ¡C
   echo.
   pause
   exit /b 1
@@ -52,13 +51,13 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo    å®‰è£å®Œæˆ!è«‹é›™æ“Šã€Œå•Ÿå‹•.batã€é–‹å§‹ä½¿ç”¨ã€‚
+echo    ¦w¸Ë§¹¦¨!½ÐÂùÀ»¡u±Ò°Ê.bat¡v¶}©l¨Ï¥Î¡C
 echo ============================================
 pause
 exit /b 0
 
 :refreshpath
-rem é‡æ–°è¼‰å…¥ç³»çµ±/ä½¿ç”¨è€… PATH(winget è£å®Œç•¶å‰è¦–çª—è®€ä¸åˆ°æ–°è·¯å¾‘)
+rem ­«·s¸ü¤J¨t²Î/¨Ï¥ÎªÌ PATH(winget ¸Ë§¹·í«eµøµ¡Åª¤£¨ì·sªº PATH)
 for /f "skip=2 tokens=2,*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "MPATH=%%B"
 for /f "skip=2 tokens=2,*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "UPATH=%%B"
 set "PATH=%MPATH%;%UPATH%"
