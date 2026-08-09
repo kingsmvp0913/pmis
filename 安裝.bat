@@ -13,8 +13,10 @@ if errorlevel 1 (
   echo [1/4] Node.js 已安裝,略過
 )
 
-where psql >nul 2>nul
-if errorlevel 1 (
+set "PGOK="
+where psql >nul 2>nul && set "PGOK=1"
+reg query "HKLM\SOFTWARE\PostgreSQL\Installations" >nul 2>nul && set "PGOK=1"
+if not defined PGOK (
   echo [2/4] 安裝 PostgreSQL 17 ...
   winget install -e --id PostgreSQL.PostgreSQL.17 --silent --accept-package-agreements --accept-source-agreements
 ) else (
@@ -60,5 +62,5 @@ exit /b 0
 rem 重新載入系統/使用者 PATH(winget 裝完當前視窗讀不到新的 PATH)
 for /f "skip=2 tokens=2,*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "MPATH=%%B"
 for /f "skip=2 tokens=2,*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "UPATH=%%B"
-set "PATH=%MPATH%;%UPATH%"
+call set "PATH=%MPATH%;%UPATH%"
 goto :eof
