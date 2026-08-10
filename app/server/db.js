@@ -176,6 +176,19 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 工程投保的險種(多選)。一個工程常同時投營造綜合保險與意外責任險等數種,
+    // 原本 projects.insurance_type_id 是單一 FK,只存得下一種——承辦人得挑一個
+    // 填、其餘的沒有地方記。
+    //
+    // 舊欄位保留但**不再讀**:留著是為了讓升級後還查得到舊資料是怎麼填的
+    // (下面的一次性搬移已把它併進這張表),移除它要另外處理相依的查詢,
+    // 而那不是這次的範圍。
+    `CREATE TABLE IF NOT EXISTS project_insurance_types (
+      id                SERIAL PRIMARY KEY,
+      project_id        INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      insurance_type_id INTEGER NOT NULL REFERENCES insurance_types(id) ON DELETE CASCADE
+    )`,
+
     `CREATE TABLE IF NOT EXISTS project_attachments (
       id            SERIAL PRIMARY KEY,
       project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -280,6 +293,19 @@ async function migrate() {
     await query('INSERT INTO firms (name) VALUES ($1)', [name]);
     firmNames.add(name);
   }
+
+  // 單一險種 → 多險種的一次性搬移。以「這個工程在新表裡還沒有任何一列」為條件,
+  // 重跑不會重複插入,也不會覆蓋承辦人升級後才改成多選的結果
+  // (只要他改過,新表就有列,這段就跳過)。
+  // 不用 NOT EXISTS + 外層別名:pg-mem 解不出那種相關子查詢(「column p.id does not
+  // exist」),而測試全跑在 pg-mem 上。NOT IN 這裡是安全的——project_id 是 NOT NULL,
+  // 不會踩到 NOT IN 遇 NULL 全為 false 的坑。
+  await query(
+    `INSERT INTO project_insurance_types (project_id, insurance_type_id)
+     SELECT id, insurance_type_id FROM projects
+      WHERE insurance_type_id IS NOT NULL
+        AND id NOT IN (SELECT project_id FROM project_insurance_types)`
+  );
 }
 
 /**

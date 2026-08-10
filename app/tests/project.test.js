@@ -506,3 +506,95 @@ describe('工程狀態與狀態總表', () => {
     expect(res.body.筆數).toBe(2);
   });
 });
+
+// 一個工程常同時投營造綜合保險與意外責任險等數種,原本 projects.insurance_type_id
+// 是單一 FK,承辦人只能挑一個填、其餘沒有地方記。
+describe('工程投保險種(多選)', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  async function 建險種(n) {
+    const { rows: ins } = await db.query(`INSERT INTO insurers (name) VALUES ('新光產物') RETURNING id`);
+    const ids = [];
+    for (let i = 1; i <= n; i++) {
+      const { rows } = await db.query(
+        'INSERT INTO insurance_types (insurer_id, name) VALUES ($1, $2) RETURNING id',
+        [ins[0].id, `險種${i}`]);
+      ids.push(rows[0].id);
+    }
+    return { insurerId: ins[0].id, typeIds: ids };
+  }
+  const put = (id, body) => request(app).put(`/api/projects/${id}`)
+    .set('Authorization', `Bearer ${token}`).send({ name: '工程', ...body });
+
+  test('存得下多個險種,讀得回來', async () => {
+    const { typeIds } = await 建險種(3);
+    const c = await createViaAward(app, token, { name: '工程' });
+    const res = await put(c.body.id, { insurance_type_ids: [typeIds[0], typeIds[2]] }).expect(200);
+    expect(res.body.insurance_type_ids.sort()).toEqual([typeIds[0], typeIds[2]].sort());
+    const got = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(got.body.insurance_type_ids.sort()).toEqual([typeIds[0], typeIds[2]].sort());
+  });
+
+  test('整批取代:再送一次只留新的那組', async () => {
+    const { typeIds } = await 建險種(3);
+    const c = await createViaAward(app, token, { name: '工程' });
+    await put(c.body.id, { insurance_type_ids: [typeIds[0], typeIds[1]] }).expect(200);
+    const res = await put(c.body.id, { insurance_type_ids: [typeIds[2]] }).expect(200);
+    expect(res.body.insurance_type_ids).toEqual([typeIds[2]]);
+  });
+
+  test('送空陣列 = 全部取消投保', async () => {
+    const { typeIds } = await 建險種(2);
+    const c = await createViaAward(app, token, { name: '工程' });
+    await put(c.body.id, { insurance_type_ids: typeIds }).expect(200);
+    const res = await put(c.body.id, { insurance_type_ids: [] }).expect(200);
+    expect(res.body.insurance_type_ids).toEqual([]);
+  });
+
+  // PUT 是整筆取代,而別處(如開工報告表補寫主檔)送的 body 本來就沒有這個欄位。
+  // 一律當成清空會把承辦人選好的險種靜默清掉。
+  test('沒帶這個欄位時不動既有險種', async () => {
+    const { typeIds } = await 建險種(2);
+    const c = await createViaAward(app, token, { name: '工程' });
+    await put(c.body.id, { insurance_type_ids: typeIds }).expect(200);
+    const res = await put(c.body.id, {}).expect(200);
+    expect(res.body.insurance_type_ids.sort()).toEqual(typeIds.sort());
+  });
+
+  test('重複送同一個 id 不會在表裡留兩列', async () => {
+    const { typeIds } = await 建險種(1);
+    const c = await createViaAward(app, token, { name: '工程' });
+    const res = await put(c.body.id, { insurance_type_ids: [typeIds[0], typeIds[0]] }).expect(200);
+    expect(res.body.insurance_type_ids).toEqual([typeIds[0]]);
+  });
+
+  // 升級前用單一 FK 存的資料要自動搬進新表,否則承辦人一進畫面會發現險種不見了
+  test('舊的單一險種資料在 migrate 時搬進多選表', async () => {
+    const { typeIds } = await 建險種(1);
+    const c = await createViaAward(app, token, { name: '舊案' });
+    await db.query('UPDATE projects SET insurance_type_id = $1 WHERE id = $2', [typeIds[0], c.body.id]);
+    await db.migrate();               // 重跑 migrate 模擬升級
+    const got = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(got.body.insurance_type_ids).toEqual([typeIds[0]]);
+  });
+
+  // 搬移要冪等:migrate 每次啟動都跑,重複插入會讓險種一次比一次多
+  test('migrate 重跑不會重複搬', async () => {
+    const { typeIds } = await 建險種(1);
+    const c = await createViaAward(app, token, { name: '舊案' });
+    await db.query('UPDATE projects SET insurance_type_id = $1 WHERE id = $2', [typeIds[0], c.body.id]);
+    await db.migrate();
+    await db.migrate();
+    const { rows } = await db.query(
+      'SELECT COUNT(*)::int AS n FROM project_insurance_types WHERE project_id = $1', [c.body.id]);
+    expect(rows[0].n).toBe(1);
+  });
+});

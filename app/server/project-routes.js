@@ -127,6 +127,40 @@ function deriveStatus(row) {
   return '施工中';
 }
 
+/**
+ * 一個工程投保的險種 id 清單。一個工程常同時投營造綜合保險與意外責任險等數種,
+ * 原本的單一 FK 只存得下一個。
+ */
+async function loadInsuranceTypes(projectId) {
+  const { rows } = await query(
+    `SELECT insurance_type_id FROM project_insurance_types
+      WHERE project_id = $1 ORDER BY insurance_type_id`, [projectId]
+  );
+  return rows.map((r) => r.insurance_type_id);
+}
+
+/**
+ * 整批取代某工程的險種(沿用 insurer-routes.replaceTypes 的作法)。
+ *
+ * **傳 undefined 代表「這次不動險種」,不是「清空」**:PUT 是整筆取代,
+ * 而別處(如開工報告表補寫主檔)送的 body 裡本來就沒有這個欄位,
+ * 一律當成清空會把承辦人選好的險種靜默清掉。
+ */
+async function replaceInsuranceTypes(projectId, ids) {
+  if (ids === undefined) return;
+  await query('DELETE FROM project_insurance_types WHERE project_id = $1', [projectId]);
+  const list = Array.isArray(ids) ? ids : [];
+  // 去重:前端重複送同一個 id 不該在表裡留兩列
+  for (const id of [...new Set(list)]) {
+    const n = Number(id);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    await query(
+      'INSERT INTO project_insurance_types (project_id, insurance_type_id) VALUES ($1, $2)',
+      [projectId, n]
+    );
+  }
+}
+
 function withComputed(row) {
   const fee = computeDesignFeeActual(row);
   return {
@@ -228,7 +262,10 @@ function registerRoutes(app) {
     try {
       const { rows } = await query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
-      res.json(withComputed(rows[0]));
+      res.json({
+        ...withComputed(rows[0]),
+        insurance_type_ids: await loadInsuranceTypes(req.params.id),
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -345,7 +382,11 @@ function registerRoutes(app) {
         values
       );
       if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
-      res.json(withComputed(rows[0]));
+      await replaceInsuranceTypes(req.params.id, req.body.insurance_type_ids);
+      res.json({
+        ...withComputed(rows[0]),
+        insurance_type_ids: await loadInsuranceTypes(req.params.id),
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

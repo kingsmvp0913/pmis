@@ -221,22 +221,35 @@
 
     // 保險公司 → 險種連動
     const insurerI = selectFrom(insurers, p.insurer_id, '(未選保險公司)');
-    const typeI = el('select', { class: 'form-control' }, [el('option', { value: '' }, '(未選險種)')]);
-    async function loadTypes(insurerId, selectedTypeId) {
+    // 險種是**多選**:一個工程常同時投營造綜合保險與意外責任險等數種。
+    // 用 checkbox 而不是 <select multiple>——後者要按住 Ctrl 才能複選,
+    // 承辦人不會知道,而且看不出「目前選了哪幾個」。
+    const typeI = el('div', { class: 'check-list' });
+    let 已選險種 = Array.isArray(p.insurance_type_ids) ? p.insurance_type_ids.map(String) : [];
+    async function loadTypes(insurerId, selectedIds) {
       typeI.innerHTML = '';
-      typeI.appendChild(el('option', { value: '' }, '(未選險種)'));
-      if (!insurerId) return;
+      已選險種 = (selectedIds || []).map(String);
+      if (!insurerId) {
+        typeI.appendChild(el('span', { class: 'hint' }, '請先選擇保險公司'));
+        return;
+      }
       try {
         const types = await Api.get('insurers/' + insurerId + '/types');
-        types.forEach(t => {
-          const opt = el('option', { value: String(t.id) }, t.name);
-          if (String(t.id) === String(selectedTypeId)) opt.selected = true;
-          typeI.appendChild(opt);
+        if (!types.length) {
+          typeI.appendChild(el('span', { class: 'hint' }, '這家保險公司尚未建立險種'));
+          return;
+        }
+        types.forEach((t) => {
+          const cb = el('input', { type: 'checkbox', value: String(t.id) });
+          if (已選險種.includes(String(t.id))) cb.checked = true;
+          typeI.appendChild(el('label', { class: 'check-item' }, [cb, el('span', {}, t.name)]));
         });
       } catch (e) { showToast(e.message, 'error'); }
     }
-    insurerI.addEventListener('change', () => loadTypes(insurerI.value, null));
-    if (p.insurer_id) loadTypes(p.insurer_id, p.insurance_type_id);
+    // 換保險公司等於換一整組險種,舊的勾選不再適用,清空重來
+    insurerI.addEventListener('change', () => loadTypes(insurerI.value, []));
+    loadTypes(p.insurer_id, 已選險種);
+    const 選取的險種 = () => [...typeI.querySelectorAll('input:checked')].map((c) => Number(c.value));
 
     const insStartI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.insurance_start) });
     const insEndI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.insurance_end) });
@@ -606,7 +619,7 @@
         actual_completion_date: actualI.value || null,
         award_amount: awardI.amountValue() || null,
         insurer_id: insurerI.value || null,
-        insurance_type_id: typeI.value || null,
+        insurance_type_ids: 選取的險種(),
         insurance_start: insStartI.value || null,
         insurance_end: insEndI.value || null,
         design_fee_type: feeTypeI.value,
