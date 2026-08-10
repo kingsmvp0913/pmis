@@ -291,11 +291,45 @@ function repairOcrText(s) {
   return snapLabel(t);
 }
 
+/**
+ * ④ **同一個表格列被 OCR 切成好幾個 line 時,要對齊回同一個 y。**
+ *
+ * ②已經讓「同一個 line」共用一個 y,但 OCR 對密集表格常把一列切成多個 line
+ * (欄與欄之間空白大),各 line 的框底中位數差 2~3 點。讀取器的 y 分帶容差是
+ * 2 點上下(宜謙 2、金大 2.5),於是同一列被拆開——項次落在一帶、數值落在另一帶,
+ * `byColumn` 各算各的,結果是**整列讀不到值**。
+ *
+ * 這個失敗模式在 item 層完全看不見:框本身位置對、字也對,item 層仍有 86.8%,
+ * dailyRows 層卻只剩 30%(饒平 0711A 實測)。
+ *
+ * 容差 5 點是實測選的(6 份可計分文件、296 格,對/錯/漏):
+ *   不對齊 36.8/2.4/60.8 ‖ 3 點 45.6/0.3/54.1 ‖ **5 點 62.8/1.7/35.5** ‖ 8 點 11.8/0.7/87.5
+ * 8 點會開始把**相鄰列**併起來(這些表單列距 8 點上下),併了就是把別列的數值
+ * 讀成本列的——那是「錯」不是「漏」,比不對齊更糟,所以不能再往上調。
+ *
+ * 貪婪分群,群的錨點固定用第一個(最上面)的 y,不隨新成員位移:否則一串各差
+ * 4 點的 item 會一路把群往下拖,最後把好幾列併成一列。
+ */
+const ROW_SNAP_TOLERANCE = 5;
+
+function snapRows(items, tol) {
+  if (!(tol > 0)) return items;
+  const sorted = items.slice().sort((a, b) => b.y - a.y);
+  const groups = [];
+  for (const it of sorted) {
+    const g = groups[groups.length - 1];
+    if (g && g.y - it.y <= tol) g.items.push(it);
+    else groups.push({ y: it.y, items: [it] });
+  }
+  return groups.flatMap((g) => g.items.map((it) => (it.y === g.y ? it : { ...it, y: g.y })));
+}
+
 async function extractItemsOcr(filePath, opts = {}) {
   const ocr = opts.ocr;
   if (!ocr || typeof ocr.ocrPdf !== 'function') throw new Error('extractItemsOcr 需要注入 ocr.ocrPdf');
   const width = opts.width || 2200;
   const gapRatio = opts.gapRatio == null ? 0.8 : opts.gapRatio;
+  const rowSnap = opts.rowSnap == null ? ROW_SNAP_TOLERANCE : opts.rowSnap;
 
   const { pages } = await ocr.ocrPdf(filePath, { widths: [width] });
   const out = [];
@@ -339,8 +373,9 @@ async function extractItemsOcr(filePath, opts = {}) {
       }
       if (cur) items.push({ x: cur.x0 * k, y, w: (cur.x1 - cur.x0) * k, s: repairOcrText(cur.s) });
     }
-    items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
-    out.push({ page: p.page, items });
+    const rows = snapRows(items, rowSnap);              // ④:跨 line 對齊回同一個表格列
+    rows.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+    out.push({ page: p.page, items: rows });
   }
   out.sort((a, b) => a.page - b.page);
   return out;
@@ -348,3 +383,5 @@ async function extractItemsOcr(filePath, opts = {}) {
 
 module.exports.extractItemsOcr = extractItemsOcr;
 module.exports._ocrRepair = { repairOcrText, snapLabel, repairNum, OCR_LABELS };
+module.exports._snapRows = snapRows;
+module.exports.ROW_SNAP_TOLERANCE = ROW_SNAP_TOLERANCE;

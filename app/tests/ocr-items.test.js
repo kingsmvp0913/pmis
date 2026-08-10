@@ -5,7 +5,9 @@
  * `extractItemsOcr` 收的是注入的 `ocr`,所以餵一份「真實形狀」的假 OCR 輸出就能
  * 把換算邏輯釘死——那些數字取自鎮西 `0601A-0630A.pdf` 第 1 頁的實際 OCR 輸出。
  */
-const { extractItemsOcr, _ocrRepair } = require('../server/parsers/filetypes/pdf');
+const {
+  extractItemsOcr, _ocrRepair, _snapRows, ROW_SNAP_TOLERANCE,
+} = require('../server/parsers/filetypes/pdf');
 const { pageHeader, scanCoverage } = require('../server/daily-log-scan');
 
 // 鎮西 0601A 第 1 頁的真實 OCR 片段(2200 → 點陣圖實際 2750px;A4 793.6×1122.24 DIP)
@@ -69,6 +71,47 @@ test('同一行共用一個 y(逐字的框底差好幾點,會把一列拆成兩�
   const line2 = items.filter((i) => i.s === '晴' || i.s === '下午');
   expect(line2).toHaveLength(2);
   expect(line2[0].y).toBe(line2[1].y);
+});
+
+describe('跨 line 的表格列對齊', () => {
+  // 密集表格裡 OCR 常把一列切成多個 line(欄與欄的空白大),各 line 的框底中位數
+  // 差 2~3 點。讀取器的 y 分帶容差只有 2 點上下,不對齊的話項次與數值會落在不同帶,
+  // 整列讀不到值——而 item 層完全看不出來(框對、字也對)。
+  //
+  // 座標取自實際換算:A4 793.6×1122.24 DIP、點陣圖 2750px → 1 點 ≈ 4.62px。
+  const 列 = (bottomPx, x, s) => ({ t: s, line: `${bottomPx}-${x}`, x, y: bottomPx - 40, w: 40, h: 40 });
+  const page = (words) => ({
+    page: 1, width: 2200, bw: 2750, bh: 3889, pw: 793.6, ph: 1122.24, lines: [], boxes: [], words,
+  });
+
+  test('同一列被切成多個 line 時要對齊回同一個 y', async () => {
+    // 項次與數值差 14px ≈ 3.0 點:小於容差,是同一列
+    const ocr = { ocrPdf: async () => ({ pages: [page([列(1040, 350, '1'), 列(1054, 2000, '5')])], failedPages: [] }) };
+    const items = (await extractItemsOcr('x.pdf', { ocr }))[0].items;
+    expect(items).toHaveLength(2);
+    expect(items[0].y).toBe(items[1].y);
+  });
+
+  test('相鄰列不可被併(併了是把別列的數值讀成本列的,那是錯不是漏)', async () => {
+    // 1040 與 1077 差 37px ≈ 8.0 點:這些表單的列距,必須分開
+    const ocr = { ocrPdf: async () => ({ pages: [page([列(1040, 350, '1'), 列(1077, 350, '2')])], failedPages: [] }) };
+    const items = (await extractItemsOcr('x.pdf', { ocr }))[0].items;
+    expect(items).toHaveLength(2);
+    expect(items[0].y).not.toBe(items[1].y);
+  });
+
+  test('群的錨點固定用最上面那一個,不隨新成員位移', () => {
+    // 三個各差 4 點的 item:逐一比「與前一個的距離」會把它們全併成一列(跨距 8 點),
+    // 而 8 點正是列距——那等於把三列壓成一列。錨點固定才會在第三個切開。
+    const got = _snapRows([{ y: 100 }, { y: 96 }, { y: 92 }], ROW_SNAP_TOLERANCE);
+    const ys = got.map((i) => i.y).sort((a, b) => b - a);
+    expect(ys).toEqual([100, 100, 92]);
+  });
+
+  test('容差 0 等於不對齊(留給量測基座做 A/B)', () => {
+    const src = [{ y: 100 }, { y: 97 }];
+    expect(_snapRows(src, 0)).toBe(src);
+  });
 });
 
 describe('OCR 修補層', () => {
