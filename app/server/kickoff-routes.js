@@ -23,6 +23,7 @@ const { readKickoffReport } = require('./kickoff-report');
 const { readAwardNotice } = require('./award-notice');
 const { compareKickoff, hardErrors, validateValues } = require('./kickoff-compare');
 const { saveAttachment } = require('./project-attachments-routes');
+const { isWordFile, convertToPdf } = require('./doc-convert');
 const { safeResolve } = require('./history-routes');
 
 // OCR 需要實體檔(WinRT 的 GetFileFromPathAsync 吃路徑),故落暫存檔再刪。
@@ -77,6 +78,21 @@ async function withTempPdf(buffer, fn) {
   fs.writeFileSync(tmp, buffer);
   try { return await fn(tmp); }
   finally { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
+}
+
+/**
+ * 上傳的內容 → 可供 OCR 的 PDF buffer。
+ *
+ * 開工報告表有相當比例是 Word 檔,舊版 `.doc` 尤其沒有可靠的純 JS 讀法
+ * (OLE2 複合文件,與 .docx 的 zip+XML 是兩回事)。轉成 PDF 再走既有那條路,
+ * 下游的 OCR 座標配對完全不用改。
+ *
+ * **歸檔存的仍是承辦人上傳的原始檔**,不是轉出來的 PDF:附件是憑據,
+ * 他手上有的是那份 .doc。
+ */
+async function toPdfBuffer(file) {
+  if (!isWordFile(file.originalname)) return file.buffer;
+  return convertToPdf(file.buffer, file.originalname);
 }
 
 /**
@@ -169,7 +185,7 @@ function registerRoutes(app) {
     upload.single('kickoff_report'), async (req, res) => {
       try {
         if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳開工報告表 PDF' });
+          return res.status(400).json({ error: '請上傳開工報告表(PDF 或 Word)' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
@@ -183,7 +199,7 @@ function registerRoutes(app) {
           return res.status(400).json({ error: found ? BAD_AWARD_MESSAGE : NO_AWARD_MESSAGE });
         }
 
-        const kickoff = await withTempPdf(req.file.buffer, (p) => readKickoffReport(p));
+        const kickoff = await withTempPdf(await toPdfBuffer(req.file), (p) => readKickoffReport(p));
         res.json({
           kickoff,
           award,
@@ -203,7 +219,7 @@ function registerRoutes(app) {
     upload.single('kickoff_report'), async (req, res) => {
       try {
         if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳開工報告表 PDF' });
+          return res.status(400).json({ error: '請上傳開工報告表(PDF 或 Word)' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         // 多選四欄當「補寫前快照」:confirm 成功後若要補寫主檔,靠這份判斷哪些欄位
