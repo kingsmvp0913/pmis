@@ -201,13 +201,23 @@
     }
 
     const noI = el('input', { class: 'form-control', type: 'text', value: p.project_no || '' });
+    // 事務所自己的檔案編號,與決標公告上的契約編號無關(那是 noI)。
+    const firmNoI = el('input', {
+      class: 'form-control', type: 'text', value: p.firm_doc_no || '',
+      placeholder: '事務所內部歸檔用',
+    });
     const nameI = el('input', { class: 'form-control', type: 'text', value: p.name || '' });
     const vendorI = selectFrom(vendors, p.vendor_id, '(未選廠商)');
     const schoolI = selectFrom(schools, p.school_id, '(未選學校)');
     const startI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.start_date) });
     const contractI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.contract_completion_date) });
     const actualI = el('input', { class: 'form-control', type: 'date', value: PmisApp.toDateInputValue(p.actual_completion_date) });
-    const awardI = el('input', { class: 'form-control', type: 'number', step: '1', value: p.award_amount != null ? p.award_amount : '' });
+    // 金額欄帶千分號:七位數沒有逗號要一位一位數才對得起來。
+    // type 不能是 number——那個標不出千分號(見 PmisApp.attachAmountInput)。
+    const awardI = PmisApp.attachAmountInput(el('input', {
+      class: 'form-control', type: 'text', inputmode: 'numeric',
+      value: p.award_amount != null ? p.award_amount : '',
+    }));
 
     // 保險公司 → 險種連動
     const insurerI = selectFrom(insurers, p.insurer_id, '(未選保險公司)');
@@ -252,7 +262,7 @@
         const a = feeAmountI.value.trim();
         text = a ? `實際設計費:${Number(a).toLocaleString()} 元` : '實際設計費:—';
       } else {
-        const award = awardI.value.trim();
+        const award = awardI.amountValue();
         const pct = feePctI.value.trim();
         if (!award) { text = '未招標,設計費待補(需先填決標金額)'; warn = true; }
         else if (!pct) { text = '實際設計費:—(請填百分比)'; }
@@ -273,6 +283,7 @@
     const card = el('div', { class: 'card' }, [
       el('div', { class: 'form-row' }, [
         el('div', { class: 'form-group' }, [el('label', {}, '工程編號'), noI]),
+        el('div', { class: 'form-group' }, [el('label', {}, '事務所檔案編號'), firmNoI]),
         el('div', { class: 'form-group' }, [el('label', {}, '工程名稱'), nameI])
       ]),
       el('div', { class: 'form-row' }, [
@@ -343,7 +354,7 @@
           // 下拉的 value 是資料庫 id、placeholder(「(未選學校)」等)的 value 是空字串——
           // 只有真的選了才取 textContent(名稱)當值,否則送空字串讓後端 REQUIRED 擋下,
           // 不可用「selectedIndex 一定有值」判斷有沒有選,那樣永遠會拿到 placeholder 文字。
-          const 契約金額raw = awardI.value.trim();
+          const 契約金額raw = awardI.amountValue();
           const 契約工期raw = 工期I.value.trim();
           const values = {
             工程名稱: nameI.value.trim(), 監造單位: supI.value.trim(),
@@ -494,7 +505,7 @@
       awardI.value = '';
       if (p.工程名稱) nameI.value = p.工程名稱;
       if (p.工程編號) noI.value = p.工程編號;
-      if (p.契約金額 != null) awardI.value = p.契約金額;
+      if (p.契約金額 != null) awardI.value = PmisApp.formatAmount(p.契約金額);
       bindOrCreate(vendorI, data.vendorMatch, 'vendors', '廠商');
       bindOrCreate(schoolI, data.schoolMatch, 'schools', '學校');
     }
@@ -573,13 +584,14 @@
       if (!name) { showToast('請輸入工程名稱', 'warn'); return; }
       const body = {
         project_no: noI.value.trim(),
+        firm_doc_no: firmNoI.value.trim() || null,
         name,
         vendor_id: vendorI.value || null,
         school_id: schoolI.value || null,
         start_date: startI.value || null,
         contract_completion_date: contractI.value || null,
         actual_completion_date: actualI.value || null,
-        award_amount: awardI.value.trim() || null,
+        award_amount: awardI.amountValue() || null,
         insurer_id: insurerI.value || null,
         insurance_type_id: typeI.value || null,
         insurance_start: insStartI.value || null,
@@ -636,6 +648,7 @@
         el('thead', {}, [el('tr', {}, [
           el('th', { style: 'width:110px' }, '編號'),
           el('th', {}, '名稱'),
+          el('th', { style: 'width:76px' }, '狀態'),
           el('th', { style: 'width:140px' }, '設計費'),
           el('th', { style: 'width:300px' }, '流程'),
           el('th', { style: 'width:50px' }, '')
@@ -650,6 +663,15 @@
     // 流程關卡。判定與 WorkflowStatus.bar 同一套語意(附件種類、契約項目數、
     // 日誌天數),不重寫一份規則——真正的把關仍在各自的後端路由。
     // 「前置未完成」的按鈕 disabled:按了也只會被後端擋下,不如先講清楚缺什麼。
+    // 工程狀態(後端推導,見 project-routes.deriveStatus)。承辦人手上十幾案時
+    // 「哪幾案還在施工」是掃列表最先要看到的一件事,不該逐案點進去比日期。
+    // 顏色一律走 CSS 變數:深色模式下寫死顏色會與底色相衝。
+    function statusBadge(status) {
+      const color = status === '施工中' ? 'var(--info)'
+        : (status === '已竣工' ? 'var(--success)' : 'var(--text-muted)');
+      return el('span', { style: `color:${color};font-weight:600` }, status || '—');
+    }
+
     function flowSteps(p) {
       return [
         { key: 'kickoff', 名: '開工表', 好: !!p.has_kickoff, 缺: '需先建立工程(上傳決標公告)' },
@@ -707,7 +729,7 @@
       catch (e) { showToast(e.message, 'error'); return; }
       tbody.innerHTML = '';
       if (!rows.length) {
-        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '5' }, '沒有資料')]));
+        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '6' }, '沒有資料')]));
         return;
       }
       for (const p of rows) {
@@ -715,7 +737,7 @@
         if (p.design_fee_unbid) feeText = '未招標,待補';
         else if (p.design_fee_actual != null) feeText = Number(p.design_fee_actual).toLocaleString() + ' 元';
         else feeText = '—';
-        const panelCell = el('td', { colspan: '5', style: 'padding:0' });
+        const panelCell = el('td', { colspan: '6', style: 'padding:0' });
         const panelRow = el('tr', { style: 'display:none' }, [panelCell]);
 
         const steps = flowSteps(p);
@@ -788,6 +810,7 @@
         const tr = el('tr', {}, [
           el('td', {}, p.project_no || '—'),
           el('td', {}, p.name),
+          el('td', {}, statusBadge(p.status)),
           el('td', {}, feeText),
           el('td', { class: 'actions' }, [
             flowCell,
