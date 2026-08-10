@@ -242,6 +242,9 @@ async function migrate() {
     // 1.7% 的格會讀成另一個合法數字,而 39 條驗證一條都攔不住(值本身自洽、
     // 累計也自洽)。事後查帳只剩這個欄位能指出該回頭看哪幾天的紙本。
     ['daily_records', 'source', 'TEXT'],
+    // 事務所自己的檔案編號,與決標公告無關(project_no 是決標公告上的契約編號)。
+    // 兩者都要:對外文書引契約編號,事務所內部歸檔、狀態總表找案子用自己的編號。
+    ['projects', 'firm_doc_no', 'TEXT'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"

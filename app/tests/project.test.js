@@ -228,11 +228,11 @@ describe('POST /api/projects 決標公告路徑', () => {
 
   // 同一份決標公告被傳兩次(承辦人忘記已建過、或兩人同時處理)會產生兩個內容
   // 一樣的工程,之後的施工日誌、監造報表全部分岔到兩邊,而且沒有任何畫面看得出
-  // 它們是同一件事。契約編號是決標公告上的唯一識別。
-  test('契約編號已存在時擋下並指出既有工程', async () => {
+  // 它們是同一件事。
+  test('同一個契約編號 + 同一個工程名稱才算重複,擋下並指出既有工程', async () => {
     const { app, token } = await makeAppWithToken();
     await createViaAward(app, token, { project_no: '1150113', name: '南陽國小廁所工程' });
-    const res = await createViaAward(app, token, { project_no: '1150113', name: '重複送的同一案' });
+    const res = await createViaAward(app, token, { project_no: '1150113', name: '南陽國小廁所工程' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/已建立/);
     expect(res.body.existing).toEqual({
@@ -240,6 +240,32 @@ describe('POST /api/projects 決標公告路徑', () => {
     });
     const { rows } = await db.query('SELECT COUNT(*)::int AS n FROM projects');
     expect(rows[0].n).toBe(1);
+  });
+
+  // 契約編號**本身不是唯一的**:一次決標含多個標的、或機關的編號規則就會重複。
+  // 只看案號會把合法的第二個工程擋在門外,而承辦人沒有別的路可以建。
+  test('契約編號重複但工程名稱不同時要放行', async () => {
+    const { app, token } = await makeAppWithToken();
+    await createViaAward(app, token, { project_no: '1150113', name: '南陽國小廁所工程' });
+    const res = await createViaAward(app, token, { project_no: '1150113', name: '南陽國小汙水工程' });
+    expect(res.status).toBe(201);
+    const { rows } = await db.query(
+      'SELECT name FROM projects WHERE project_no = $1 ORDER BY id', ['1150113']);
+    expect(rows.map((r) => r.name)).toEqual(['南陽國小廁所工程', '南陽國小汙水工程']);
+  });
+
+  // 事務所自己的檔案編號,與決標公告上的契約編號並存——兩者用途不同,
+  // 對外文書引契約編號,事務所內部歸檔與狀態總表找案子用自己的編號。
+  test('事務所檔案編號可存可讀,且與契約編號並存', async () => {
+    const { app, token } = await makeAppWithToken();
+    const created = await createViaAward(app, token, { project_no: '1150113', name: '南陽' });
+    // PUT 是整筆取代(前端送的是整份表單),故要帶著 name 一起送
+    const res = await request(app).put(`/api/projects/${created.body.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: '南陽', project_no: '1150113', firm_doc_no: '呂罡銘-114-021' })
+      .expect(200);
+    expect(res.body.firm_doc_no).toBe('呂罡銘-114-021');
+    expect(res.body.project_no).toBe('1150113');
   });
 
   test('齊全時建立工程並歸檔決標公告', async () => {
@@ -381,5 +407,102 @@ describe('GET /api/projects 流程狀態欄位', () => {
     expect(row.has_budget).toBe(false);
     expect(row.contract_items).toBe(0);
     expect(row.log_days).toBe(0);
+  });
+});
+
+describe('工程狀態與狀態總表', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  const 前天 = () => {
+    const d = new Date(); d.setDate(d.getDate() - 2);
+    return d.toISOString().slice(0, 10);
+  };
+  const 後天 = () => {
+    const d = new Date(); d.setDate(d.getDate() + 2);
+    return d.toISOString().slice(0, 10);
+  };
+  const board = (q = '') => request(app)
+    .get(`/api/projects/status-board${q}`).set('Authorization', `Bearer ${token}`);
+
+  // 狀態是推導的,不存欄位——存了就會有「日期改了狀態沒改」的不一致,
+  // 而那種不一致沒有人會發現。
+  test('沒有開工日 → 未開工', async () => {
+    const c = await createViaAward(app, token, { name: '未開工案' });
+    const res = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.status).toBe('未開工');
+  });
+
+  // 開工日填了未來的日期(已排定但還沒動工)不能算施工中
+  test('開工日在未來 → 仍是未開工', async () => {
+    const c = await createViaAward(app, token, { name: '排定案', start_date: 後天() });
+    const res = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.status).toBe('未開工');
+  });
+
+  test('開工日已過且未填實際竣工日 → 施工中', async () => {
+    const c = await createViaAward(app, token, { name: '施工案', start_date: 前天() });
+    const res = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.status).toBe('施工中');
+  });
+
+  // 竣工看的是**實際**竣工日;契約竣工日只是預定,過了不代表完工
+  test('契約竣工日已過但沒填實際竣工日 → 還是施工中', async () => {
+    const c = await createViaAward(app, token, {
+      name: '逾期案', start_date: 前天(), contract_completion_date: 前天(),
+    });
+    const res = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.status).toBe('施工中');
+  });
+
+  test('填了實際竣工日 → 已竣工', async () => {
+    const c = await createViaAward(app, token, {
+      name: '完工案', start_date: 前天(), actual_completion_date: 前天(),
+    });
+    const res = await request(app).get(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`).expect(200);
+    expect(res.body.status).toBe('已竣工');
+  });
+
+  // 承辦人每天要盯的就是施工中那幾案,故預設只回這些
+  test('狀態總表預設只回施工中', async () => {
+    await createViaAward(app, token, { name: '施工案', start_date: 前天() });
+    await createViaAward(app, token, { name: '未開工案' });
+    await createViaAward(app, token, {
+      name: '完工案', start_date: 前天(), actual_completion_date: 前天(),
+    });
+    const res = await board().expect(200);
+    expect(res.body.筆數).toBe(1);
+    expect(res.body.projects.map((p) => p.name)).toEqual(['施工案']);
+  });
+
+  test('狀態總表帶齊事務所編號、廠商、學校與兩個日期', async () => {
+    const c = await createViaAward(app, token, { name: '施工案', start_date: 前天() });
+    await request(app).put(`/api/projects/${c.body.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: '施工案', start_date: 前天(), firm_doc_no: '呂-114-007' })
+      .expect(200);
+    const row = (await board().expect(200)).body.projects[0];
+    expect(row.firm_doc_no).toBe('呂-114-007');
+    expect(row).toHaveProperty('vendor_name');
+    expect(row).toHaveProperty('school_name');
+    expect(row).toHaveProperty('start_date');
+    expect(row).toHaveProperty('contract_completion_date');
+  });
+
+  test('?status=全部 回全部工程', async () => {
+    await createViaAward(app, token, { name: '施工案', start_date: 前天() });
+    await createViaAward(app, token, { name: '未開工案' });
+    const res = await board('?status=全部').expect(200);
+    expect(res.body.筆數).toBe(2);
   });
 });

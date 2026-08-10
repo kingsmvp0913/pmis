@@ -80,7 +80,7 @@ function computeDesignFeeActual(p) {
 }
 
 const COLUMNS = [
-  'project_no', 'name', 'vendor_id', 'school_id', 'start_date',
+  'project_no', 'firm_doc_no', 'name', 'vendor_id', 'school_id', 'start_date',
   'contract_completion_date', 'actual_completion_date', 'award_amount',
   'insurer_id', 'insurance_type_id', 'insurance_start', 'insurance_end',
   'design_fee_type', 'design_fee_amount', 'design_fee_pct'
@@ -97,9 +97,44 @@ function normalize(body) {
   return out;
 }
 
+// 今天(當地時區)的 YYYY-MM-DD。不可用 toISOString():那會轉 UTC,
+// 台北時間的凌晨會倒退成前一天,開工日剛好是今天的案子就被判成「尚未施工」。
+function todayISO() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+const asISO = (v) => {
+  if (v == null) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  const d = new Date(v);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/**
+ * 工程狀態。**推導而不是存欄位**:三個日期已經決定了答案,多存一個狀態欄
+ * 就會有「日期改了狀態沒改」的不一致,而那種不一致沒有人會發現。
+ *
+ * 竣工看的是**實際**竣工日,不是契約竣工日——後者只是預定,過了不代表完工。
+ * @returns {'未開工'|'施工中'|'已竣工'}
+ */
+function deriveStatus(row) {
+  if (asISO(row.actual_completion_date)) return '已竣工';
+  const start = asISO(row.start_date);
+  if (!start || start > todayISO()) return '未開工';
+  return '施工中';
+}
+
 function withComputed(row) {
   const fee = computeDesignFeeActual(row);
-  return { ...row, design_fee_actual: fee.design_fee_actual, design_fee_unbid: fee.unbid };
+  return {
+    ...row,
+    design_fee_actual: fee.design_fee_actual,
+    design_fee_unbid: fee.unbid,
+    status: deriveStatus(row),
+  };
 }
 
 // 列表的流程狀態。**一律三次全表聚合後在 JS 合併,不得改成每列查一次**——
@@ -144,6 +179,33 @@ async function withWorkflowFlags(rows) {
 }
 
 function registerRoutes(app) {
+  // ── 狀態總表 ──
+  // 承辦人手上同時有十幾案,要的是「哪幾案還在施工、各自到哪了」這一張表,
+  // 而工程列表是為了「找到某一案然後進去做事」設計的(逐案的流程關卡佔滿版面)。
+  // 兩者的資訊密度需求相反,故另開一條路由而不是在列表上加欄位。
+  //
+  // 預設只回施工中的:那才是每天要盯的。?status=全部 可看全部。
+  app.get('/api/projects/status-board', verifyToken, async (req, res) => {
+    try {
+      const want = (req.query.status || '施工中').trim();
+      const { rows } = await query(
+        `SELECT p.id, p.firm_doc_no, p.project_no, p.name,
+                p.start_date, p.contract_completion_date, p.actual_completion_date,
+                p.award_amount, v.name AS vendor_name, s.name AS school_name
+           FROM projects p
+           LEFT JOIN vendors v ON v.id = p.vendor_id
+           LEFT JOIN schools s ON s.id = p.school_id
+          ORDER BY p.start_date DESC NULLS LAST, p.id DESC`
+      );
+      const list = rows
+        .map((r) => ({ ...r, status: deriveStatus(r) }))
+        .filter((r) => want === '全部' || r.status === want);
+      res.json({ status: want, 筆數: list.length, projects: list });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/projects', verifyToken, async (req, res) => {
     try {
       const q = (req.query.q || '').trim();
@@ -213,14 +275,20 @@ function registerRoutes(app) {
 
       // 同一份決標公告傳兩次(忘記已建過、兩人同時處理)會產生兩個內容相同的
       // 工程,之後的施工日誌與監造報表分岔到兩邊,而畫面上看不出它們是同一件事。
-      // 契約編號是決標公告上的唯一識別。
+      //
+      // 但**契約編號本身不是唯一的**:實務上會出現同一個案號底下有多個工程
+      // (一次決標含多個標的、或機關的編號規則就會重複)。只看案號會把合法的
+      // 第二個工程擋在門外,而承辦人沒有別的路可以建。故改判「案號 + 工程名稱」
+      // 都相同才算重複——名稱不同就是不同的工程,放行。
       const projectNo = String(body.project_no).trim();
+      const projectName = String(body.name).trim();
       const { rows: dup } = await query(
-        'SELECT id, name, project_no FROM projects WHERE project_no = $1', [projectNo]
+        'SELECT id, name, project_no FROM projects WHERE project_no = $1 AND name = $2',
+        [projectNo, projectName]
       );
       if (dup[0]) {
         return res.status(400).json({
-          error: `契約編號 ${projectNo} 已建立工程「${dup[0].name}」,請勿重複建立`,
+          error: `契約編號 ${projectNo} 已建立同名工程「${dup[0].name}」,請勿重複建立`,
           existing: dup[0],
         });
       }
