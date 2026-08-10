@@ -80,7 +80,7 @@ function computeDesignFeeActual(p) {
 }
 
 const COLUMNS = [
-  'project_no', 'firm_doc_no', 'name', 'vendor_id', 'school_id', 'start_date',
+  'project_no', 'firm_doc_no', 'name', 'vendor_id', 'school_id', 'start_date', 'duration_basis',
   'contract_completion_date', 'actual_completion_date', 'award_amount',
   'insurer_id', 'insurance_type_id', 'insurance_start', 'insurance_end',
   'design_fee_type', 'design_fee_amount', 'design_fee_pct'

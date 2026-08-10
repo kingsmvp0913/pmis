@@ -341,3 +341,46 @@ describe('POST /api/projects/:id/basics — 成功路徑', () => {
     expect(res.body.error).not.toMatch(/Excel|xlsm|tmp-/);
   });
 });
+
+// 開工報告表上「日曆天」與「工作天」是並列的兩個選項,OCR 分不出勾了哪一個
+// (24 份實測有 17 份文字裡兩個詞同時出現),故由承辦人自己選、系統存起來。
+describe('POST /api/projects/:id/basics — 契約工期基準', () => {
+  const 送出 = async (app, token, id, 基準) => {
+    const restore = mockWorkbookIO({ t: 'n', v: 46311 });
+    try {
+      return await request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ values: { ...FULL, ...(基準 === undefined ? {} : { 契約工期基準: 基準 }) } });
+    } finally { restore(); }
+  };
+
+  test('選了工作天要存得住', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const res = await 送出(app, token, id, '工作天');
+    expect(res.status).toBe(200);
+    expect(res.body.契約工期基準).toBe('工作天');
+    const after = (await db.query('SELECT duration_basis FROM projects WHERE id = $1', [id])).rows[0];
+    expect(after.duration_basis).toBe('工作天');
+  });
+
+  // 判不出來時留空是正常狀態,不可因此把一份本來寫得進去的報表整份卡住
+  test('沒帶基準仍可寫入,欄位留 null', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const res = await 送出(app, token, id, undefined);
+    expect(res.status).toBe(200);
+    expect(res.body.契約工期基準).toBe(null);
+    const after = (await db.query('SELECT duration_basis FROM projects WHERE id = $1', [id])).rows[0];
+    expect(after.duration_basis == null).toBe(true);
+  });
+
+  // 前端送什麼後端都不能照收:只有這兩個值有意義
+  test('不是日曆天/工作天的值一律當成未指定', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    const res = await 送出(app, token, id, '曆天');
+    expect(res.status).toBe(200);
+    expect(res.body.契約工期基準).toBe(null);
+  });
+});

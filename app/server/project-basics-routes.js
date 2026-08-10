@@ -172,16 +172,24 @@ function registerRoutes(app) {
         });
       }
 
+      // 契約工期基準只存主檔,不進報表:範本的「工程基本資料」沒有這個欄位,
+      // 而 A7 的標籤是中性的「契約工期」。與費用項目同一個決定——版面不動,
+      // 標示放系統畫面。不在 REQUIRED 裡:判不出來時本來就該留空讓承辦人補,
+      // 硬性必填會把一份本來寫得進去的報表整份卡住。
+      const 基準 = ['日曆天', '工作天'].includes(values.契約工期基準)
+        ? values.契約工期基準 : null;
+
       await query(
         `UPDATE projects
             SET project_no = $1, name = $2, award_amount = $3, start_date = $4,
-                contract_completion_date = $5, supervisor_firm = $6, designer_firm = $7
-          WHERE id = $8`,
+                contract_completion_date = $5, supervisor_firm = $6, designer_firm = $7,
+                duration_basis = $8
+          WHERE id = $9`,
         [values.工程編號, values.工程名稱, values.契約金額, values.開工日期,
-          完工期限, values.監造單位, values.設計單位, req.params.id]
+          完工期限, values.監造單位, values.設計單位, 基準, req.params.id]
       );
 
-      res.json({ ok: true, workbookPath: dest, 完工期限 });
+      res.json({ ok: true, workbookPath: dest, 完工期限, 契約工期基準: 基準 });
     } catch (err) {
       // 分流:ensureWorkbook 的 id 驗證屬用戶端輸入問題(上方守門已擋掉,這裡是後備),
       // 回 400 而非 500,免得承辦人以為是系統故障而不去檢查網址。

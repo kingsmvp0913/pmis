@@ -46,6 +46,9 @@ const KickoffReport = (() => {
       || el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
     const 開工I = opts.startDateInput
       || el('input', { class: 'form-control', type: 'date' });
+    // 工期基準的下拉(在「監造報表基本資料」那張卡上)。解析判得出來就替承辦人選好,
+    // 判不出來(表單上兩個選項並列、OCR 分不出勾了哪個)就維持未指定讓他自己挑。
+    const 基準Sel = opts.basisSelect || null;
 
     const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf' });
     // 原本是裸 .btn(沒有色彩修飾類別,吃瀏覽器原生按鈕樣式,這是「解析按鈕很醜」的
@@ -177,7 +180,25 @@ const KickoffReport = (() => {
         // 用 null 蓋掉會把他剛打好的字清空。
         const 工期 = data.kickoff.契約工期;
         const synced = [];
-        if (工期 && 工期.基準 === '工作天') {
+        if (基準Sel) {
+          // 有基準欄可存了,工作天不必再換算成日曆天:天數照填,單位存在旁邊那一格。
+          // (沒有基準欄的彈窗模式仍走下面的舊路徑——那裡的「契約工期」欄意思是日曆天。)
+          if (工期 && 工期.天數 != null) {
+            工期I.value = 工期.天數;
+            synced.push(`契約工期 ${工期.天數} 天`);
+          }
+          if (工期 && 工期.基準) {
+            基準Sel.value = 工期.基準;
+            synced.push(`工期基準 ${工期.基準}`);
+          } else {
+            // 判不出來要講清楚為什麼,否則承辦人不會知道那一格需要他動手——
+            // 靜默留空跟靜默填錯一樣糟。
+            koDurationWarn.textContent =
+              '開工報告表上「日曆天」與「工作天」是並列的兩個選項,系統分不出勾了哪一個,'
+              + '請對照 PDF 於「工期基準」欄自行選擇——這一格會影響完工期限的認定。';
+            koDurationWarn.style.display = '';
+          }
+        } else if (工期 && 工期.基準 === '工作天') {
           // 「工期I」標示的是日曆天,工作天不是同一單位,不可直接互填——
           // 硬塞會產生「數字看起來正常、單位卻是錯的」這種最難察覺的資料損壞。
           // 寧可留空讓承辦人自己核對 PDF 換算,也要用明顯的警示說明「為什麼沒填」,

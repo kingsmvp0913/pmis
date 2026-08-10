@@ -321,6 +321,14 @@
     // 故必須是獨立按鈕——否則改個保險到期日也會去開一次 Excel。
     if (!isNew) {
       const 工期I = el('input', { class: 'form-control', type: 'number', step: '1', min: '1' });
+      // 開工報告表上「日曆天／工作天」是並列的兩個選項,OCR 判不出勾了哪一個
+      // (24 份有 17 份文字裡兩個詞同時出現),故一律讓承辦人自己確認。
+      const 基準I = el('select', { class: 'form-control' }, [
+        el('option', { value: '' }, '(未指定)'),
+        el('option', { value: '日曆天' }, '日曆天'),
+        el('option', { value: '工作天' }, '工作天'),
+      ]);
+      if (p.duration_basis) 基準I.value = p.duration_basis;
       // 「開工日」不再自建:原本這裡與「工程基本資料」的 startI 是兩個外觀相同、
       // 值卻可能不同步的欄位(開工報告表解析只同步到這格,startI 依然是空的,
       // 承辦人按「儲存」時 start_date 照樣送 null)。合併後一律用 startI。
@@ -365,6 +373,7 @@
             // 故能轉數字就轉——空值/非數字仍留字串,讓後端 REQUIRED/FORMAT_OK 照常擋下並列出缺項。
             契約金額: (契約金額raw !== '' && Number.isFinite(Number(契約金額raw))) ? Number(契約金額raw) : 契約金額raw,
             契約工期: (契約工期raw !== '' && Number.isFinite(Number(契約工期raw))) ? Number(契約工期raw) : 契約工期raw,
+            契約工期基準: 基準I.value || null,
             開工日期: startI.value, 工程編號: noI.value.trim(),
           };
           const r = await Api.post('projects/' + id + '/basics', { values });
@@ -393,7 +402,10 @@
         ]),
         el('div', { class: 'form-group' }, [el('label', {}, '監造單位'), supI]),
         el('div', { class: 'form-group' }, [el('label', {}, '設計單位'), desI]),
-        el('div', { class: 'form-group' }, [el('label', {}, '契約工期(日曆天)'), 工期I]),
+        el('div', { class: 'form-row' }, [
+          el('div', { class: 'form-group' }, [el('label', {}, '契約工期(天)'), 工期I]),
+          el('div', { class: 'form-group' }, [el('label', {}, '工期基準'), 基準I]),
+        ]),
         el('div', { class: 'form-actions' }, [writeBtn]),
         basicsErr,
       ]));
@@ -407,6 +419,7 @@
       // 工期I 維持自建:「工程基本資料」沒有這個欄位,沒有可合併的對象。
       into('kickoff').appendChild(KickoffReport.card(id, {
         durationInput: 工期I,
+        basisSelect: 基準I,
         startDateInput: startI,
         onArchived: () => loadAttachments(),
         onSynced: () => markTab('basics'),

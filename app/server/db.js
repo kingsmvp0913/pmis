@@ -245,6 +245,11 @@ async function migrate() {
     // 事務所自己的檔案編號,與決標公告無關(project_no 是決標公告上的契約編號)。
     // 兩者都要:對外文書引契約編號,事務所內部歸檔、狀態總表找案子用自己的編號。
     ['projects', 'firm_doc_no', 'TEXT'],
+    // 契約工期的基準:'日曆天' | '工作天'。開工報告表上這兩個是並列的選項
+    // (□日曆天 □工作天),而 24 份實測有 17 份的 OCR 文字兩個詞同時出現、
+    // 判不出是哪一種(見 kickoff-values.parseDuration)。判不出時交給承辦人選,
+    // 選了要存得住——不然每次進畫面又變回未知。
+    ['projects', 'duration_basis', 'TEXT'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
