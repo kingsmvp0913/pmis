@@ -41,6 +41,7 @@ const { daysToOperations, diffDays, feeItemsPlan } = require('./daily-log-write'
 const { scanDays, scanCoverage } = require('./daily-log-scan');
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
+const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -196,8 +197,8 @@ async function writeDays({ projectId, days, rows, ctx, file, source, userId }) {
   try {
     // 竣工日期是費用項目推算的分母(見 daily-log-write.js)。承辦人還沒填時
     // 傳 null,那幾列就維持照日誌的原行為,不會擋住這份日誌寫入。
-    await fillTemplate(dest, tmp,
-      daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期));
+    await fillTemplate(dest, tmp, applyProtection(dest,
+      daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期)));
     // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await
     fs.renameSync(tmp, dest);
     tmp = null;

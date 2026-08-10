@@ -18,14 +18,21 @@
  *              award_amount 為空(未招標)→ 回 null 並標記 unbid=true
  */
 const fs = require('fs');
+const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const multer = require('multer');
 const { saveAttachment } = require('./project-attachments-routes');
 const { workbookPath } = require('./report-workbook');
+const { verifyWorkbook } = require('./report-verify');
+const { scanFilledCells, saveProtected } = require('./report-protect');
 
 // 決標公告先進記憶體:落檔目錄需要 project id,而 id 要 INSERT 之後才有。
 const upload = multer({ storage: multer.memoryStorage() });
+// 監造報表是 .xlsm,實測公版就 680KB,填過的更大。multer 預設無上限,
+// 但這裡明確給一個:上傳一個 200MB 的檔會把整台機器的記憶體吃掉。
+const reportUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+let uploadSeq = 0;
 
 // 走決標公告路徑時的必填集合(spec §4.5)。手動新增仍只要求 name——
 // 提高手動路徑的門檻會擋住沒有決標公告的舊案補登。
@@ -421,6 +428,60 @@ function registerRoutes(app) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // 上傳「已經做到一半的監造報表」當作這一案的常駐檔。
+  //
+  // 承辦人手上常有一份自己填了一部分的報表,原本只能從空白公版重做。上傳之後
+  // 系統接著往下填,而**上傳當下已經有值的儲存格永遠不再被覆蓋**
+  // (使用者裁決:以上傳那一刻為界,見 report-protect.js)。
+  app.post('/api/projects/:id/report/upload', verifyToken,
+    reportUpload.single('report'), async (req, res) => {
+      let tmp = null;
+      try {
+        if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+          return res.status(400).json({ error: '請上傳監造報表 .xlsm' });
+        }
+        const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
+
+        const dest = workbookPath(req.params.id);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        // 先落暫存驗證,通過才取代本尊:驗不過時原本的報表要完好無損
+        tmp = `${dest}.upload-${process.pid}-${++uploadSeq}.xlsm`;
+        fs.writeFileSync(tmp, req.file.buffer);
+
+        const v = verifyWorkbook(tmp);
+        if (!v.ok) {
+          return res.status(400).json({
+            error: '這份報表的版面與系統預期的不一樣,沒有上傳。系統是靠固定的分頁與'
+              + '欄位位置寫入的,版面不同會把資料寫進錯的格子而且看不出來。',
+            problems: v.problems,
+          });
+        }
+
+        // 保護清單要在**取代之前**掃:掃的就是這份上傳檔的內容
+        const filled = scanFilledCells(tmp);
+        fs.renameSync(tmp, dest);
+        tmp = null;
+        saveProtected(dest, filled);
+
+        const 保護格數 = Object.values(filled).reduce((n, a) => n + a.length, 0);
+        res.json({
+          ok: true,
+          保護格數,
+          分頁: Object.fromEntries(Object.entries(filled).map(([k, a]) => [k, a.length])),
+          warnings: v.problems,          // 只剩提醒級的
+        });
+      } catch (err) {
+        if (/projectId 不合法/.test(err.message || '')) {
+          return res.status(400).json({ error: '網址中的工程 id 不合法' });
+        }
+        console.error('[report] 上傳既有監造報表失敗:', err);
+        res.status(500).json({ error: '上傳失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
+      } finally {
+        if (tmp) { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
+      }
+    });
 }
 
 module.exports = { registerRoutes, computeDesignFeeActual, roundHalfUp };

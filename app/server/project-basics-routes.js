@@ -18,6 +18,7 @@ const { readAwardNotice } = require('./award-notice');
 const { compareBasics, basicsToOperations, CELL_OF } = require('./project-basics');
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
+const { applyProtection } = require('./report-protect');
 const { getFirmDefaults } = require('./settings');
 const { excelSerialToISO, isoToExcelSerial } = require('./parsers/filetypes/xlsx');
 
@@ -148,7 +149,7 @@ function registerRoutes(app) {
       const dest = ensureWorkbook(req.params.id);
       // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
       tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
-      await fillTemplate(dest, tmp, basicsToOperations(values));
+      await fillTemplate(dest, tmp, applyProtection(dest, basicsToOperations(values)));
       // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await:並行安全靠 fillTemplate 內部的
       // _chain 全域序列化,加上 renameSync 在同一個 microtask 續行中同步跑完 —— 這是隱性不變量。
       // 中間一 await,另一個請求的 COM job 就會插隊,把還沒寫完的 tmp rename 成本尊。

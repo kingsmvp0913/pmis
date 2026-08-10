@@ -27,6 +27,13 @@ const DailyLogs = (() => {
     // 常駐 .xlsm 是 SP1/SP2/SP3 一路寫進去的同一份,不是「這次上傳」的產物,
     // 所以不隨驗證流程顯示/隱藏——承辦人任何時候都該拿得到目前的報表。
     const downloadBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '下載監造報表');
+    // 承辦人手上做到一半的報表:上傳後由系統接著往下填,而**上傳當下已經有值的
+    // 格子永遠不再被覆蓋**(以上傳那一刻為界,見 server/report-protect.js)。
+    const reportFileI = el('input', {
+      class: 'form-control', type: 'file', accept: '.xlsm', style: 'display:none',
+    });
+    const uploadBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '上傳既有報表');
+    const uploadBox = el('div', { class: 'hint', style: 'display:none' });
     const err = el('div', { class: 'error-msg', style: 'display:none' });
     const summary = el('div', { class: 'hint', style: 'display:none' });
     const skipBox = el('div', { class: 'hint', style: 'display:none' });
@@ -342,6 +349,38 @@ const DailyLogs = (() => {
       }
     });
 
+    // 走隱藏的 file input:上傳既有報表是偶爾才做一次的動作,常駐一個檔案選擇框
+    // 會跟「施工日誌檔案」那個混淆——承辦人把日誌傳進報表欄是很容易發生的事。
+    uploadBtn.addEventListener('click', () => reportFileI.click());
+    reportFileI.addEventListener('change', async () => {
+      if (!reportFileI.files[0]) return;
+      err.style.display = 'none';
+      uploadBox.style.display = 'none';
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = '上傳中…';
+      try {
+        const fd = new FormData();
+        fd.append('report', reportFileI.files[0]);
+        const r = await Api.upload(`projects/${projectId}/report/upload`, fd);
+        const 分頁 = Object.entries(r.分頁 || {}).map(([k, n]) => `${k} ${n} 格`).join('、');
+        uploadBox.textContent = `已接手這份報表:${r.保護格數} 個已填的格子會保留不動`
+          + (分頁 ? `(${分頁})` : '')
+          + '。之後系統只填空白的格子,你填過的內容不會被蓋掉。';
+        uploadBox.style.display = '';
+        if (r.warnings && r.warnings.length) showToast(r.warnings.join('；'), 'warn');
+        else showToast('已接手既有報表', 'success');
+      } catch (e) {
+        // 版面不符時後端會回逐條 problems,那才是承辦人要看的——只顯示一句
+        // 「版面不對」他無從修起。
+        showErr(e.message + (e.problems && e.problems.length ? `\n・${e.problems.join('\n・')}` : ''));
+        err.style.whiteSpace = 'pre-line';
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '上傳既有報表';
+        reportFileI.value = '';
+      }
+    });
+
     downloadBtn.addEventListener('click', async () => {
       err.style.display = 'none';
       downloadBtn.disabled = true;
@@ -359,7 +398,9 @@ const DailyLogs = (() => {
       el('div', { class: 'card-title' }, '施工日誌'),
       hint,
       el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案'), fileI]),
-      el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn]),
+      el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn, uploadBtn]),
+      reportFileI,
+      uploadBox,
       err,
       summary,
       skipBox,

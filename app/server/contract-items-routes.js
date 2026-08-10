@@ -21,6 +21,7 @@ const { readSheets, findCandidates } = require('./budget-sheet');
 const { selectSheets, validateItems, diffItems, itemsToOperations } = require('./contract-items');
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
+const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -180,7 +181,8 @@ function registerRoutes(app) {
         const dest = ensureWorkbook(req.params.id);
         // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
         tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
-        await fillTemplate(dest, tmp, itemsToOperations(items, existing ? existing.length : 0));
+        await fillTemplate(dest, tmp,
+          applyProtection(dest, itemsToOperations(items, existing ? existing.length : 0)));
         // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await(同 project-basics-routes.js:152):
         // 並行安全靠 fillTemplate 內部的 _chain 序列化 + renameSync 在同一個 microtask 續行中
         // 同步跑完。中間一 await,另一個請求的 COM job 就會插隊。
