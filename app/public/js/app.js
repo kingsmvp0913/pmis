@@ -90,6 +90,7 @@ const NAV = [
   { hash: '#/insurers', label: '🛡️ 保險公司' },
   { hash: '#/firms', label: '🏢 事務所' },
   { hash: '#/projects', label: '📋 工程' },
+  { hash: '#/status-board', label: '📊 狀態總表' },
   { hash: '#/parsers', label: '🧩 讀取器' },
   { hash: '#/settings', label: '⚙️ 系統設定' }
 ];
@@ -173,8 +174,35 @@ function localDateParts(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** 金額 → 帶千分號的字串。空值回空字串(不要變成 "0",那是不同的意思)。 */
+function formatAmount(v) {
+  if (v == null || v === '') return '';
+  const n = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n.toLocaleString('en-US') : String(v);
+}
+
+/**
+ * 把一個 text input 變成「金額欄」:顯示時帶千分號,聚焦編輯時拿掉。
+ *
+ * 為什麼不用 `<input type="number">`:那個標不出千分號(瀏覽器一律顯示原始數字),
+ * 而承辦人核對的是「1,000,000」這種寫法——少了逗號,七位數要一位一位數。
+ * 代價是送出前必須自己去逗號,故一併提供 `.amountValue()`。
+ *
+ * 聚焦時拿掉逗號而不是邊打邊格式化:邊打邊格式化要自己維護游標位置,
+ * 在中間插一個字就會跳位,那比沒有千分號更難用。
+ */
+function attachAmountInput(input) {
+  input.value = formatAmount(input.value);
+  input.addEventListener('focus', () => { input.value = String(input.value).replace(/,/g, ''); });
+  input.addEventListener('blur', () => { input.value = formatAmount(input.value); });
+  input.amountValue = () => String(input.value).replace(/,/g, '').trim();
+  return input;
+}
+
 // 對外:view 檔用 PmisApp.el 建 DOM、registerRoute 掛路由、toDateInputValue 轉日期輸入框值
-window.PmisApp = { registerRoute, el, toDateInputValue };
+window.PmisApp = {
+  registerRoute, el, toDateInputValue, formatAmount, attachAmountInput,
+};
 
 window.addEventListener('hashchange', route);
 window.addEventListener('DOMContentLoaded', route);

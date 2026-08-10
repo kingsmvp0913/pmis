@@ -22,6 +22,9 @@
   --primary: #6366f1;
   --primary-hover: #4f46e5;
   --primary-light: #eef2ff;
+  /* 表格內的連結。深淺兩色各給一個值:瀏覽器預設的深藍在深色底上幾乎看不見,
+     而 --primary(#6366f1)在深色底上對比也不夠。 */
+  --link: #4f46e5;
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
@@ -66,6 +69,7 @@
   --text-muted: rgba(255,255,255,0.44);
   --text-placeholder: rgba(255,255,255,0.30);
   --primary-hover: #7c7ff5;
+  --link: #a5b4fc;
   --primary-light: rgba(99,102,241,0.22);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
   --shadow: 0 2px 8px rgba(0,0,0,0.4);
@@ -157,7 +161,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* 只設 overflow-x,但依 CSS Overflow 規範另一軸沒設為 visible 時會被算成
    auto——實際是雙軸捲動容器,子節點若用 absolute 定位會被這層裁掉
    (踩過的案例見 .more-menu)。不可拿掉 overflow-x:auto,寬表格需要它捲動。 */
-.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+/* 雙軸捲動 + 限高:橫向捲軸長在容器的最底部,表格一長(工程項目會一直增加)
+   就得先把整頁捲到最下面才碰得到它,調個左右要來回兩趟。限高之後捲軸永遠
+   在視窗內,而且表頭 sticky 住——捲到第 80 列還看得到那一欄是什麼。
+   modal 裡另有自己的捲動容器(.modal-wide .modal-body),不可再套一層。 */
+.table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.modal .table-wrap { max-height: none; }
+.table-wrap table.data thead th { position: sticky; top: 0; z-index: 1; }
 /* 解析前的 .table-wrap(開工報告表/契約價目表)是空容器,但邊框還在——
    實測高度只有 2px,畫面上就是一條沒頭沒尾的橫線。用 :empty 而不是 JS
    控制 class:這幾個容器一律用 el('div',{class:'table-wrap'}) 建立(預設
@@ -170,6 +180,8 @@ table.data th, table.data td { text-align: left; padding: 9px 12px; border-botto
 table.data th { font-weight: var(--fw-semibold); color: var(--text-secondary); background: var(--bg); font-size: var(--fs-sm); }
 table.data tbody tr:last-child td { border-bottom: none; }
 table.data tbody tr:hover { background: var(--bg); }
+table.data a { color: var(--link); text-decoration: none; }
+table.data a:hover { text-decoration: underline; }
 table.data td.actions { text-align: right; }
 .empty-row { text-align: center; color: var(--text-muted); padding: 24px 12px; }
 
