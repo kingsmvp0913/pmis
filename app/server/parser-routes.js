@@ -29,6 +29,37 @@ const registry = require('./parsers/registry');
 const BUNDLED_DIR = path.join(__dirname, 'parsers', 'vendors', 'samples');
 const BUNDLED_SUFFIX = '.pmisparser.js';
 
+/**
+ * 內建讀取器的 meta 快取。
+ *
+ * `registry.inspect` 每呼叫一次就寫一份暫存檔 + `Module._compile` 一次
+ * (刻意繞過 require cache,見 registry.js 的說明)。列清單要對整個目錄做,
+ * 實測 33 支光是 inspect 就 570ms,而且**隨廠商增加線性成長**——承辦人每次
+ * 打開那頁都要重付一次,全跑測試時還會把那三支測試推過 5 秒的 timeout。
+ *
+ * 這個目錄是隨程式碼樹一起發佈的,只有更新 app 才會變,快取安全。key 帶
+ * mtime 與 size,檔案一改就自動失效——開發時換掉讀取器不必重啟。
+ *
+ * ⚠️ 只快取 BUNDLED_DIR(唯讀)。**不可以拿來快取 registry.status**:
+ * 那個看的是 PARSER_DIR 的安裝狀態,會被 install/remove 當場改掉。
+ */
+const bundledMetaCache = new Map();
+
+function bundledMeta(abs, file) {
+  let st;
+  try { st = fs.statSync(abs); } catch { return null; }
+  const key = `${st.mtimeMs}:${st.size}`;
+  const hit = bundledMetaCache.get(file);
+  if (hit && hit.key === key) return hit.meta;
+  let meta = null;
+  try {
+    const ins = registry.inspect(fs.readFileSync(abs));
+    if (ins.ok && ins.meta && ins.meta.vendorKey) meta = ins.meta;
+  } catch { meta = null; }
+  bundledMetaCache.set(file, { key, meta });
+  return meta;
+}
+
 // 僅接受 samples 目錄下的單一 basename,擋路徑逃逸(.. / 路徑分隔 / 子目錄)。
 // 回傳解析後的絕對路徑,不合法或不存在回 null。
 function resolveBundledFile(file) {
@@ -157,28 +188,30 @@ function registerRoutes(app) {
       if (fs.existsSync(BUNDLED_DIR)) {
         files = fs.readdirSync(BUNDLED_DIR).filter(f => f.endsWith(BUNDLED_SUFFIX));
       }
-      const list = [];
+      const metas = [];
       for (const f of files) {
         const abs = resolveBundledFile(f);
         if (!abs) continue; // 只回白名單通過者
-        let mod;
-        try {
-          mod = registry.inspect(fs.readFileSync(abs));
-        } catch {
-          continue;
-        }
-        if (!mod.ok || !mod.meta || !mod.meta.vendorKey) continue;
-        const vendorKey = String(mod.meta.vendorKey);
-        const { rows } = await query('SELECT id FROM vendors WHERE name = $1', [vendorKey]);
-        list.push({
-          file: f,
-          vendorKey,
-          version: mod.meta.version || null,
-          targetFields: mod.meta.targetFields || null,
-          vendorExists: !!rows[0],
-          installed: registry.status(vendorKey).installed,
-        });
+        const meta = bundledMeta(abs, f);
+        if (meta) metas.push({ file: f, meta });
       }
+      // 廠商一次查完,不要在迴圈裡逐支查:33 支就是 33 趟 round-trip。
+      const keys = metas.map((m) => String(m.meta.vendorKey));
+      const { rows } = keys.length
+        ? await query('SELECT name FROM vendors WHERE name = ANY($1::text[])', [keys])
+        : { rows: [] };
+      const 已建廠商 = new Set(rows.map((r) => r.name));
+      const list = metas.map(({ file, meta }) => {
+        const vendorKey = String(meta.vendorKey);
+        return {
+          file,
+          vendorKey,
+          version: meta.version || null,
+          targetFields: meta.targetFields || null,
+          vendorExists: 已建廠商.has(vendorKey),
+          installed: registry.status(vendorKey).installed,
+        };
+      });
       res.json(list);
     } catch (err) {
       res.status(500).json({ error: err.message });
