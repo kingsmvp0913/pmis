@@ -235,6 +235,13 @@ async function migrate() {
     ['submission_history', 'vendor_doc_no', 'TEXT'],
     ['submission_history', 'vendor_doc_date', 'DATE'],
     ['submission_history', 'copies', 'TEXT'],
+    // 這一天這一項的數量是哪裡來的:'parser'(讀取器直接讀文字層)或
+    // 'ocr_confirmed'(掃描件 OCR 預填、承辦人逐格確認過)。空值視為 'parser'
+    // ——升級前既有的資料都是那條路來的。
+    // 分得出來才回答得了「這個數字為什麼跟日誌對不起來」:OCR 那條路實測
+    // 1.7% 的格會讀成另一個合法數字,而 39 條驗證一條都攔不住(值本身自洽、
+    // 累計也自洽)。事後查帳只剩這個欄位能指出該回頭看哪幾天的紙本。
+    ['daily_records', 'source', 'TEXT'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"

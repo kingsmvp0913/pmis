@@ -12,6 +12,11 @@ function apiError(data, status) {
   if (data.fieldMessages && typeof data.fieldMessages === 'object') {
     err.fieldMessages = data.fieldMessages;
   }
+  // 施工日誌的硬錯/軟警告清單。訊息只說得出「有 N 項硬錯」,是哪幾天的哪一項
+  // 全在這裡——少了它,承辦人得靠重新上傳一次才看得到,而掃描件那條路重跑一次
+  // 是要重跑 OCR 的。
+  if (Array.isArray(data.errors)) err.errors = data.errors;
+  if (Array.isArray(data.warnings)) err.warnings = data.warnings;
   return err;
 }
 

@@ -15,9 +15,16 @@ const db = require('../server/db');
 // 後者由 SP0 整合測涵蓋。這裡驗的是路由的把關與落庫。
 jest.mock('../server/parsers/registry', () => ({ getParser: jest.fn() }));
 jest.mock('../server/template-engine', () => ({ fillTemplate: jest.fn() }));
+// OCR 同理:真跑一頁要好幾秒,而且結果隨模型/機器而異。這裡驗的是路由怎麼處理
+// 「OCR 讀得出來」與「讀取器整份 throw」這兩種結局,不是 OCR 本身準不準。
+jest.mock('../server/daily-log-scan', () => ({
+  scanDays: jest.fn(),
+  scanCoverage: jest.fn(async () => ({ pages: [], days: 0, 日期: [], 缺日期頁: [] })),
+}));
 
 const registry = require('../server/parsers/registry');
 const { fillTemplate } = require('../server/template-engine');
+const { scanDays, scanCoverage } = require('../server/daily-log-scan');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
 const { registerRoutes: registerDailyLogRoutes } = require('../server/daily-log-routes');
 
@@ -216,4 +223,118 @@ test('第二批日誌不覆蓋第一批的附件', async () => {
     `SELECT COUNT(*)::int AS n FROM project_attachments WHERE project_id = $1 AND kind = 'daily_log'`,
     [id]);
   expect(rows[0].n).toBe(2);
+});
+
+test('走讀取器寫入的紀錄標記 source=parser', async () => {
+  const { app, token, id } = await makeApp();
+  feed([day('2026-04-08', [r('1', 3)])]);
+  await post(app, token, id, 'confirm').expect(200);
+  const { rows } = await db.query('SELECT source FROM daily_records WHERE project_id = $1', [id]);
+  expect(rows[0].source).toBe('parser');
+});
+
+describe('掃描件(OCR 預填 → 逐格確認)', () => {
+  const scanned = (app, token, id, body) => {
+    const req = request(app)
+      .post(`/api/projects/${id}/daily-logs/confirm-scanned`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('daily_log', Buffer.from('%PDF-1.4'), '掃描件.pdf');
+    for (const [k, v] of Object.entries(body)) req.field(k, v);
+    return req;
+  };
+
+  test('OCR 讀得出明細時回草稿與契約項目', async () => {
+    const { app, token, id } = await makeApp();
+    feed([]);                                   // 文字層讀不到東西才會走到這條路
+    scanDays.mockResolvedValueOnce([day('2026-04-08', [r('1', 3)])]);
+    const res = await post(app, token, id, 'scan').expect(200);
+    expect(res.body.可預填).toBe(true);
+    expect(res.body.days).toHaveLength(1);
+    expect(res.body.契約項目).toHaveLength(1);
+    const { rows } = await db.query('SELECT COUNT(*)::int AS n FROM daily_records');
+    expect(rows[0].n).toBe(0);                  // scan 唯讀
+  });
+
+  // 實測 8 份裡有 2 份會這樣(表頭錨點 OCR 認錯)。這時仍要答得出涵蓋範圍,
+  // 讓承辦人知道這份涵蓋幾天要人工補,而不是丟一個 500 給他。
+  test('讀取器整份 throw 時仍回涵蓋範圍,不是 500', async () => {
+    const { app, token, id } = await makeApp();
+    feed([]);
+    scanDays.mockRejectedValueOnce(new Error('第二聯表頭欄位找不到(非某某格式?)'));
+    scanCoverage.mockResolvedValueOnce({
+      pages: [], days: 2, 日期: ['2026-04-08', '2026-04-09'], 缺日期頁: [3],
+    });
+    const res = await post(app, token, id, 'scan').expect(200);
+    expect(res.body.可預填).toBe(false);
+    expect(res.body.涵蓋範圍.日期).toEqual(['2026-04-08', '2026-04-09']);
+    expect(res.body.讀取器錯誤).toMatch(/表頭/);
+  });
+
+  // 少了這一關,這條路就只是個「繞過驗證直接寫 DB」的 API
+  test('沒有明確表態逐格確認過就不寫', async () => {
+    const { app, token, id } = await makeApp();
+    const res = await scanned(app, token, id, {
+      days: JSON.stringify([day('2026-04-08', [r('1', 3)])]),
+    }).expect(400);
+    expect(res.body.error).toMatch(/逐格確認/);
+    expect(fillTemplate).not.toHaveBeenCalled();
+  });
+
+  test('送來的內容形狀不合法時回 400 並指出問題,不是 500', async () => {
+    const { app, token, id } = await makeApp();
+    const 壞日期 = [day('113/04/08', [r('1', 3)])];
+    const res = await scanned(app, token, id, {
+      confirmed: 'true', days: JSON.stringify(壞日期),
+    }).expect(400);
+    expect(res.body.error).toMatch(/填報日期/);
+  });
+
+  // 「人確認過」不等於放行:OCR 漏掉的格子承辦人也可能漏補
+  test('確認後仍有硬錯時整份擋下', async () => {
+    const { app, token, id } = await makeApp();
+    const days = [day('2026-04-08', [r('1', 3, { 契約數量: null })])];   // A7
+    const res = await scanned(app, token, id, {
+      confirmed: 'true', days: JSON.stringify(days),
+    }).expect(400);
+    expect(res.body.errors.map((e) => e.code)).toContain('A7');
+    expect(fillTemplate).not.toHaveBeenCalled();
+  });
+
+  // 事後查帳只剩這個欄位能指出「這個數字是 OCR 讀的,該回頭看紙本」
+  test('確認後寫入,並標記 source=ocr_confirmed', async () => {
+    const { app, token, id } = await makeApp();
+    const days = [day('2026-04-08', [r('1', 3)])];
+    const res = await scanned(app, token, id, {
+      confirmed: 'true', days: JSON.stringify(days),
+    }).expect(200);
+    expect(res.body.來源).toBe('ocr_confirmed');
+    expect(fillTemplate).toHaveBeenCalledTimes(1);
+    const { rows } = await db.query(
+      'SELECT qty, source FROM daily_records WHERE project_id = $1', [id]);
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0].qty)).toBe(3);
+    expect(rows[0].source).toBe('ocr_confirmed');
+  });
+
+  // 承辦人改的值必須真的被寫進去——這條路存在的唯一理由就是收他改的值
+  test('寫進去的是承辦人改過的值,不是 OCR 原本讀到的', async () => {
+    const { app, token, id } = await makeApp();
+    scanDays.mockResolvedValueOnce([day('2026-04-08', [r('1', 3)])]);
+    await post(app, token, id, 'scan').expect(200);
+    const 改過 = [day('2026-04-08', [r('1', 7)])];
+    await scanned(app, token, id, { confirmed: 'true', days: JSON.stringify(改過) }).expect(200);
+    const { rows } = await db.query('SELECT qty FROM daily_records WHERE project_id = $1', [id]);
+    expect(Number(rows[0].qty)).toBe(7);
+  });
+
+  // 數量欄前端一定是字串送過來的(FormData + JSON),不轉型的話 Number 比較會全錯
+  test('數量欄收字串也要當成數字', async () => {
+    const { app, token, id } = await makeApp();
+    const days = [day('2026-04-08', [r('1', 3)])];
+    days[0].dailyRows[0].本日完成數量 = '3';
+    days[0].dailyRows[0].累計完成數量 = '3';
+    await scanned(app, token, id, { confirmed: 'true', days: JSON.stringify(days) }).expect(200);
+    const { rows } = await db.query('SELECT qty FROM daily_records WHERE project_id = $1', [id]);
+    expect(Number(rows[0].qty)).toBe(3);
+  });
 });

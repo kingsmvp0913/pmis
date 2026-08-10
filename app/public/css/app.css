@@ -287,3 +287,25 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
   cursor: pointer; border-radius: var(--radius-sm); }
 .more-menu button:hover { background: var(--bg); }
 .more-menu button.danger { color: var(--danger); }
+
+/* ── 掃描件逐格確認(SP3)── */
+/* 一天一張表,天與天之間要一眼分得開:承辦人是「對著紙本一頁一頁核」的,
+   表格連在一起會核錯天。 */
+.scan-day { margin-top: var(--space-4); }
+.scan-day-title { font-weight: var(--fw-semibold); color: var(--text); margin-bottom: var(--space-2); }
+/* 數量輸入格。表格裡的 input 用 form-control 的全寬會把欄撐爆,故單獨限寬;
+   數字右對齊才對得起來(這一欄是拿來跟紙本逐格比的)。 */
+.cell-num { width: 100%; padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+/* OCR 沒讀到的格子。**這是這條路最重要的一個視覺訊號**——「少一格」看得見、
+   「多一個錯的數字」看不見,所以至少要讓看得見的那一半無法被忽略。
+   底色與文字色一起用變數,深色模式下 input 是白底黑字(見上面
+   [data-theme="dark"] .form-control),故邊框用 --warning 才是兩種主題都看得到的。 */
+.cell-missing { border: 2px solid var(--warning); background: #fffbeb; }
+[data-theme="dark"] .cell-missing { background: #fff7e0; }
+.cell-missing::placeholder { color: #b45309; }
+/* 確認勾選與送出鈕。勾之前送出鈕是 disabled——這一關是這條路的放行前提,
+   不是提示。 */
+.scan-actions { display: flex; align-items: center; gap: var(--space-4);
+  margin-top: var(--space-4); flex-wrap: wrap; }
+.scan-check { display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text); font-size: var(--fs-base); cursor: pointer; }

@@ -1,33 +1,39 @@
 /**
- * daily-log-scan.js — 無文字層(掃描件)施工日誌的**涵蓋範圍偵測**。
+ * daily-log-scan.js — 無文字層(掃描件)施工日誌的 OCR 解析。
  *
- * ## 為什麼只做這件事,不直接把 OCR 接成讀取器的後備
+ * ## 兩件事:涵蓋範圍偵測(`scanCoverage`)與明細解析(`scanDays`)
  *
- * 實測(饒平 `0711A-0711A.pdf`,文字層當答案卷,同一份檔兩條路比對):
+ * 明細解析 2026-08-10 才開放,**而且只作為預填,一律要承辦人逐格確認才寫得進去**
+ * (見 daily-log-routes.js 的 `/daily-logs/scan`)。開放的依據與代價:
  *
- * | 解析度 | 數字格正確 | 讀不到→null | **讀成別的數字** |
+ * | 層 | 對 | 錯 | 漏 |
  * |---|---|---|---|
- * | 1600 | 38.9% | 61.1% | 0.0% |
- * | **2200** | **51.5%** | 47.9% | **0.6%** |
- * | 2800 | 45.5% | 52.7% | 1.8% |
- * | 3400 | 43.7% | 51.5% | 4.8% |
- * | 5000 | 12.6% | 78.4% | 9.0% |
- * | 兩解析度取共識 | 42.5% | 56.9% | 0.6% |
+ * | item 層(OCR 的框對不對得上文字層) | 86.8% | 0 | 13.2% |
+ * | **dailyRows 層(6 份文件 296 格實測)** | **62.8%** | **1.7%** | **35.5%** |
  *
- * 明細數量最好也只救得回一半,而且**還是有 0.6% 讀成另一個合法數字**
- * (實測 21→20、2590.00→09)。那種錯 SP3 一條都攔不住:值本身自洽,
- * 累計也自洽,一路寫進每日施工紀錄 → 監造報表 → 估驗計價。
- * 「少一格」看得見(完整性關卡會報),「多一個錯的數字」看不見——
- * 所以**明細一律不走 OCR**。
+ * item 層那個 86.8% **不能拿來決定要不要開放**——中間隔著讀取器的表頭錨點與
+ * 座標分欄,而且逐家差異從 0% 到 100%(宜謙 96.7、宏恩 81~100、金大 13~43、
+ * 另有 2 份讀取器走 OCR 會整份 throw)。量測基座在 `data/parser-tools/ocr-ab/`。
  *
- * 反過來,**表頭那一行 OCR 非常穩**:鎮西 60 頁實測填報日期 100% 正確、0 讀錯
- * (天氣、工程名稱、工期、進度同一行也都對)。字大、獨立、沒有格線干擾。
- * 那就只用它做一件有價值的事:**告訴承辦人這份掃描件涵蓋哪些日期**——
- * 把「這份讀不到」變成「這份是 6/1~6/30 共 30 天,內容要人工補」,
- * 也能判斷這份掃描件是不是與已經讀得到的檔重複(宜謙 31 份裡有 14 份就是重複的)。
+ * ⚠️ **「錯的看不見」這個性質沒有變**:1.7% 那些值本身自洽、累計也自洽,
+ * SP3 的 39 條驗證一條都攔不住,會一路寫進每日施工紀錄 → 監造報表 → 估驗計價。
+ * 逐格確認是放行前提,不可省。
+ *
+ * ## 為什麼涵蓋範圍偵測仍然單獨存在
+ *
+ * **表頭那一行 OCR 非常穩**:鎮西 60 頁實測填報日期 100% 正確、0 讀錯(天氣、
+ * 工程名稱、工期、進度同一行也都對)。字大、獨立、沒有格線干擾——與明細格完全
+ * 不同的難度。所以即使讀取器整份 throw(實測 2/8 份會),涵蓋範圍仍答得出來:
+ * 把「這份讀不到」變成「這份是 6/1~6/30 共 30 天,內容要人工補」,也能判斷
+ * 這份掃描件是不是與已經讀得到的檔重複(宜謙 31 份裡有 14 份就是重複的)。
+ *
+ * ⚠️ 解析度一律 **2200**,不要跟著開工報告表調到 3400:密集表格的最佳點與
+ * 開工報告表相反(2200 86.8% / 2800 85.0% / 3400 84.4%,且 2800 以上開始把
+ * 數字讀成別的數字)。
  *
  * Exports:
  *   scanCoverage(pdfPath, {ocr, extractItemsOcr, width}) → { pages, days, 日期, 缺日期頁 }
+ *   scanDays(pdfPath, {ocr, extractItemsOcr, filetypes, parser, width}) → parseAll 的輸出
  */
 
 const nfkc = (v) => String(v == null ? '' : v).normalize('NFKC');
@@ -77,4 +83,35 @@ async function scanCoverage(pdfPath, deps = {}) {
   };
 }
 
-module.exports = { scanCoverage, pageHeader };
+/** 密集表格的最佳解析度(與開工報告表相反,見檔頭)。 */
+const SCAN_WIDTH = 2200;
+
+/**
+ * 掃描件的明細解析:OCR 的 items 餵給**該廠商既有的讀取器**,吐出與文字層同形的 days。
+ *
+ * 讀取器一行都不用改——`extractItemsOcr` 產出的就是 `extractItems` 的形狀,
+ * 這裡只是把 `ctx.filetypes.extractItems` 換掉。其餘檔型工具(readWorkbook 等)
+ * 必須原樣保留:整包換掉的話,讀取器裡任何一支非 PDF 分支都會炸。
+ *
+ * ⚠️ 讀取器**可能整份 throw**(表頭錨點 OCR 認錯就找不到,實測 8 份裡有 2 份)。
+ * 這裡不吞掉——呼叫端要能分辨「這份 OCR 讀得出明細」與「這份只能靠涵蓋範圍」。
+ *
+ * @param {string} pdfPath
+ * @param {{ocr:object, extractItemsOcr:Function, filetypes:object, parser:object, width?:number}} deps
+ * @returns {Promise<Array<{header:object, dailyRows:Array}>>}
+ */
+async function scanDays(pdfPath, deps = {}) {
+  const {
+    ocr, extractItemsOcr, filetypes, parser, width,
+  } = deps;
+  if (typeof extractItemsOcr !== 'function') throw new Error('scanDays 需要注入 extractItemsOcr');
+  if (!parser || typeof parser.parseAll !== 'function') throw new Error('scanDays 需要注入 parser.parseAll');
+  const pages = await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
+  return parser.parseAll(pdfPath, {
+    filetypes: { ...(filetypes || {}), extractItems: async () => pages },
+  });
+}
+
+module.exports = {
+  scanCoverage, scanDays, pageHeader, SCAN_WIDTH,
+};

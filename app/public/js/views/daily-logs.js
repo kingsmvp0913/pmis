@@ -3,15 +3,25 @@
  *
  * 獨立成一個檔案的理由同 contract-items.js:projects.js 已 46KB。
  * 對外只露出 DailyLogs.card(projectId)。
+ *
+ * ## 兩條路:讀取器(文字層)與掃描件(OCR 預填 + 逐格確認)
+ *
+ * 掃描件那條路的產出**是草稿不是答案**:OCR 的 dailyRows 層實測 62.8% 對、
+ * 1.7% 會讀成另一個合法數字,而那 1.7% 值本身自洽、累計也自洽,39 條驗證
+ * 一條都攔不住。所以畫面上有三件事不可省:①逐格可編輯 ②沒讀到的格子要
+ * 一眼看得出來 ③送出前必須勾「已逐格核對紙本」。少任何一件,這條路就變成
+ * 「把 OCR 的猜測直接寫進估驗計價」。
  */
 const DailyLogs = (() => {
   const num = (n) => (n == null ? '—' : Number(n).toLocaleString());
 
   function card(projectId) {
     let file = null;
+    let scanned = null;          // scan 回來的草稿(承辦人編輯的對象)
 
     const fileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf,.xls,.xlsx,.docx' });
     const parseBtn = el('button', { class: 'btn', type: 'button' }, '驗證施工日誌');
+    const scanBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '辨識掃描件');
     const confirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' },
       '確認並寫入監造報表');
     // 常駐 .xlsm 是 SP1/SP2/SP3 一路寫進去的同一份,不是「這次上傳」的產物,
@@ -22,9 +32,11 @@ const DailyLogs = (() => {
     const skipBox = el('div', { class: 'hint', style: 'display:none' });
     const listBox = el('div', { class: 'table-wrap' });
     const diffBox = el('div', { class: 'table-wrap' });
+    const scanBox = el('div', {});
     const hint = el('div', { class: 'hint' },
       '上傳廠商提供的施工日誌,系統依 39 條規則檢查後才寫入監造報表。' +
-      '有硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。');
+      '有硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。' +
+      '沒有文字層的掃描件按「辨識掃描件」,系統會用 OCR 預填讓你逐格核對。');
 
     const showErr = (m) => { err.textContent = m; err.style.display = ''; };
 
@@ -113,6 +125,173 @@ const DailyLogs = (() => {
 
     const fd = () => { const f = new FormData(); f.append('daily_log', file); return f; };
 
+    // ── 掃描件:逐格確認 ──
+
+    const 數值欄 = ['本日完成數量', '累計完成數量'];
+
+    function clearScan() {
+      scanned = null;
+      scanBox.innerHTML = '';
+    }
+
+    /**
+     * 一天一張表。數量欄是 input,改動直接寫回 scanned.days ——送出時送的就是
+     * 這份物件,不另外收集,免得畫面上的值與送出的值有機會不一致。
+     */
+    function dayTable(day) {
+      const rows = (day.dailyRows || []).map((r) => {
+        const tds = [
+          el('td', {}, String(r.項次 == null ? '—' : r.項次)),
+          el('td', {}, String(r.工程項目 || r.名稱 || '')),
+          el('td', {}, String(r.單位 || '')),
+          el('td', {}, num(r.契約數量)),
+        ];
+        for (const f of 數值欄) {
+          const 讀到 = r[f] != null && r[f] !== '';
+          const input = el('input', {
+            class: 'form-control cell-num',
+            type: 'text',
+            inputmode: 'decimal',
+            value: 讀到 ? String(r[f]) : '',
+            placeholder: 讀到 ? '' : '未讀到',
+          });
+          input.addEventListener('input', () => {
+            r[f] = input.value.trim() === '' ? null : input.value.trim();
+            input.classList.toggle('cell-missing', input.value.trim() === '');
+            updateScanSummary();
+          });
+          if (!讀到) input.classList.add('cell-missing');
+          tds.push(el('td', {}, input));
+        }
+        return el('tr', {}, tds);
+      });
+      return el('div', { class: 'scan-day' }, [
+        el('div', { class: 'scan-day-title' },
+          `${day.header && day.header.填報日期 ? day.header.填報日期 : '(無日期)'}`
+          + `　${(day.header && day.header.天氣_上午) || ''}`),
+        el('div', { class: 'table-wrap' }, el('table', { class: 'data' }, [
+          el('thead', {}, el('tr', {}, [
+            el('th', { style: 'width:60px' }, '項次'),
+            el('th', {}, '工程項目'),
+            el('th', { style: 'width:60px' }, '單位'),
+            el('th', { style: 'width:90px' }, '契約數量'),
+            el('th', { style: 'width:120px' }, '本日完成數量'),
+            el('th', { style: 'width:120px' }, '累計完成數量'),
+          ])),
+          el('tbody', {}, rows),
+        ])),
+      ]);
+    }
+
+    let scanCountBox = null;
+    function updateScanSummary() {
+      if (!scanned || !scanCountBox) return;
+      let 有值 = 0;
+      let 空 = 0;
+      for (const d of scanned.days) {
+        for (const r of d.dailyRows || []) {
+          for (const f of 數值欄) {
+            if (r[f] == null || r[f] === '') 空 += 1; else 有值 += 1;
+          }
+        }
+      }
+      scanCountBox.textContent = `共 ${scanned.days.length} 天,已有數字 ${有值} 格、還空著 ${空} 格。`;
+    }
+
+    function renderScan(d) {
+      scanBox.innerHTML = '';
+      if (!d.可預填) {
+        // 讀取器整份認不出來(實測 8 份裡有 2 份)。這時涵蓋範圍是唯一還答得出來的
+        // 東西——告訴承辦人這份涵蓋幾天要人工補,比丟一句「辨識失敗」有用。
+        const cov = d.涵蓋範圍 || {};
+        const 日期 = cov.日期 || [];
+        // 天數用 scanCoverage 算好的 days,不要拿 日期.length 頂替——後者是
+        // 「不重複日期的清單長度」,兩者現在相等純屬巧合,語意不同。
+        scanBox.appendChild(el('div', { class: 'error-msg' },
+          '這份掃描件的明細表格認不出來,無法預填' + (d.讀取器錯誤 ? `(${d.讀取器錯誤})` : '') + '。'));
+        scanBox.appendChild(el('div', { class: 'hint' }, 日期.length
+          ? `不過表頭讀得到:這份涵蓋 ${日期[0]} ~ ${日期[日期.length - 1]} 共 ${cov.days} 天`
+            + (cov.缺日期頁 && cov.缺日期頁.length ? `(第 ${cov.缺日期頁.join('、')} 頁讀不到日期)` : '')
+            + ',內容需要人工登打。'
+          : '表頭日期也讀不到,請確認這份檔案是不是施工日誌。'));
+        return;
+      }
+
+      scanned = { days: d.days };
+      scanBox.appendChild(el('div', { class: 'error-msg' }, [
+        '⚠️ 以下數字是 OCR 讀的,不是廠商填的。實測每 100 格約有 63 格讀對、'
+        + '2 格會讀成「另一個看起來合法的數字」,而系統的 39 條檢查一條都攔不住那種錯'
+        + '(值本身自洽、累計也自洽)。',
+        el('strong', {}, '請對著紙本逐格核對'),
+        '——這些數字會一路流進監造報表與估驗計價。',
+      ]));
+      scanCountBox = el('div', { class: 'hint' });
+      scanBox.appendChild(scanCountBox);
+      for (const day of d.days) scanBox.appendChild(dayTable(day));
+      updateScanSummary();
+
+      const chk = el('input', { type: 'checkbox', id: 'scan-confirm-chk' });
+      const writeBtn = el('button', { class: 'btn btn-primary', type: 'button', disabled: 'disabled' },
+        '確認並寫入監造報表');
+      chk.addEventListener('change', () => {
+        if (chk.checked) writeBtn.removeAttribute('disabled');
+        else writeBtn.setAttribute('disabled', 'disabled');
+      });
+      writeBtn.addEventListener('click', async () => {
+        err.style.display = 'none';
+        writeBtn.disabled = true;
+        writeBtn.textContent = '寫入中(Excel 需數秒)…';
+        try {
+          const f = fd();
+          f.append('confirmed', 'true');
+          f.append('days', JSON.stringify(scanned.days));
+          const res = await Api.upload(`projects/${projectId}/daily-logs/confirm-scanned`, f);
+          showToast(`已寫入 ${res.天數} 天、${res.筆數} 筆逐日資料(來源:OCR + 人工確認)`, 'success');
+          clearScan();
+          renderFeeNote(res.費用推算);
+        } catch (e) {
+          showErr(e.message);
+          // 硬錯要跟文字層那條路一樣列全,不然承辦人不知道哪一天卡住
+          if (e.errors) renderFindings(e.errors, e.warnings || []);
+        } finally {
+          writeBtn.disabled = !chk.checked;
+          writeBtn.textContent = '確認並寫入監造報表';
+        }
+      });
+      scanBox.appendChild(el('div', { class: 'scan-actions' }, [
+        el('label', { class: 'scan-check', for: 'scan-confirm-chk' },
+          [chk, el('span', {}, '我已對著紙本逐格核對過上面的數字')]),
+        writeBtn,
+      ]));
+    }
+
+    scanBtn.addEventListener('click', async () => {
+      err.style.display = 'none';
+      summary.style.display = 'none';
+      confirmBtn.style.display = 'none';
+      listBox.innerHTML = '';
+      diffBox.innerHTML = '';
+      skipBox.style.display = 'none';
+      clearScan();
+      if (!fileI.files[0]) { showErr('請先選擇施工日誌'); return; }
+      file = fileI.files[0];
+      scanBtn.disabled = true;
+      scanBtn.textContent = '辨識中(每頁約數秒)…';
+      try {
+        const d = await Api.upload(`projects/${projectId}/daily-logs/scan`, fd());
+        renderScan(d);
+        if (d.可預填) {
+          renderFindings(d.errors, d.warnings);
+          renderSkipped(d.skipped);
+        }
+      } catch (e) {
+        showErr(e.message);
+      } finally {
+        scanBtn.disabled = false;
+        scanBtn.textContent = '辨識掃描件';
+      }
+    });
+
     parseBtn.addEventListener('click', async () => {
       err.style.display = 'none';
       summary.style.display = 'none';
@@ -120,6 +299,7 @@ const DailyLogs = (() => {
       listBox.innerHTML = '';
       diffBox.innerHTML = '';
       skipBox.style.display = 'none';
+      clearScan();
       if (!fileI.files[0]) { showErr('請先選擇施工日誌'); return; }
       file = fileI.files[0];
       parseBtn.disabled = true;
@@ -179,11 +359,12 @@ const DailyLogs = (() => {
       el('div', { class: 'card-title' }, '施工日誌'),
       hint,
       el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案'), fileI]),
-      el('div', { class: 'form-actions' }, [parseBtn, confirmBtn, downloadBtn]),
+      el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn]),
       err,
       summary,
       skipBox,
       diffBox,
+      scanBox,
       listBox,
     ]);
   }
