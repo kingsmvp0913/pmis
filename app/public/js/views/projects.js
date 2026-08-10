@@ -394,8 +394,14 @@
           // 承辦人接著按「儲存」時 PUT 會用陳舊值覆蓋回去,靜默抹掉剛算出的完工期限——
           // 所以寫入成功後必須把畫面同步到 DB 現況。開工日不必再同步:開工日期欄位
           // 已合併成 startI 本身,值本來就是同一格,沒有「另一格」需要跟著更新。
-          if (r.完工期限) contractI.value = PmisApp.toDateInputValue(r.完工期限);
-          showToast(`已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
+          // 工作天的案子後端不會用 B9 覆蓋主檔的竣工日(B9 是日曆天算法),
+          // 這裡跟著不同步——同步過去會把開工報告表讀到的正確日期蓋掉。
+          if (r.完工期限 && r.已寫入竣工日 !== false) {
+            contractI.value = PmisApp.toDateInputValue(r.完工期限);
+          }
+          showToast(r.已寫入竣工日 === false
+            ? '已寫入監造報表。工期基準是工作天,竣工日以開工報告表上的為準,未用公式覆蓋'
+            : `已寫入監造報表,完工期限 ${r.完工期限 || '—'}`, 'success');
         } catch (e) {
           const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
           basicsErr.textContent = e.message + suffix;

@@ -70,26 +70,40 @@ test('契約工期表上值與推導值不符判硬錯', () => {
 });
 
 // 明禮是 160 工作天。由日期推導出的是日曆天,硬比必然假警報。
-test('工作天不推導,狀態為 missing 不判硬錯', () => {
-  const rows = compareKickoff({ ...KICKOFF, 契約工期: { 天數: 160, 基準: '工作天' } }, AWARD);
-  const r = find(rows, '契約工期');
-  expect(r.狀態).toBe('missing');
+// 2026-08-10 規格變更:工作天不再要求承辦人換算成日曆天。
+//
+// 舊行為是「工期欄只收日曆天,工作天的案子刻意留空、警示請自行換算」——換算是
+// 一個容易算錯又無從查核的人工步驟。現在工期天數與基準是分開的兩欄,而開工報告表
+// 上的竣工日本來就是廠商/機關算好的,系統要做的是**驗算而不是重算**:
+// 工作天扣掉假日,必然 ≤ 同一段期間的日曆天數。
+test('工作天 ≤ 同期間的日曆天 → 合理,放行', () => {
+  // KICKOFF 的開工→竣工推導是 150 日曆天;120 個工作天配 150 個日曆天(扣掉週末)合理
+  const rows = compareKickoff(
+    { ...KICKOFF, 契約工期: { 天數: 120, 基準: '工作天' } }, AWARD, { confirmed: true });
+  expect(find(rows, '契約工期').狀態).toBe('match');
   expect(hardErrors(rows)).toEqual([]);
 });
 
-// 承辦人確認階段的天數來自畫面上的日曆天欄位(工期I),而前端對工作天案例
-// 刻意留空該欄並警示「請自行換算」——OCR 讀到的工作天數字不會流進去。
-// 故確認階段有值即代表已人工換算成日曆天,要照常驗算。維持「不推導」的話,
-// 這格恆為 missing,必填一上線工作天案例(明禮)就永遠歸不了檔。
-test('確認階段的工作天視為人工換算後的日曆天,照常驗算', () => {
+test('工作天多於同期間的日曆天 → 這份表自己填錯了,判硬錯', () => {
   const rows = compareKickoff(
-    { ...KICKOFF, 契約工期: { 天數: 150, 基準: '工作天' } }, AWARD, { confirmed: true });
-  expect(find(rows, '契約工期').狀態).toBe('match');
+    { ...KICKOFF, 契約工期: { 天數: 160, 基準: '工作天' } }, AWARD, { confirmed: true });
+  expect(find(rows, '契約工期').狀態).toBe('diff');
+  expect(hardErrors(rows).map((r) => r.欄位)).toContain('契約工期');
 });
 
-test('確認階段換算錯了仍判硬錯', () => {
+// 解析階段(OCR 讀到的值)與確認階段走同一套判斷:不再需要區分,
+// 因為兩邊的「工作天」現在是同一個意思,不像舊版那樣一個是原值一個是換算值。
+test('解析階段與確認階段的工作天判定一致', () => {
+  const k = { ...KICKOFF, 契約工期: { 天數: 120, 基準: '工作天' } };
+  expect(find(compareKickoff(k, AWARD), '契約工期').狀態)
+    .toBe(find(compareKickoff(k, AWARD, { confirmed: true }), '契約工期').狀態);
+});
+
+// 日曆天維持原本的等值驗算:表上兩個數字互相矛盾就是這份文件自己填錯,
+// 沒有「預估值」這種正常解釋可以開脫。
+test('日曆天仍要求與推導值相等', () => {
   const rows = compareKickoff(
-    { ...KICKOFF, 契約工期: { 天數: 140, 基準: '工作天' } }, AWARD, { confirmed: true });
+    { ...KICKOFF, 契約工期: { 天數: 140, 基準: '日曆天' } }, AWARD, { confirmed: true });
   expect(hardErrors(rows).map((r) => r.欄位)).toContain('契約工期');
 });
 

@@ -179,17 +179,34 @@ function registerRoutes(app) {
       const 基準 = ['日曆天', '工作天'].includes(values.契約工期基準)
         ? values.契約工期基準 : null;
 
+      // 工作天的案子**不用 B9 覆蓋主檔的竣工日**。
+      //
+      // B9 的公式是 =B8+B7-1(開工日 + 工期 - 1),那是日曆天的算法:把週末與
+      // 國定假日都算成工期,對工作天的案子會算出偏早的日期。而開工報告表上本來
+      // 就印著契約規定竣工日,那是廠商/機關已經算好的——以那個為準,系統只做
+      // 驗算(見 kickoff-compare 的工期自洽性檢查:工作天必然 ≤ 同期間的日曆天)。
+      //
+      // 用 CASE 併進同一句 UPDATE 而不是先查再決定:兩次往返之間有 race。
+      const 覆蓋竣工日 = 基準 !== '工作天';
       await query(
         `UPDATE projects
             SET project_no = $1, name = $2, award_amount = $3, start_date = $4,
-                contract_completion_date = $5, supervisor_firm = $6, designer_firm = $7,
-                duration_basis = $8
-          WHERE id = $9`,
+                contract_completion_date = CASE WHEN $5 THEN $6 ELSE contract_completion_date END,
+                supervisor_firm = $7, designer_firm = $8, duration_basis = $9
+          WHERE id = $10`,
         [values.工程編號, values.工程名稱, values.契約金額, values.開工日期,
-          完工期限, values.監造單位, values.設計單位, 基準, req.params.id]
+          覆蓋竣工日, 完工期限, values.監造單位, values.設計單位, 基準, req.params.id]
       );
 
-      res.json({ ok: true, workbookPath: dest, 完工期限, 契約工期基準: 基準 });
+      res.json({
+        ok: true,
+        workbookPath: dest,
+        完工期限,
+        契約工期基準: 基準,
+        // 前端拿它決定要不要把畫面上的契約竣工日同步成 B9 的值——工作天時那個值
+        // 是日曆天算法算的,同步過去會把開工報告表讀到的正確日期蓋掉。
+        已寫入竣工日: 覆蓋竣工日,
+      });
     } catch (err) {
       // 分流:ensureWorkbook 的 id 驗證屬用戶端輸入問題(上方守門已擋掉,這裡是後備),
       // 回 400 而非 500,免得承辦人以為是系統故障而不去檢查網址。

@@ -384,3 +384,42 @@ describe('POST /api/projects/:id/basics — 契約工期基準', () => {
     expect(res.body.契約工期基準).toBe(null);
   });
 });
+
+// 開工報告表上的竣工日是廠商/機關已經算好的,系統只驗算不重算。範本的
+// B9 = B8+B7-1 是**日曆天**算法,對工作天的案子會算出偏早的日期。
+describe('POST /api/projects/:id/basics — 工作天不可用 B9 覆蓋竣工日', () => {
+  test('工作天:不覆蓋主檔既有的竣工日,並回報未寫入', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    // 先讓主檔有一個「開工報告表讀到的」竣工日
+    await db.query('UPDATE projects SET contract_completion_date = $1 WHERE id = $2',
+      ['2026-12-25', id]);
+    const restore = mockWorkbookIO({ t: 'n', v: 46311 });   // B9 會算出 2026-10-16
+    try {
+      const res = await request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ values: { ...FULL, 契約工期基準: '工作天' } });
+      expect(res.status).toBe(200);
+      expect(res.body.已寫入竣工日).toBe(false);
+      const after = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+      expect(isoDay(after.contract_completion_date)).toBe('2026-12-25');   // 沒被 B9 蓋掉
+    } finally { restore(); }
+  });
+
+  test('日曆天:照舊用 B9 覆蓋', async () => {
+    const { app, token, projectId } = await makeApp();
+    const id = await addProject(projectId);
+    await db.query('UPDATE projects SET contract_completion_date = $1 WHERE id = $2',
+      ['2026-12-25', id]);
+    const restore = mockWorkbookIO({ t: 'n', v: 46311 });
+    try {
+      const res = await request(app).post(`/api/projects/${id}/basics`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ values: { ...FULL, 契約工期基準: '日曆天' } });
+      expect(res.status).toBe(200);
+      expect(res.body.已寫入竣工日).toBe(true);
+      const after = (await db.query('SELECT * FROM projects WHERE id = $1', [id])).rows[0];
+      expect(isoDay(after.contract_completion_date)).toBe('2026-10-16');
+    } finally { restore(); }
+  });
+});

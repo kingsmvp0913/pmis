@@ -88,22 +88,25 @@ function compareKickoff(kickoff, award, opts) {
   // 但表上兩個數字互相矛盾就是這份文件自己填錯,沒有「預估值」這種正常解釋
   // 可以開脫,級別維持 hard(spec §5.2)。
   const dur = k.契約工期 || { 天數: null, 基準: null };
-  // 確認階段(confirmed)的天數來自畫面上的日曆天欄位——前端對工作天案例刻意
-  // 留空該欄並要承辦人自行換算,OCR 的工作天數字不會流進去。故此時有值即是
-  // 已換算的日曆天,照常推導驗算。解析階段仍不推導(那時的值是 OCR 讀到的
-  // 工作天,推導必然假警報);少了這個區分,工作天案例(明禮)在必填上線後
-  // 恆為 missing → 永遠歸不了檔。
-  if (dur.基準 === '工作天' && !(confirmed && dur.天數 != null)) {
-    // 由日期推導出的是日曆天,工作天案例必然對不上(明禮)。只取表上數字、不推導。
-    rows.push(row('契約工期', `${dur.天數} 工作天`, '（工作天不推導）', 'missing', 'hard'));
+  const derived = deriveDuration(k.契約規定開工日, k.契約規定竣工日);
+  if (dur.天數 == null || derived == null) {
+    rows.push(row('契約工期', dur.天數, derived == null ? null : `（表內推導）${derived}`, 'missing', 'hard'));
+  } else if (dur.基準 === '工作天') {
+    // 工作天與日曆天**不是同一個單位,不可要求相等**。開工報告表上的竣工日是
+    // 廠商/機關已經算好的,系統要做的是驗算而不是重算:工作天扣掉假日,
+    // 因此**必然 ≤ 同一段期間的日曆天數**。100 個工作天配 167 個日曆天是合理的
+    // (扣掉週末剛好),100 個工作天卻只有 80 個日曆天就是這份表自己填錯了。
+    //
+    // ⚠️ 不可改回「要求相等」:那正是 2026-08-10 之前的行為,當時前端對工作天
+    // 刻意留空工期欄、要承辦人自行換算成日曆天才填得進去。換算是一個容易算錯
+    // 又無從查核的人工步驟,已經移除(工期天數與基準改成分開兩欄)。
+    rows.push(row('契約工期', `${dur.天數} 工作天`, `（表內推導）${derived} 日曆天`,
+      dur.天數 <= derived ? 'match' : 'diff', 'hard'));
   } else {
-    const derived = deriveDuration(k.契約規定開工日, k.契約規定竣工日);
-    if (dur.天數 == null || derived == null) {
-      rows.push(row('契約工期', dur.天數, derived == null ? null : `（表內推導）${derived}`, 'missing', 'hard'));
-    } else {
-      rows.push(row('契約工期', dur.天數, `（表內推導）${derived}`,
-        dur.天數 === derived ? 'match' : 'diff', 'hard'));
-    }
+    // 日曆天:表上明載的工期應等於開工日→竣工日推導值,兩個數字互相矛盾
+    // 就是這份文件自己填錯,沒有「預估值」這種正常解釋可以開脫。
+    rows.push(row('契約工期', dur.天數, `（表內推導）${derived}`,
+      dur.天數 === derived ? 'match' : 'diff', 'hard'));
   }
 
   // ── 提示欄位:履約起迄明載「(預估)」,只顯示差幾天,不阻擋 ──
