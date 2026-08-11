@@ -1,4 +1,6 @@
-const { colName, daysToOperations, diffDays } = require('../server/daily-log-write');
+const {
+  colName, daysToOperations, weatherToOperations, diffDays,
+} = require('../server/daily-log-write');
 
 const CONTRACT = [
   { 項次: '1', 項目: '項目1', 數量: 10 },
@@ -176,4 +178,52 @@ test('同一天重送時少掉的項次算刪除', () => {
     [{ 日期: '2026-04-08', 項次: '1', 本日完成數量: 5 }],
   );
   expect(d.removed).toEqual([{ 日期: '2026-04-08', 項次: '2', 本日完成數量: 3 }]);
+});
+
+// ── 監造內容分頁的天氣 ──────────────────────────────
+//
+// 49 個舊案的人工報表這兩欄**全部都有填**(28 案是逐日不同的真天氣、21 案整份「晴」),
+// 而系統一格都沒寫——承辦人打開監造內容就是整片空白。讀取器本來就有
+// 天氣_上午/天氣_下午,只是從來沒人寫進去。
+
+const 天氣日 = (填報日期, 上午, 下午) => ({
+  header: { 填報日期, 天氣_上午: 上午, 天氣_下午: 下午 }, dailyRows: [],
+});
+const addrOf = (ops, addr) => ops.find((o) => o.addr === addr);
+
+// 這一頁是逐日一列(B3=開工日、B4=B3+1…),與每日施工紀錄的逐日一欄同一套換算
+test('天氣寫進監造內容,列 = 3 + (填報日 − 開工日)', () => {
+  const ops = weatherToOperations([
+    天氣日(開工日, '晴', '陰'),
+    天氣日('2026-04-10', '多雲', '雷雨'),
+  ], 開工日);
+  expect(addrOf(ops, 'C3')).toMatchObject({ sheet: '監造內容', value: '晴' });
+  expect(addrOf(ops, 'D3').value).toBe('陰');
+  expect(addrOf(ops, 'C5').value).toBe('多雲');
+  expect(addrOf(ops, 'D5').value).toBe('雷雨');
+});
+
+// 公版範本漏了 C2/D2 這兩個子標題(人工報表有)。報表是常駐檔,放在寫入指令裡
+// 才能讓既有的專案報表也一起補上。
+test('順便補上「上午」「下午」子標題', () => {
+  const ops = weatherToOperations([天氣日(開工日, '晴', '晴')], 開工日);
+  expect(addrOf(ops, 'C2').value).toBe('上午');
+  expect(addrOf(ops, 'D2').value).toBe('下午');
+});
+
+test('沒有任何天氣就不出指令(連子標題也不寫)', () => {
+  expect(weatherToOperations([天氣日(開工日, null, '')], 開工日)).toEqual([]);
+  expect(weatherToOperations([], 開工日)).toEqual([]);
+});
+
+// 天氣是附帶資訊,不該讓一份日誌因為它寫不進去而整份卡住——
+// 數量本身的日期越界已由 daysToOperations 擋在前面(那裡是 throw)
+test('日期越界只跳過那一天,不 throw', () => {
+  const ops = weatherToOperations([
+    天氣日('2026-04-07', '晴', '晴'),   // 早於開工日
+    天氣日('2028-12-31', '晴', '晴'),   // 超出 763 列
+    天氣日(開工日, '雨', '雨'),
+  ], 開工日);
+  expect(ops.filter((o) => /^[CD]\d/.test(o.addr)).map((o) => o.addr).sort())
+    .toEqual(['C2', 'C3', 'D2', 'D3']);
 });

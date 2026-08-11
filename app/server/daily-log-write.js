@@ -213,7 +213,58 @@ function diffDays(舊, 新) {
   return { added, changed, removed };
 }
 
+/* ─────────────────── 監造內容分頁的天氣 ─────────────────── */
+
+const 監造內容 = '監造內容';
+const 監造內容_首列 = 3;    // 第 1 列是欄位標題、第 2 列是「上午/下午」子標題
+const 監造內容_末列 = 763;  // B 欄的日期公式(B3=開工日、B4=B3+1…)鋪到這裡
+
+/**
+ * 施工日誌的天氣 → 監造內容分頁的 C/D 欄。
+ *
+ * 這一頁是**逐日一列**(B3=開工日、B4=B3+1…),與每日施工紀錄的「逐日一欄」
+ * 是同一套日期換算,只是換了軸。列 = 3 + (填報日 − 開工日)。
+ *
+ * 為什麼要做:49 個舊案的人工報表這兩欄**全部都有填**,而系統一格都沒寫——
+ * 承辦人打開監造內容就是整片空白。28 案是逐日不同的真天氣(晴/雨/陰/豪雨/雷雨),
+ * 另外 21 案整份填「晴」;讀取器本來就有 `天氣_上午`/`天氣_下午`,只是沒人用。
+ *
+ * C2/D2 的「上午」「下午」子標題一併寫:公版範本漏了這兩格(人工報表有),
+ * 而報表是常駐檔——放在寫入指令裡,既有的專案報表也會一起補上。
+ *
+ * 越界不 throw:天氣是附帶資訊,不該讓一份日誌因為它寫不進去而整份卡住
+ * (數量本身的越界已由 daysToOperations 擋在前面)。
+ *
+ * @param {Array} days 讀取器輸出的逐日結果
+ * @param {string} 開工日 ISO 日期
+ * @returns {Array} setCell operations;沒有任何天氣可寫時回空陣列
+ */
+function weatherToOperations(days, 開工日) {
+  const base = dayNum(開工日);
+  if (base == null) return [];
+  const ops = [];
+  for (const d of days || []) {
+    const h = d.header || {};
+    if (!h.填報日期) continue;
+    const 上午 = h.天氣_上午 == null ? '' : String(h.天氣_上午).trim();
+    const 下午 = h.天氣_下午 == null ? '' : String(h.天氣_下午).trim();
+    if (!上午 && !下午) continue;
+    const off = dayNum(h.填報日期) - base;
+    if (off == null || off < 0) continue;
+    const row = 監造內容_首列 + off;
+    if (row > 監造內容_末列) continue;
+    if (上午) ops.push({ type: 'setCell', sheet: 監造內容, addr: `C${row}`, value: 上午 });
+    if (下午) ops.push({ type: 'setCell', sheet: 監造內容, addr: `D${row}`, value: 下午 });
+  }
+  if (!ops.length) return [];
+  return [
+    { type: 'setCell', sheet: 監造內容, addr: 'C2', value: '上午' },
+    { type: 'setCell', sheet: 監造內容, addr: 'D2', value: '下午' },
+    ...ops,
+  ];
+}
+
 module.exports = {
-  colName, daysToOperations, diffDays, feeItemsPlan,
+  colName, daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
   SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };
