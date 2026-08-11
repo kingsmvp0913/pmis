@@ -27,8 +27,8 @@ d('fillTemplate 端對端(Excel COM)', () => {
     const bi = wb.Sheets['工程基本資料'];
     const ct = wb.Sheets['契約詳細價目表'];
 
-    expect(bi.B9.v).toBe(46248);        // 完工期限 = B8+B7-1 已重算
-    expect(bi.B9.f).toBe('B8+B7-1');    // 公式本身仍在
+    expect(bi.B9.v).toBe(46248);          // 完工期限 = B8+B7-1 已重算
+    expect(bi.B9.f).toContain('B8+B7-1'); // 公式本身仍在(外面包了「工期空就回空白」的守衛)
     expect(ct.F2.v).toBe(2000);         // 複價 = ROUND(E2*D2,0) 已重算
     expect(!!wb.vbaraw).toBe(true);     // 巨集保留
   }, 180000);

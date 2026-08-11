@@ -201,11 +201,14 @@ test('監造報表用插入列,每日施工紀錄用覆蓋', () => {
   expect(ops.find((o) => o.sheet === '每日施工紀錄').type).toBe('copyRowDown');
 });
 
-test('只有每日施工紀錄超出時,不動監造報表', () => {
+const 列操作 = (ops, sheet) => ops.filter((o) => o.sheet === sheet
+  && /copyRowDown|insertRowsBelow|deleteRows/.test(o.type));
+
+test('只有每日施工紀錄超出時,不動監造報表的列', () => {
   const ops = itemsToOperations(mixed(31)); // 36 項總數(剛好)、31 施工項(剛好)
-  expect(ops.filter((o) => o.sheet === '監造報表')).toEqual([]);
+  expect(列操作(ops, '監造報表')).toEqual([]);
   const ops2 = itemsToOperations(mixed(32)); // 37 項總數(超 1)、32 施工項(超 1)
-  expect(ops2.find((o) => o.sheet === '每日施工紀錄').count).toBe(1);
+  expect(列操作(ops2, '每日施工紀錄')[0].count).toBe(1);
 });
 
 // 擴列要排在寫值之前:公式列不存在的話,寫進去的項目在那兩個分頁上看不到
@@ -226,6 +229,18 @@ test('新表比舊表短時,多出來的舊列要被清空', () => {
     [null, null, null, null, null],
     [null, null, null, null, null],
   ]);
+});
+
+// 數字進去之後才知道要多寬:契約數量欄固定寬度,2,600.00 放不下就印 ########
+// ——值是對的,逐格比對看不到,把報表印出來才看得見。承辦人是自己拉寬那一欄的。
+test('寫完值之後重新量數字欄的寬度', () => {
+  const ops = itemsToOperations(many(3));
+  const fit = ops.filter((o) => o.type === 'autoFitColumns');
+  expect(fit.map((o) => o.sheet)).toEqual(['監造報表', '契約詳細價目表', '每日施工紀錄']);
+  expect(fit.find((o) => o.sheet === '監造報表').cols).toEqual(['H', 'I', 'J']);
+  // 量寬度要排在寫值之後,否則量的是舊值
+  expect(ops.findIndex((o) => o.type === 'setRange'))
+    .toBeLessThan(ops.findIndex((o) => o.type === 'autoFitColumns'));
 });
 
 test('沒有項目時拒絕組指令', () => {

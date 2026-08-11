@@ -39,7 +39,9 @@ function buildJob(templatePath, outPath, operations) {
     throw new Error('operations 需為非空陣列');
   }
 
-  const KNOWN = new Set(['setCell', 'setRange', 'copyRowDown', 'insertRowsBelow', 'deleteRows']);
+  const KNOWN = new Set([
+    'setCell', 'setRange', 'copyRowDown', 'insertRowsBelow', 'deleteRows', 'autoFitColumns',
+  ]);
   const isPosInt = (n) => Number.isInteger(n) && n >= 1;
   for (const op of operations) {
     if (!op || !KNOWN.has(op.type)) {
@@ -60,6 +62,11 @@ function buildJob(templatePath, outPath, operations) {
       // 整列刪除不可逆(公式一起消失),startRow 少驗一次就可能刪掉報表正文
       if (!isPosInt(op.startRow)) throw new Error('deleteRows 的 startRow 須為正整數');
       if (!isPosInt(op.count)) throw new Error('deleteRows 的 count 須為正整數');
+    } else if (op.type === 'autoFitColumns') {
+      if (!Array.isArray(op.cols) || !op.cols.length
+        || !op.cols.every((c) => typeof c === 'string' && /^[A-Z]{1,3}$/.test(c))) {
+        throw new Error('autoFitColumns 的 cols 須為欄名陣列(如 ["H","I"])');
+      }
     }
   }
 

@@ -160,6 +160,19 @@ const INDEX_ROWS = {
 const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
 
 /**
+ * 寫完數字後要重新量寬度的欄(只加寬,見 itemsToOperations 末尾)。
+ * 只列**放數量/金額**的欄——文字欄(工程項目)本來就靠換行與截斷,拉寬會把版面撐爆。
+ *   監造報表   H 契約數量 / I 完成數量 / J 累計完成數量
+ *   價目表     D 契約數量 / E 契約單價 / F 契約複價
+ *   每日施工紀錄 D 契約數量 / E 契約單價 / F 契約複價 / G 累計完成數量 / H 累計完成金額
+ */
+const 數字欄 = {
+  監造報表: ['H', 'I', 'J'],
+  契約詳細價目表: ['D', 'E', 'F'],
+  每日施工紀錄: ['D', 'E', 'F', 'G', 'H'],
+};
+
+/**
  * 報表 A 欄要印的項次。**只影響版面,不影響任何比對**。
  *
  * 承辦人的慣例是把大類標題接在項次前面:49 個舊案的人工報表 42 份寫
@@ -273,6 +286,11 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
       : [null, null, null, null, null]);
   }
   ops.push({ type: 'setRange', sheet: SHEET, startAddr: `A${FIRST_ROW}`, values });
+  // 數字進去之後才知道要多寬。契約數量欄是固定寬度但數量不是——2,600.00 放不下,
+  // Excel 就印出 ########;**值是對的,逐格比對永遠看不到**,要把報表印出來才看得見。
+  // 承辦人是自己把那一欄拉寬的(49 份人工報表實測 9.67~13.00)。
+  // 只加寬不縮小:範本欄寬是刻意對齊人工報表的,AutoFit 一個幾乎空的欄會縮到剩標題寬。
+  ops.push(...Object.entries(數字欄).map(([sheet, cols]) => ({ type: 'autoFitColumns', sheet, cols })));
   return ops;
 }
 

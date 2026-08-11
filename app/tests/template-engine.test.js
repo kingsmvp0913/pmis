@@ -55,6 +55,19 @@ describe('buildJob 操作驗證(純函式,不碰 Excel)', () => {
       .toThrow(/sheet/);
   });
 
+  // 契約數量欄是固定寬度但數量不是:2,600.00 放不下,Excel 印 ########。
+  // 值是對的,逐格比對永遠看不到——要把報表印出來才看得見。
+  test('autoFitColumns 的 cols 須為欄名陣列', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'autoFitColumns', sheet: 'x', cols: [] }]))
+      .toThrow(/cols/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'autoFitColumns', sheet: 'x', cols: ['H1'] }]))
+      .toThrow(/cols/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'autoFitColumns', sheet: 'x', cols: 'H' }]))
+      .toThrow(/cols/);
+    expect(buildJob('t.xlsm', 'o.xlsm', [{ type: 'autoFitColumns', sheet: 'x', cols: ['H', 'AA'] }])
+      .operations).toHaveLength(1);
+  });
+
   test('合法操作回傳正規化 job', () => {
     const job = buildJob('t.xlsm', 'o.xlsm', ops);
     expect(job).toEqual({ templatePath: 't.xlsm', outPath: 'o.xlsm', operations: ops });

@@ -121,6 +121,21 @@ try {
                 $count = [int]$op.count
                 $ws.Range($ws.Rows.Item($top), $ws.Rows.Item($top + $count - 1)).Delete(-4162) | Out-Null
             }
+            # Widen-only AutoFit. The contract-quantity column is a fixed width in
+            # the template but the numbers are not: 2,600.00 does not fit and Excel
+            # prints ######## — the value is right, so a cell-by-cell diff never sees
+            # it. The caseworkers widen that column by hand (measured 9.67-13.00
+            # across 49 filled reports). Never narrow: the template widths were
+            # matched to theirs on purpose, and AutoFit on a near-empty column
+            # would shrink it to the header.
+            'autoFitColumns' {
+                foreach ($c in $op.cols) {
+                    $col = $ws.Columns.Item($c)
+                    $before = [double]$col.ColumnWidth
+                    $col.AutoFit() | Out-Null
+                    if ([double]$col.ColumnWidth -lt $before) { $col.ColumnWidth = $before }
+                }
+            }
         }
     }
 
