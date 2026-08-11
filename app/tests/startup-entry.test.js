@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 // 啟動入口有兩條:使用者雙擊的「啟動.bat」→ app/scripts/start.js,以及開發時直接
-// `node app/server/index.js`。onboarding(git pull + 掃描安裝讀取器)原本只掛在
+// `node app/server/index.js`。onboarding(掃描安裝讀取器)原本只掛在
 // index.js 的 `require.main === module` 分支,start.js 自己 createApp + listen,
 // **整條使用者路徑跳過了 onboarding**——症狀是 samples/ 有 33 支讀取器,
 // data/vendor-parsers/ 只停在手動上傳年代的那 9 支,而且不會有任何錯誤訊息。

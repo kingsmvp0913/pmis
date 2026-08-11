@@ -46,7 +46,8 @@ const { runStartupOnboarding } = require(path.join(ROOT, 'app', 'server', 'parse
 const app = createApp();
 migrate()
   .then(async () => {
-    // 啟動即 git pull + 掃描安裝讀取器並 upsert 廠商(best-effort,不擋啟動)。
+    // 啟動即掃描安裝讀取器並 upsert 廠商(best-effort,不擋啟動)。
+    // 取得最新讀取器的 git pull 在「啟動.bat」裡、node 起來之前就跑完了。
     await runStartupOnboarding().catch((err) =>
       console.warn('[onboarding] 略過:', err.message));
     app.listen(port, () => console.log(`PMIS 已啟動:http://localhost:${port}(關閉此視窗即停止)`));

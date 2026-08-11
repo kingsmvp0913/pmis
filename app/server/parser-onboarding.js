@@ -2,20 +2,18 @@
  * parser-onboarding.js — 啟動時掃描讀取器並 upsert 廠商(SP-P)
  *
  * 正式環境不安裝 AI:讀取器由開發環境的 gen-vendor-parser skill 產出後 commit 進 repo。
- * 正式環境啟動時 `git pull` 取得最新讀取器,再呼叫 scanAndInstall:
+ * 取得最新讀取器的 `git pull` 在「啟動.bat」裡、node 起來之前跑——放進程內太晚,
+ * 拉到的 .js 這一次執行吃不到。這裡只負責掃描安裝:
  *   逐支讀取器 → 驗證安裝 → 有同名廠商就更新讀取器,沒有就新建廠商並綁定。
  * 免手動安裝、免按鈕。
  */
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
 const registry = require('./parsers/registry');
 const db = require('./db');
 
 // 讀取器來源:隨程式碼樹發佈的 samples 目錄(git pull 會更新這裡)。
 const BUNDLED_DIR = path.join(__dirname, 'parsers', 'vendors', 'samples');
-// repo 根(app/server → app → repo),供 git pull。
-const REPO_ROOT = path.resolve(__dirname, '../..');
 
 /**
  * 掃描讀取器目錄,逐支安裝並 upsert 廠商。
@@ -66,24 +64,12 @@ async function scanAndInstall(opts = {}) {
   return results;
 }
 
-// 啟動時取得最新讀取器(best-effort;無 remote/衝突一律略過,不擋啟動)。
-function gitPull() {
-  return new Promise((resolve) => {
-    execFile('git', ['pull', '--ff-only'], { cwd: REPO_ROOT, timeout: 60000 }, (err, stdout, stderr) => {
-      if (err) console.warn('[onboarding] git pull 略過:', String(stderr || err.message).trim());
-      else console.log('[onboarding] git pull:', String(stdout).trim() || 'up to date');
-      resolve();
-    });
-  });
-}
-
 /**
- * 啟動時 onboarding:git pull 取得最新讀取器 → 掃描安裝 + upsert 廠商。
+ * 啟動時 onboarding:掃描安裝讀取器 + upsert 廠商。
  * 全程 best-effort,不因失敗中斷啟動。
  * @returns {Promise<Array>} scanAndInstall 結果
  */
 async function runStartupOnboarding() {
-  await gitPull();
   const results = await scanAndInstall();
   const ok = results.filter(r => r.ok).length;
   const created = results.filter(r => r.vendorCreated).length;
