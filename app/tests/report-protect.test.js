@@ -112,11 +112,13 @@ describe('scanFilledCells', () => {
     expect(每日).not.toContain(某公式格);
   });
 
-  test('掃得到的分頁只有系統會寫入的那四個', () => {
+  // 掃描範圍必須**恰好**等於系統會寫入的分頁集合,兩邊都會出事:
+  // 少一個 → 那個分頁完全沒保護,承辦人上傳的既有內容被直接蓋掉而且沒有徵兆;
+  // 多一個 → 清單變大、比對變慢,而且保護了根本不會被寫的東西。
+  // 「監造內容」是 2026-08-11 才進來的(SP3 把施工日誌的天氣寫進它的 C/D 欄)。
+  test('掃描範圍恰好等於系統會寫入的分頁', () => {
     if (!fs.existsSync(範本)) return;
-    const filled = scanFilledCells(範本);
-    for (const name of Object.keys(filled)) {
-      expect(['工程基本資料', '契約詳細價目表', '監造報表', '每日施工紀錄']).toContain(name);
-    }
+    const 會寫入的分頁 = ['工程基本資料', '契約詳細價目表', '監造報表', '每日施工紀錄', '監造內容'];
+    expect(Object.keys(scanFilledCells(範本)).sort()).toEqual(會寫入的分頁.sort());
   });
 });
