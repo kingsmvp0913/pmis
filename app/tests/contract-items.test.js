@@ -236,8 +236,10 @@ test('新表比舊表短時,多出來的舊列要被清空', () => {
 test('寫完值之後重新量數字欄的寬度', () => {
   const ops = itemsToOperations(many(3));
   const fit = ops.filter((o) => o.type === 'autoFitColumns');
-  expect(fit.map((o) => o.sheet)).toEqual(['監造報表', '契約詳細價目表', '每日施工紀錄']);
-  expect(fit.find((o) => o.sheet === '監造報表').cols).toEqual(['H', 'I', 'J']);
+  // ⚠️ 只有監造報表。曾經「順便」加上另外兩個分頁,結果每日施工紀錄的累計完成金額欄
+  // 被撐寬,把最右邊的「完成百分比」整欄擠出列印範圍——印出來整欄不見。
+  expect(fit.map((o) => o.sheet)).toEqual(['監造報表']);
+  expect(fit[0].cols).toEqual(['H', 'I', 'J']);
   // 量寬度要排在寫值之後,否則量的是舊值
   expect(ops.findIndex((o) => o.type === 'setRange'))
     .toBeLessThan(ops.findIndex((o) => o.type === 'autoFitColumns'));
