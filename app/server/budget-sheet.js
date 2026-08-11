@@ -31,6 +31,12 @@ const ITEM_NO = /^\d+$/;
 // 因為 `A.壹` 的最後一段就是「壹」。
 const noKey = (項次) => String(項次).split('.').pop();
 
+// 大類標題列的項次。這種列**沒有數量單價,不會被收成項目**,但承辦人在報表上
+// 會把它接到底下的項次前面(饒平來源是「壹」+「1」,人工報表寫「壹.1」)。
+// 兩層是實測有的:鎮西來源是「壹」→「一」→「1」,人工報表寫「壹.一.1」。
+const GROUP_L1 = /^[壹貳贰參参叁肆伍陸陆柒捌玖拾]$/;
+const GROUP_L2 = /^[一二三四五六七八九十]$/;
+
 /**
  * 這一項是不是「費用項目」(職安衛管理費/品管費/包商管理費/保險費/營業稅…)。
  * 這類項目沒有施工實體,施工日誌不會記,每日進度由 SP3 依契約工期推算
@@ -64,22 +70,42 @@ const text = (v) => String(v == null ? '' : v).trim();
  * 缺數字的列一律不收——那是大類標題、註記或空列,硬收會產生一筆數量為 null
  * 的項目,寫進範本後每日施工紀錄的公式會拉出一整列的 #VALUE!。
  *
+ * 不收的大類標題列會記進 `大類`(見 GROUP_L1/GROUP_L2)。**項次本身不變**——
+ * 廠商施工日誌寫的是純數字(7 家實測只有東振寫 `A.壹.1`,因為它的來源本來就有),
+ * 而 SP3 是拿項次逐字當 key 對日誌的(`daily-log-validate.js` 的 contractByNo),
+ * 在這裡加前綴會讓每一天都對不上、整份寫不進去。前綴只在寫報表 A 欄時才組
+ * (`contract-items.js`)。
+ *
  * @param {Array<Array<string>>} rows A~F 欄字串矩陣
- * @returns {Array<{項次:string,項目:string,單位:string,數量:number,單價:number,複價:number}>}
+ * @returns {Array<{項次:string,項目:string,單位:string,數量:number,單價:number,複價:number,大類:string|null}>}
  */
 function parseItems(rows) {
   const out = [];
+  let 大類 = [];
   for (const row of rows || []) {
     const 項次 = text(row[0]);
     const 項目 = text(row[1]);
     if (SUBTOTAL.test(項次) || SUBTOTAL.test(項目)) continue;
     const key = noKey(項次);
-    if (!ITEM_NO.test(key) && !FEE_NO.test(key)) continue;
     const 數量 = toNum(row[3]);
     const 單價 = toNum(row[4]);
     const 複價 = toNum(row[5]);
-    if (數量 == null || 單價 == null || 複價 == null) continue;
-    out.push({ 項次, 項目, 單位: text(row[2]), 數量, 單價, 複價 });
+    const 有數字 = 數量 != null && 單價 != null && 複價 != null;
+    // 大類標題只認「沒有數量單價」的列:費用項目的項次也是中文大寫(貳/参/…),
+    // 但它們有數量單價、是真項目,誤判成大類會讓後面的項次全掛上錯的前綴。
+    if (!有數字) {
+      if (GROUP_L1.test(項次)) 大類 = [項次];
+      else if (GROUP_L2.test(項次) && 大類.length) 大類 = [大類[0], 項次];
+      continue;
+    }
+    if (!ITEM_NO.test(key) && !FEE_NO.test(key)) continue;
+    // 費用項目本身就是大類層級,不加前綴(人工報表也是寫「貳」而不是「壹.貳」);
+    // 項次已經帶前綴的(古坑 `A.壹.1`)不再疊加。
+    const 可加前綴 = ITEM_NO.test(key) && 項次 === key && 大類.length;
+    out.push({
+      項次, 項目, 單位: text(row[2]), 數量, 單價, 複價,
+      大類: 可加前綴 ? 大類.join('.') : null,
+    });
   }
   return out;
 }

@@ -152,6 +152,20 @@ const INDEX_ROWS = {
 const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
 
 /**
+ * 報表 A 欄要印的項次。**只影響版面,不影響任何比對**。
+ *
+ * 承辦人的慣例是把大類標題接在項次前面:49 個舊案的人工報表 42 份寫
+ * `壹.1`(鎮西兩層寫 `壹.一.1`、古坑兩子工程寫 `A.壹.1`),只有 6 份寫純數字。
+ * 而來源的經費總表**全部都是**「壹」大類列 + 「1、2、3」——連那 6 份也是,
+ * 所以前綴是承辦人自己加的,不是資料差異。
+ *
+ * 前綴刻意只在這裡組、不進 `項次` 欄:廠商施工日誌寫的是純數字,SP3 拿項次
+ * 逐字當 key 對日誌(`daily-log-validate.js` 的 contractByNo),資料層一加前綴
+ * 就每天都對不上、整份寫不進去。
+ */
+const 顯示項次 = (i) => (i.大類 ? `${i.大類}.${i.項次}` : i.項次);
+
+/**
  * 項目清單 → SP0 template-engine 的 operations。
  *
  * F 欄複價**不寫**:那是範本公式 ROUND(E*D,0)。寫死值會把公式換掉,之後任何人
@@ -182,7 +196,7 @@ function itemsToOperations(items, previousCount = 0) {
   for (let i = 0; i < rows; i++) {
     const it = list[i];
     values.push(it
-      ? [it.項次, it.項目, it.單位, it.數量, it.單價]
+      ? [顯示項次(it), it.項目, it.單位, it.數量, it.單價]
       : [null, null, null, null, null]);
   }
   ops.push({ type: 'setRange', sheet: SHEET, startAddr: `A${FIRST_ROW}`, values });
