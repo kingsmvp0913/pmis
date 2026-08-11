@@ -34,6 +34,17 @@ process.env.JWT_SECRET = cfg.JWT_SECRET;
 process.env.PORT = String(port);
 if (cfg.DATABASE_URL) process.env.DATABASE_URL = cfg.DATABASE_URL;
 
+// 舊的還開著就先關掉。必須排在開瀏覽器之前——否則瀏覽器連上的是舊進程,
+// 剛 pull 下來的新版沒生效,畫面上卻看不出任何異狀。
+const { freePort } = require(path.join(ROOT, 'app', 'scripts', 'free-port.js'));
+const freed = freePort(port);
+if (freed.blockedBy.length) {
+  console.error(`埠 ${port} 被 ${freed.blockedBy.join('、')} 占用,PMIS 無法啟動。`);
+  console.error('請先關閉該程式,或改 data/config.json 的 PORT 換一個埠。');
+  process.exit(1);
+}
+if (freed.killed.length) console.log(`[啟動] 已關閉先前的 PMIS(PID ${freed.killed.join(', ')})`);
+
 // 開啟預設瀏覽器(Windows;失敗不致命)
 try {
   spawn('cmd', ['/c', 'start', '', `http://localhost:${port}`], { detached: true, stdio: 'ignore' });
