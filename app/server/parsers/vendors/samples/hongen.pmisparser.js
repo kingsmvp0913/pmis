@@ -141,11 +141,18 @@ function byColumn(band, xs) {
 }
 
 /** 解析一頁(一天)。純函式,selfTest 以真實座標重用之。 */
-function parsePage(items) {
+/**
+ * 一頁 → 一天。`寬鬆` 只在整份文件都選不到嚴格錨點時為 true(＝掃描件),
+ * 逐頁判斷會讓非日誌頁憑空生出資料。
+ */
+function parsePage(items, 寬鬆) {
   const all = bands(items);
   const find = (re) => items.find((it) => re.test(despace(it.s)));
 
-  const bWx = bandWith(all, /^本日天氣/);
+  // 「本日」兩個字 OCR 常常整個吃掉(竹崎 E 棟實測只讀到「天氣：」)。這條帶是
+  // 日期與天氣的唯一來源,抓不到就整天作廢。嚴格優先——放寬只在整份文件都選不到
+  // 嚴格錨點時才用(見 parseAll 的 寬鬆),不可逐頁判斷。
+  const bWx = bandWith(all, /^本日天氣/) || (寬鬆 ? bandWith(all, /^天氣[:：]?/) : null);
   const bName = bandWith(all, /^工程名稱$/);
   const bStart = bandWith(all, /^契約工期$/);
   const wxText = bWx ? bandText(bWx) : '';
@@ -276,11 +283,29 @@ async function parseAll(filePath, ctx) {
   const pages = await ft.extractItems(filePath);
   const total = pages.reduce((a, p) => a + (p.items || []).length, 0);
   if (!total) throw new Error('PDF 沒有文字層(掃描件),無法解析');
-  const days = [];
-  for (const p of pages) {
-    const items = p.items || [];
-    if (!items.some((it) => despace(it.s).startsWith('表報編號'))) continue;
-    days.push(parsePage(items));
+  // 掃描件走 OCR 時「表報」兩個字常常整個沒被偵測到(竹崎 E 棟實測:207 個 item
+  // 裡沒有任何一個含「表報」,只讀到「編號：90」),而那一頁其他標記全都在。
+  // 嚴格錨點**一頁都沒中**時才放寬,文字層的行為完全不變;放寬後仍要三個標記
+  // 同時具備,非日誌頁(封面/材料表)湊不齊,而且湊齊也會被下面的填報日期過濾掉。
+  const 嚴格 = (items) => items.some((it) => despace(it.s).startsWith('表報編號'));
+  const 放寬 = (items) => {
+    const t = items.map((it) => despace(it.s)).join('|');
+    return /編號/.test(t) && /填報日期/.test(t) && /工程名稱/.test(t);
+  };
+  let 日誌頁 = pages.filter((p) => 嚴格(p.items || []));
+  const 寬鬆 = !日誌頁.length;
+  if (寬鬆) 日誌頁 = pages.filter((p) => 放寬(p.items || []));
+  let days = 日誌頁.map((p) => parsePage(p.items || [], 寬鬆));
+  // 放寬挑頁時會連第二聯一起選進來(同一天、明細 0 列)。同一天只留明細最多的那頁,
+  // 否則下游會看到兩筆同日期,後面那筆把前面的清空。
+  if (寬鬆) {
+    const best = new Map();
+    for (const d of days) {
+      const k = d.header.填報日期 || Symbol('無日期');
+      const prev = best.get(k);
+      if (!prev || (d.dailyRows || []).length > (prev.dailyRows || []).length) best.set(k, d);
+    }
+    days = [...best.values()];
   }
   if (!days.length) throw new Error('找不到「表報編號」頁(此檔非宏恩格式)');
   const filled = days.filter((d) => d.header.填報日期 != null

@@ -125,25 +125,33 @@ function byColumn(band, xs) {
  * 解析一頁(一天)。純函式,selfTest 以真實座標重用之。
  * @param {Array<{x:number,y:number,w:number,s:string}>} items
  */
-function parsePage(items) {
+/**
+ * 一頁 → 一天。
+ *
+ * `寬鬆` 只在**整份文件都選不到嚴格錨點**時為 true(見 parseAll),意思是
+ * 「這份是掃描件、OCR 會把標籤與值併成一格」。**不可以逐頁判斷**:文字層裡
+ * 本來就有不是日誌的頁,對那種頁放寬會憑空生出明細列(實測 30 天變 31 天,
+ * 多出來那筆沒有日期卻有數量)。
+ */
+function parsePage(items, 寬鬆) {
   const all = bands(items);
   const find = (re) => items.find((it) => re.test(despace(it.s)));
 
-  const wb = bandWith(all, /^本日天氣[:：]?$/);
+  const wb = bandWith(all, 寬鬆 ? /^本日天氣[:：]?/ : /^本日天氣[:：]?$/);
   const nb = bandWith(all, /^工程名稱$/);
   const pb = bandWith(all, /^累計預定進度/);
   const sb = bandWith(all, /^開工日期$/);
 
   const dateText = wb ? (bandText(wb).match(/民國?\s*\d{2,4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/) || [])[0] : null;
   const week = wb ? (bandText(wb).match(/星期[一二三四五六日天]/) || [])[0] : null;
+  // 併框時的後備:整帶接起來再切上午/下午(見 header 的天氣欄)
+  const wx = wb ? bandText(wb).match(/上午[:：]?\s*(.+?)\s*下午[:：]?\s*(.+?)(?:填[表報]日期|$)/) : null;
 
   // ── 明細 ──
-  const hNo = find(/^合約項次$/);
-  const hUnit = find(/^單位$/);
-  const hQty = find(/^契約數量$/);
-  const hToday = find(/^本日完成$/);
-  const hCum = find(/^累計完成數量$/);
-  const hMemo = find(/^備註$/);
+  const [hNo, hUnit, hQty, hToday, hCum, hMemo] = (寬鬆
+    ? [/^合約項次/, /^單位/, /^契約數量/, /^本日完成/, /^累計完成數量/, /^備註/]
+    : [/^合約項次$/, /^單位$/, /^契約數量$/, /^本日完成$/, /^累計完成數量$/, /^備註$/]
+  ).map(find);
   const dailyRows = [];
   if (hNo && hUnit && hQty && hToday && hCum) {
     const xs = [-Infinity, hUnit.x, hQty.x, hToday.x, hCum.x, hMemo ? hMemo.x : Infinity];
@@ -210,8 +218,10 @@ function parsePage(items) {
       工程名稱: pick(nb, /^工程名稱$/, /^承攬廠商名稱$/),
       填報日期: rocTextToISO(dateText),
       星期: week || null,
-      天氣_上午: pick(wb, /^上午[:：]$/, /^下午[:：]$/),
-      天氣_下午: pick(wb, /^下午[:：]$/, /^填表日期[:：]$/),
+      // pick 是「找到剛好等於標籤的 item,取它到下一個標籤之間」,而 OCR 併框之後
+      // 「上午：」不再是獨立 item。抓不到就退回整帶文字 regex(日期本來就這樣抓)。
+      天氣_上午: pick(wb, /^上午[:：]$/, /^下午[:：]$/) || (wx ? text(wx[1]) : null),
+      天氣_下午: pick(wb, /^下午[:：]$/, /^填表日期[:：]$/) || (wx ? text(wx[2]) : null),
       // PDF 印的就是百分數(6.93%),照收不換算
       預定進度: num(pick(pb, /^累計預定進度/, /^實際累計進度/)),
       實際進度: num(pick(pb, /^實際累計進度/, /^原契約[:：]$/)),
@@ -232,12 +242,16 @@ async function parseAll(filePath, ctx) {
   const total = pages.reduce((a, p) => a + (p.items || []).length, 0);
   // 回空陣列會被上游當成「這份沒有資料」而靜靜略過。掃描件一定要明講。
   if (!total) throw new Error('PDF 沒有文字層(掃描件),無法解析');
-  const days = [];
-  for (const p of pages) {
-    const items = p.items || [];
-    if (!items.some((it) => /^表單編號[:：]?$/.test(despace(it.s)))) continue;
-    days.push(parsePage(items));
-  }
+  // 兩段式挑頁。嚴格(整格剛好是標籤)優先——文字層就該這樣,放寬會多選到一頁
+  // (實測 30 天變 31 天)。**一頁都沒中才放寬**,那是掃描件才會發生的情形:
+  // OCR 的偵測框會把標籤與值併成一格(民生球場實測讀出「表單編號：33」),
+  // 嚴格比對就一頁都選不到、整份 throw。
+  const 嚴格 = (items) => items.some((it) => /^表單編號[:：]?$/.test(despace(it.s)));
+  const 放寬 = (items) => items.some((it) => /^表單編號[:：]?/.test(despace(it.s)));
+  let 日誌頁 = pages.filter((p) => 嚴格(p.items || []));
+  const 寬鬆 = !日誌頁.length;
+  if (寬鬆) 日誌頁 = pages.filter((p) => 放寬(p.items || []));
+  const days = 日誌頁.map((p) => parsePage(p.items || [], 寬鬆));
   if (!days.length) throw new Error('找不到「表單編號」頁(此檔非嘉原格式)');
   return days.filter((d) => d.header.填報日期 != null
     || (d.dailyRows || []).some((r) => r.本日完成數量));
