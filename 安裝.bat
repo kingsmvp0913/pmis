@@ -7,23 +7,34 @@ echo.
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [1/4] 安裝 Node.js ...
+  echo [1/5] 安裝 Node.js ...
   winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [1/4] Node.js 已安裝,略過
+  echo [1/5] Node.js 已安裝,略過
 )
 
 set "PGOK="
 where psql >nul 2>nul && set "PGOK=1"
 reg query "HKLM\SOFTWARE\PostgreSQL\Installations" >nul 2>nul && set "PGOK=1"
 if not defined PGOK (
-  echo [2/4] 安裝 PostgreSQL 17 ...
+  echo [2/5] 安裝 PostgreSQL 17 ...
   winget install -e --id PostgreSQL.PostgreSQL.17 --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [2/4] PostgreSQL 已安裝,略過
+  echo [2/5] PostgreSQL 已安裝,略過
+)
+
+where git >nul 2>nul
+if errorlevel 1 (
+  echo [3/5] 安裝 Git(啟動時自動更新讀取器要用) ...
+  winget install -e --id Git.Git --silent --accept-package-agreements --accept-source-agreements
+) else (
+  echo [3/5] Git 已安裝,略過
 )
 
 call :refreshpath
+
+where git >nul 2>nul
+if errorlevel 1 echo    (Git 需重新開啟視窗才生效,不影響安裝;下次啟動就會自動更新)
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -35,12 +46,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [3/4] 安裝相依套件 ...
+echo [4/5] 安裝相依套件 ...
 pushd app
 call npm install
 popd
 
-echo [4/4] 建立資料庫並初始化 ...
+echo [5/5] 建立資料庫並初始化 ...
 node "app\scripts\setup.js"
 if errorlevel 1 (
   echo.
