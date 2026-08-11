@@ -15,10 +15,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const multer = require('multer');
+const x = require('xlsx');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { readSheets, findCandidates } = require('./budget-sheet');
-const { selectSheets, validateItems, diffItems, itemsToOperations } = require('./contract-items');
+const {
+  selectSheets, validateItems, diffItems, itemsToOperations, supervisionItemRowCount,
+} = require('./contract-items');
 const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
@@ -72,6 +75,24 @@ async function loadExisting(projectId) {
        FROM contract_items WHERE project_id = $1 ORDER BY seq`, [projectId]);
   if (!rows.length) return null;
   return rows.map((r) => ({ ...r, 數量: Number(r.數量), 單價: Number(r.單價) }));
+}
+
+/**
+ * 監造報表 A 欄的值(由第 1 列起)。供 `supervisionItemRowCount` 找報表正文的
+ * 位置,以決定要刪掉幾列多餘的項目列。
+ *
+ * 讀不到就回空陣列 → 算出來是 null → 只擴不刪。刪列不可逆,寧可版面不動。
+ */
+function supervisionColumnA(xlsmPath) {
+  try {
+    const ws = x.readFile(xlsmPath, { sheets: ['監造報表'] }).Sheets['監造報表'];
+    if (!ws || !ws['!ref']) return [];
+    const { e } = x.utils.decode_range(ws['!ref']);
+    return Array.from({ length: e.r + 1 }, (_, i) => {
+      const c = ws[`A${i + 1}`];
+      return c == null || c.v == null ? '' : String(c.v);
+    });
+  } catch { return []; }
 }
 
 /**
@@ -179,10 +200,14 @@ function registerRoutes(app) {
 
         const existing = await loadExisting(req.params.id);
         const dest = ensureWorkbook(req.params.id);
+        // 監造報表現有幾列項目列,一律讀實檔:那份是常駐檔,可能已被前一次寫入
+        // 刪過列,也可能是承辦人自己上傳的。用範本常數推會刪到報表正文。
+        const 監造報表列數 = supervisionItemRowCount(supervisionColumnA(dest));
         // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
         tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
         await fillTemplate(dest, tmp,
-          applyProtection(dest, itemsToOperations(items, existing ? existing.length : 0)));
+          applyProtection(dest, itemsToOperations(
+            items, existing ? existing.length : 0, 監造報表列數)));
         // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await(同 project-basics-routes.js:152):
         // 並行安全靠 fillTemplate 內部的 _chain 序列化 + renameSync 在同一個 microtask 續行中
         // 同步跑完。中間一 await,另一個請求的 COM job 就會插隊。

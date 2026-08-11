@@ -44,6 +44,17 @@ describe('buildJob 操作驗證(純函式,不碰 Excel)', () => {
       .toThrow(/count/);
   });
 
+  // 刪列不可逆——公式跟著整列消失。startRow 少驗一次就可能刪掉報表正文,
+  // 而刪掉的正文不會有任何錯誤訊息,只是報表少了幾段。
+  test('deleteRows 的 startRow/count 須為正整數', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'deleteRows', sheet: 'x', startRow: 0, count: 3 }]))
+      .toThrow(/startRow/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'deleteRows', sheet: 'x', startRow: 35, count: 0 }]))
+      .toThrow(/count/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'deleteRows', startRow: 35, count: 3 }]))
+      .toThrow(/sheet/);
+  });
+
   test('合法操作回傳正規化 job', () => {
     const job = buildJob('t.xlsm', 'o.xlsm', ops);
     expect(job).toEqual({ templatePath: 't.xlsm', outPath: 'o.xlsm', operations: ops });

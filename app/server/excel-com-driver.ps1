@@ -112,6 +112,15 @@ try {
                 $ws.Range($ws.Rows.Item($top + 1), $ws.Rows.Item($top + $count)).Insert(-4121) | Out-Null
                 $ws.Range($ws.Rows.Item($top), $ws.Rows.Item($top + $count)).FillDown() | Out-Null
             }
+            # Whole-row delete (xlShiftUp), the inverse of insertRowsBelow. The manual
+            # reports delete the unused item rows outright rather than blanking them, so
+            # the report body sits directly under the last real item; leaving them in
+            # pushes the body down and prints trailing empty rows.
+            'deleteRows' {
+                $top = [int]$op.startRow
+                $count = [int]$op.count
+                $ws.Range($ws.Rows.Item($top), $ws.Rows.Item($top + $count - 1)).Delete(-4162) | Out-Null
+            }
         }
     }
 

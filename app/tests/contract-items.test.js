@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const { findCandidates } = require('../server/budget-sheet');
 const {
-  selectSheets, validateItems, diffItems, itemsToOperations, SHEET, INDEX_ROWS,
+  selectSheets, validateItems, diffItems, itemsToOperations, supervisionItemRowCount,
+  SHEET, INDEX_ROWS,
 } = require('../server/contract-items');
 
 const fx = (key) => JSON.parse(fs.readFileSync(
@@ -229,4 +230,59 @@ test('新表比舊表短時,多出來的舊列要被清空', () => {
 
 test('沒有項目時拒絕組指令', () => {
   expect(() => itemsToOperations([])).toThrow(/項目/);
+});
+
+// ── 多餘的項目列要整列刪掉 ──────────────────────────────
+//
+// 人工報表把用不到的項目列**整列刪掉**,正文因此緊貼最後一個真項目
+// (饒平 25 個施工項目 → 正文在第 35 列)。留著的話報表不但多印五列費用項目,
+// 正文也整段被往下推。範本預留 31 列,而真實案子的施工項目多半只有 20~35 個。
+
+// A 欄:第 1 列是「項次」表頭在第 9 列,項目列 10 起,正文錨點在 anchorRow
+const 監造報表A欄 = (anchorRow) => Array.from({ length: anchorRow + 5 }, (_, i) => {
+  const r = i + 1;
+  if (r === 9) return '項次';
+  if (r === anchorRow) return '二、監督依照設計圖說及核定施工圖說施工（含約定之檢驗停留點）：';
+  return r > 9 && r < anchorRow ? `壹.${r - 9}` : '';
+});
+
+test('監造報表的項目列數由實檔的正文錨點算出', () => {
+  expect(supervisionItemRowCount(監造報表A欄(41))).toBe(31); // 公版範本:10~40 共 31 列
+  expect(supervisionItemRowCount(監造報表A欄(35))).toBe(25); // 已刪過列的常駐檔
+});
+
+// 刪列不可逆:錨點找不到就寧可不動版面,也不猜著刪——刪掉的正文不會有錯誤訊息
+test('找不到正文錨點時回 null', () => {
+  expect(supervisionItemRowCount(['項次', '', ''])).toBeNull();
+});
+
+test('施工項目少於現有列數時,多餘的列整列刪掉', () => {
+  const ops = itemsToOperations(mixed(25), 0, 31); // 饒平:25 施工 + 5 費用
+  const del = ops.find((o) => o.type === 'deleteRows');
+  expect(del).toEqual({ type: 'deleteRows', sheet: '監造報表', startRow: 35, count: 6 });
+});
+
+// 沒讀到實際列數(檔案讀不開/錨點不見)時只擴不刪
+test('沒給監造報表列數就不刪列', () => {
+  expect(itemsToOperations(mixed(25)).filter((o) => o.type === 'deleteRows')).toEqual([]);
+});
+
+// 監造報表第 10+k 列一對一拉價目表第 2+k 列,所以「留前 w 列」等於「留前 w 個項目」
+// ——唯有施工項目全部排在費用項目前面才剛好是要的結果。交錯時刪尾巴會刪到真項目。
+test('費用項目不在尾端時不刪列', () => {
+  const 交錯 = [item('1', 100), item('貳', 50), item('2', 100)];
+  expect(itemsToOperations(交錯, 0, 31).filter((o) => o.type === 'deleteRows')).toEqual([]);
+});
+
+// 常駐檔已被刪過列之後,擴列要從**現存的最後一列**複製公式,不是範本的第 40 列
+test('擴列的來源列以實檔的列數為準', () => {
+  const ops = itemsToOperations(mixed(28), 0, 25); // 現有 25 列、要 28 列
+  expect(ops.find((o) => o.sheet === '監造報表'))
+    .toMatchObject({ type: 'insertRowsBelow', srcRow: 34, count: 3 });
+});
+
+test('刪列指令排在寫值之前', () => {
+  const ops = itemsToOperations(mixed(25), 0, 31);
+  expect(ops.findIndex((o) => o.type === 'deleteRows'))
+    .toBeLessThan(ops.findIndex((o) => o.type === 'setRange'));
 });

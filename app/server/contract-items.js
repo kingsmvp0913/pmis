@@ -165,6 +165,40 @@ const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
  */
 const 顯示項次 = (i) => (i.大類 ? `${i.大類}.${i.項次}` : i.項次);
 
+// 監造報表項目區的下界:項目列的正下方就是報表正文。人工報表把用不到的項目列
+// **整列刪掉**,正文因此緊貼最後一個真項目;範本則預留到第 40 列。
+const BODY_ANCHOR = /^二[、,.]?監督/;
+const 去空白 = (v) => String(v == null ? '' : v).replace(/[\s　]/g, '');
+
+/**
+ * 監造報表目前有幾列項目列(第 10 列到報表正文之間)。
+ *
+ * 不從範本常數推、也不從 DB 的項目數推,而是**讀實際的檔案**:監造報表是常駐檔,
+ * 承辦人可以上傳自己做到一半的那份(見 report-verify.js),列數不保證等於範本。
+ * 推錯會刪到報表正文,而刪掉的正文不會有任何錯誤訊息。
+ *
+ * @param {Array<string>} aColumn 監造報表 A 欄由第 1 列起的值
+ * @returns {number|null} 找不到正文錨點回 null——**寧可不動版面,也不猜著刪**
+ */
+/**
+ * 監造報表的第 10+k 列一對一拉價目表的第 2+k 列,所以「只保留前 w 列」等於
+ * 「只保留前 w 個項目」——唯有施工項目**全部排在費用項目前面**時,這才剛好是
+ * 要的結果。單一分頁的案子恆成立;古坑那種兩個子工程的案子,承辦人選的是
+ * 已經把費用項目合併到最後的那張分頁,實測也成立。
+ *
+ * 不成立就不刪:版面維持現況(多印幾列)只是不好看,刪錯列是把真項目刪掉。
+ */
+const 費用項目全在尾端 = (list, 施工項目數) => list.slice(0, 施工項目數).every(IS_WORK_ITEM);
+
+function supervisionItemRowCount(aColumn) {
+  const { first } = INDEX_ROWS.監造報表;
+  const col = aColumn || [];
+  for (let r = first; r <= col.length; r++) {
+    if (BODY_ANCHOR.test(去空白(col[r - 1]))) return r - first;
+  }
+  return null;
+}
+
 /**
  * 項目清單 → SP0 template-engine 的 operations。
  *
@@ -174,20 +208,30 @@ const 顯示項次 = (i) => (i.大類 ? `${i.大類}.${i.項次}` : i.項次);
  * @param {Array} items 已通過 validateItems 的項目
  * @param {number} [previousCount] 這份報表上一版的項目數;新表較短時,多出來的
  *   舊列必須清空,否則會原封不動留在畫面上,看起來像契約真的有這些項目。
- * @returns {Array} operations(擴列排在寫值之前)
+ * @param {number|null} [監造報表現有列數] 由 `supervisionItemRowCount` 讀實檔算出。
+ *   給了才會刪多餘的列(見下);null 表示讀不到正文錨點,只擴不刪。
+ * @returns {Array} operations(擴列/刪列排在寫值之前)
  * @throws {Error} items 為空
  */
-function itemsToOperations(items, previousCount = 0) {
+function itemsToOperations(items, previousCount = 0, 監造報表現有列數 = null) {
   const list = items || [];
   if (!list.length) throw new Error('沒有任何項目,不組寫入指令');
 
   const ops = [];
   // 擴列先做:公式列不存在的話,寫進去的項目在那兩個分頁上看不到。
   for (const [sheet, { first, last, op, 只算施工項目 }] of Object.entries(INDEX_ROWS)) {
-    const capacity = last - first + 1;
+    const 讀到的 = sheet === '監造報表' && Number.isInteger(監造報表現有列數)
+      ? 監造報表現有列數 : null;
+    // 常駐檔的實際列數可能已被刪過(或承辦人上傳的那份本來就不同),讀得到就以實檔為準
+    const capacity = 讀到的 == null ? last - first + 1 : 讀到的;
     const needed = 只算施工項目 ? list.filter(IS_WORK_ITEM).length : list.length;
     if (needed > capacity) {
-      ops.push({ type: op, sheet, srcRow: last, count: needed - capacity });
+      ops.push({ type: op, sheet, srcRow: first + capacity - 1, count: needed - capacity });
+    } else if (needed < capacity && 讀到的 != null && 費用項目全在尾端(list, needed)) {
+      // 人工報表把用不到的項目列**整列刪掉**,正文因此緊貼最後一個真項目;
+      // 留著的話報表不但多印五列費用項目(監造報表是給人看施工進度的),
+      // 正文也整段被往下推。
+      ops.push({ type: 'deleteRows', sheet, startRow: first + needed, count: capacity - needed });
     }
   }
 
@@ -205,5 +249,5 @@ function itemsToOperations(items, previousCount = 0) {
 
 module.exports = {
   selectSheets, validateItems, diffItems, roundHalfUp,
-  itemsToOperations, SHEET, INDEX_ROWS,
+  itemsToOperations, supervisionItemRowCount, SHEET, INDEX_ROWS,
 };
