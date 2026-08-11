@@ -167,6 +167,55 @@ function rowsFromItems(items, bounds) {
  * @param {string|Buffer} fileOrBuffer 檔案路徑或已讀入的內容(上傳走記憶體不落地)
  * @returns {Promise<Array<{page:number, rows:Array<{label,value}>}>>}
  */
+// 相鄰兩個 item「前一個的右端」到「後一個的左端」不超過這麼多點,視為同一段文字。
+// 實測貼合的字距是 0(重興 396.9 + 11.40 = 408.3)、同列被拆成兩段的值是 0.03
+// (古坑「646 雲林縣 古坑鄉 」+「朝陽村朝陽路2號」);而標籤欄到值欄差 118 點,
+// 取 2 足以併回同一段又絕不可能跨欄。
+const JOIN_GAP = 2;
+
+/**
+ * 把同一列上「相鄰且貼合」的 item 併成一個(x 取最左、s 依 x 串接)。
+ *
+ * 決標公告有兩種文字排版。舊格式一個標籤/值就是一個 item(古坑:
+ * `s="雲林縣立古坑國民中小學" x=168.7 w=132`);**民國 115 年起的新格式卻是
+ * 一個字一個 item**(重興:「列」「印」「時」「間」各自 x 差 11.40)。
+ * 後者會讓 `columnBounds` 的「x 頻次前兩名」抓到**標籤內部的第 3、4 個字**
+ * (重興 72.5/83.9,而真正的欄界是 49.7/168.2),欄界落在標籤中間 →
+ * 「機關代碼」被切成 label=「代」/ value=「碼3.76…」,整份 7 欄全 null。
+ *
+ * ⚠️ `parseAwardNotice` 遇到這種情形**不會 throw**,輸出是每欄都 null 的合法結構,
+ * 看起來像文件沒填——所以這裡壞掉在下游完全沒有徵兆。
+ *
+ * 併回來之後兩種格式的 item 形狀一致,欄界推導與 `rowsFromItems` 都不必改。
+ * 對舊格式而言,只會把本來就同欄的兩段值接起來(古坑那列),欄界不受影響。
+ *
+ * @param {Array<{x:number,y:number,w:number,s:string}>} items 單頁的 item
+ * @returns {Array<{x:number,y:number,w:number,s:string}>}
+ */
+function joinAdjacentItems(items) {
+  const byLine = new Map();
+  for (const it of items || []) {
+    if (!String(it && it.s != null ? it.s : '')) continue;
+    const key = Math.round(it.y * 10) / 10;
+    if (!byLine.has(key)) byLine.set(key, []);
+    byLine.get(key).push(it);
+  }
+  const out = [];
+  for (const line of byLine.values()) {
+    let cur = null;
+    for (const it of line.slice().sort((a, b) => a.x - b.x)) {
+      if (cur && it.x - (cur.x + cur.w) <= JOIN_GAP) {
+        cur.s += it.s;
+        cur.w = it.x + it.w - cur.x;
+      } else {
+        cur = { x: it.x, y: it.y, w: it.w, s: it.s };
+        out.push(cur);
+      }
+    }
+  }
+  return out;
+}
+
 async function extractRows(fileOrBuffer) {
   const buffer = Buffer.isBuffer(fileOrBuffer) ? fileOrBuffer : fs.readFileSync(fileOrBuffer);
   const pages = [];
@@ -174,7 +223,13 @@ async function extractRows(fileOrBuffer) {
     pagerender: (pageData) => pageData
       .getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false })
       .then((tc) => {
-        pages.push(tc.items.map((it) => ({ x: it.transform[4], y: it.transform[5], s: it.str })));
+        // w 是併回整段文字用的(見 joinAdjacentItems),不是給下游的
+        pages.push(joinAdjacentItems(tc.items.map((it) => ({
+          x: it.transform[4],
+          y: it.transform[5],
+          w: typeof it.width === 'number' ? it.width : 0,
+          s: it.str,
+        }))));
         return '';
       }),
   });
