@@ -235,14 +235,23 @@ const 監造內容_末列 = 763;  // B 欄的日期公式(B3=開工日、B4=B3+1
  * 越界不 throw:天氣是附帶資訊,不該讓一份日誌因為它寫不進去而整份卡住
  * (數量本身的越界已由 daysToOperations 擋在前面)。
  *
+ * ⚠️ **一定要出 setRange 不能逐格 setCell。** 每個 setCell 是一次 COM 往返,
+ * 一份 87 天的日誌就是 174 次;實測簡易棒球場的指令數 11 → 185、耗時 12s → 24s,
+ * 而 Excel COM 本來就會偶發 `RPC_E_CALL_REJECTED`(見 template-engine 的重試),
+ * 把單案時間拉長一倍等於把失敗率往上推。改成整段寫之後是 11 → 14 道。
+ *
+ * **切成連續區段而不是一整塊。** 中間跳過的日期若也寫進去(值為 null),會把
+ * 前一批日誌已經寫好的那幾天清空——施工日誌分多次提交是常態。
+ *
  * @param {Array} days 讀取器輸出的逐日結果
  * @param {string} 開工日 ISO 日期
- * @returns {Array} setCell operations;沒有任何天氣可寫時回空陣列
+ * @returns {Array} operations;沒有任何天氣可寫時回空陣列
  */
 function weatherToOperations(days, 開工日) {
   const base = dayNum(開工日);
   if (base == null) return [];
-  const ops = [];
+
+  const byRow = new Map();
   for (const d of days || []) {
     const h = d.header || {};
     if (!h.填報日期) continue;
@@ -253,15 +262,24 @@ function weatherToOperations(days, 開工日) {
     if (off == null || off < 0) continue;
     const row = 監造內容_首列 + off;
     if (row > 監造內容_末列) continue;
-    if (上午) ops.push({ type: 'setCell', sheet: 監造內容, addr: `C${row}`, value: 上午 });
-    if (下午) ops.push({ type: 'setCell', sheet: 監造內容, addr: `D${row}`, value: 下午 });
+    // 同一天出現兩次(重送)時以後面那份為準,與 daysToOperations 同一個立場
+    byRow.set(row, [上午 || null, 下午 || null]);
   }
-  if (!ops.length) return [];
-  return [
+  if (!byRow.size) return [];
+
+  const rows = [...byRow.keys()].sort((a, b) => a - b);
+  const ops = [
     { type: 'setCell', sheet: 監造內容, addr: 'C2', value: '上午' },
     { type: 'setCell', sheet: 監造內容, addr: 'D2', value: '下午' },
-    ...ops,
   ];
+  let 起 = rows[0];
+  let 段 = [byRow.get(起)];
+  for (let i = 1; i <= rows.length; i++) {
+    if (i < rows.length && rows[i] === rows[i - 1] + 1) { 段.push(byRow.get(rows[i])); continue; }
+    ops.push({ type: 'setRange', sheet: 監造內容, startAddr: `C${起}`, values: 段 });
+    if (i < rows.length) { 起 = rows[i]; 段 = [byRow.get(起)]; }
+  }
+  return ops;
 }
 
 module.exports = {

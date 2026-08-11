@@ -189,18 +189,41 @@ test('同一天重送時少掉的項次算刪除', () => {
 const 天氣日 = (填報日期, 上午, 下午) => ({
   header: { 填報日期, 天氣_上午: 上午, 天氣_下午: 下午 }, dailyRows: [],
 });
+const 範圍 = (ops) => ops.filter((o) => o.type === 'setRange');
 const addrOf = (ops, addr) => ops.find((o) => o.addr === addr);
 
 // 這一頁是逐日一列(B3=開工日、B4=B3+1…),與每日施工紀錄的逐日一欄同一套換算
 test('天氣寫進監造內容,列 = 3 + (填報日 − 開工日)', () => {
   const ops = weatherToOperations([
     天氣日(開工日, '晴', '陰'),
-    天氣日('2026-04-10', '多雲', '雷雨'),
+    天氣日('2026-04-09', '多雲', '雷雨'),
   ], 開工日);
-  expect(addrOf(ops, 'C3')).toMatchObject({ sheet: '監造內容', value: '晴' });
-  expect(addrOf(ops, 'D3').value).toBe('陰');
-  expect(addrOf(ops, 'C5').value).toBe('多雲');
-  expect(addrOf(ops, 'D5').value).toBe('雷雨');
+  expect(範圍(ops)).toEqual([
+    { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['晴', '陰'], ['多雲', '雷雨']] },
+  ]);
+});
+
+// ⚠️ 逐格 setCell 是一次 COM 往返:一份 87 天的日誌就是 174 次,實測讓簡易棒球場
+// 的指令數 11 → 185、耗時 12s → 24s。Excel COM 本來就會偶發 RPC_E_CALL_REJECTED,
+// 把單案時間拉長一倍等於把失敗率往上推。
+test('連續的日期併成一道 setRange,不逐格寫', () => {
+  const days = Array.from({ length: 30 }, (_, i) => 天氣日(`2026-04-${String(8 + i).padStart(2, '0')}`, '晴', '晴'));
+  const ops = weatherToOperations(days, 開工日);
+  expect(範圍(ops)).toHaveLength(1);
+  expect(ops.filter((o) => o.type === 'setCell')).toHaveLength(2); // 只有 C2/D2 子標題
+});
+
+// 施工日誌分多次提交是常態。中間跳過的日期若也寫進去(值為 null),
+// 會把前一批已經寫好的那幾天清空。
+test('中間跳過的日期切成兩段,不把它清空', () => {
+  const ops = weatherToOperations([
+    天氣日(開工日, '晴', '晴'),
+    天氣日('2026-04-10', '雨', '雨'),
+  ], 開工日);
+  expect(範圍(ops)).toEqual([
+    { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['晴', '晴']] },
+    { type: 'setRange', sheet: '監造內容', startAddr: 'C5', values: [['雨', '雨']] },
+  ]);
 });
 
 // 公版範本漏了 C2/D2 這兩個子標題(人工報表有)。報表是常駐檔,放在寫入指令裡
@@ -209,6 +232,11 @@ test('順便補上「上午」「下午」子標題', () => {
   const ops = weatherToOperations([天氣日(開工日, '晴', '晴')], 開工日);
   expect(addrOf(ops, 'C2').value).toBe('上午');
   expect(addrOf(ops, 'D2').value).toBe('下午');
+});
+
+test('只有半天有天氣時,另一半寫 null 不寫空字串', () => {
+  const ops = weatherToOperations([天氣日(開工日, '晴', '')], 開工日);
+  expect(範圍(ops)[0].values).toEqual([['晴', null]]);
 });
 
 test('沒有任何天氣就不出指令(連子標題也不寫)', () => {
@@ -224,6 +252,7 @@ test('日期越界只跳過那一天,不 throw', () => {
     天氣日('2028-12-31', '晴', '晴'),   // 超出 763 列
     天氣日(開工日, '雨', '雨'),
   ], 開工日);
-  expect(ops.filter((o) => /^[CD]\d/.test(o.addr)).map((o) => o.addr).sort())
-    .toEqual(['C2', 'C3', 'D2', 'D3']);
+  expect(範圍(ops)).toEqual([
+    { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['雨', '雨']] },
+  ]);
 });
