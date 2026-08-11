@@ -143,10 +143,18 @@ const FIRST_ROW = 2; // 第 1 列是欄位標題
  *    正是被往下推 3 列的結果。
  * 3. `每日施工紀錄` 收全部項目(含費用項目),且第 38 列起本來就是空白,
  *    FillDown 覆蓋不到任何東西。
+ * 4. `契約詳細價目表` 本身也要擴列:項目值是 setRange 寫進去的沒有上限,但
+ *    **F 欄複價是公式**(`ROUND(E*D,0)`)且只鋪到第 37 列。49 案裡有 2 案超過
+ *    (三崙 38 項、簡易棒球場 49 項),第 38 列起複價是空的,再被每日施工紀錄的
+ *    F 欄原封不動拉過去,完成百分比整列算不出來。第 38 列起是空白,FillDown 安全。
+ *
+ * 順序有意義:`每日施工紀錄` 的公式引用 `契約詳細價目表` 同列,先刪被引用的那邊
+ * 會讓引用端變成 #REF!(雖然接著也會被刪掉,但中間狀態不必製造)。
  */
 const INDEX_ROWS = {
   每日施工紀錄: { first: 2, last: 37, op: 'copyRowDown', 只算施工項目: false },
   監造報表: { first: 10, last: 40, op: 'insertRowsBelow', 只算施工項目: true },
+  契約詳細價目表: { first: 2, last: 37, op: 'copyRowDown', 只算施工項目: false },
 };
 
 const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
@@ -171,16 +179,6 @@ const BODY_ANCHOR = /^二[、,.]?監督/;
 const 去空白 = (v) => String(v == null ? '' : v).replace(/[\s　]/g, '');
 
 /**
- * 監造報表目前有幾列項目列(第 10 列到報表正文之間)。
- *
- * 不從範本常數推、也不從 DB 的項目數推,而是**讀實際的檔案**:監造報表是常駐檔,
- * 承辦人可以上傳自己做到一半的那份(見 report-verify.js),列數不保證等於範本。
- * 推錯會刪到報表正文,而刪掉的正文不會有任何錯誤訊息。
- *
- * @param {Array<string>} aColumn 監造報表 A 欄由第 1 列起的值
- * @returns {number|null} 找不到正文錨點回 null——**寧可不動版面,也不猜著刪**
- */
-/**
  * 監造報表的第 10+k 列一對一拉價目表的第 2+k 列,所以「只保留前 w 列」等於
  * 「只保留前 w 個項目」——唯有施工項目**全部排在費用項目前面**時,這才剛好是
  * 要的結果。單一分頁的案子恆成立;古坑那種兩個子工程的案子,承辦人選的是
@@ -190,6 +188,16 @@ const 去空白 = (v) => String(v == null ? '' : v).replace(/[\s　]/g, '');
  */
 const 費用項目全在尾端 = (list, 施工項目數) => list.slice(0, 施工項目數).every(IS_WORK_ITEM);
 
+/**
+ * 監造報表目前有幾列項目列(第 10 列到報表正文之間)。
+ *
+ * 不從範本常數推、也不從 DB 的項目數推,而是**讀實際的檔案**:監造報表是常駐檔,
+ * 承辦人可以上傳自己做到一半的那份(見 report-verify.js),列數不保證等於範本。
+ * 推錯會刪到報表正文,而刪掉的正文不會有任何錯誤訊息。
+ *
+ * @param {Array<string>} aColumn 監造報表 A 欄由第 1 列起的值
+ * @returns {number|null} 找不到正文錨點回 null——**寧可不動版面,也不猜著刪**
+ */
 function supervisionItemRowCount(aColumn) {
   const { first } = INDEX_ROWS.監造報表;
   const col = aColumn || [];
@@ -197,6 +205,27 @@ function supervisionItemRowCount(aColumn) {
     if (BODY_ANCHOR.test(去空白(col[r - 1]))) return r - first;
   }
   return null;
+}
+
+/**
+ * 每日施工紀錄與契約詳細價目表目前有幾列項目列。
+ *
+ * 這兩個分頁的項目區下方是**空白**(不像監造報表下面就是正文),沒有錨點可找,
+ * 只能數「從第 2 列起連續有公式的列」:每日施工紀錄看 A 欄
+ * (`IF(契約詳細價目表!A2="","",…)`)、價目表看 F 欄複價(`ROUND(E2*D2,0)`)。
+ *
+ * 從 first 起**連續**才算——中間斷掉就停,不去撿後面零星的公式格
+ * (那多半是舊案殘留,把它算進容量會讓刪列的起點算錯)。
+ *
+ * @param {Array<boolean>} hasFormula 由第 1 列起,該列的判定欄是不是公式
+ * @param {number} first 項目列的第一列
+ * @returns {number|null} 第一列就沒有公式回 null(版面與預期不符,不動它)
+ */
+function formulaItemRowCount(hasFormula, first) {
+  const col = hasFormula || [];
+  let n = 0;
+  for (let r = first; r <= col.length && col[r - 1]; r++) n++;
+  return n === 0 ? null : n;
 }
 
 /**
@@ -208,29 +237,29 @@ function supervisionItemRowCount(aColumn) {
  * @param {Array} items 已通過 validateItems 的項目
  * @param {number} [previousCount] 這份報表上一版的項目數;新表較短時,多出來的
  *   舊列必須清空,否則會原封不動留在畫面上,看起來像契約真的有這些項目。
- * @param {number|null} [監造報表現有列數] 由 `supervisionItemRowCount` 讀實檔算出。
- *   給了才會刪多餘的列(見下);null 表示讀不到正文錨點,只擴不刪。
+ * @param {object|null} [現有列數] 由實檔量出的各分頁項目列數,鍵同 INDEX_ROWS
+ *   (`supervisionItemRowCount` / `formulaItemRowCount`)。某個分頁量得到才會刪它
+ *   多餘的列;量不到(null/未給)就只擴不刪。
  * @returns {Array} operations(擴列/刪列排在寫值之前)
  * @throws {Error} items 為空
  */
-function itemsToOperations(items, previousCount = 0, 監造報表現有列數 = null) {
+function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
   const list = items || [];
   if (!list.length) throw new Error('沒有任何項目,不組寫入指令');
 
   const ops = [];
-  // 擴列先做:公式列不存在的話,寫進去的項目在那兩個分頁上看不到。
+  // 擴列/刪列先做:公式列不存在的話,寫進去的項目在那些分頁上看不到。
   for (const [sheet, { first, last, op, 只算施工項目 }] of Object.entries(INDEX_ROWS)) {
-    const 讀到的 = sheet === '監造報表' && Number.isInteger(監造報表現有列數)
-      ? 監造報表現有列數 : null;
-    // 常駐檔的實際列數可能已被刪過(或承辦人上傳的那份本來就不同),讀得到就以實檔為準
-    const capacity = 讀到的 == null ? last - first + 1 : 讀到的;
+    const 量到的 = 現有列數 && Number.isInteger(現有列數[sheet]) ? 現有列數[sheet] : null;
+    // 常駐檔的實際列數可能已被刪過(或承辦人上傳的那份本來就不同),量得到就以實檔為準
+    const capacity = 量到的 == null ? last - first + 1 : 量到的;
     const needed = 只算施工項目 ? list.filter(IS_WORK_ITEM).length : list.length;
     if (needed > capacity) {
       ops.push({ type: op, sheet, srcRow: first + capacity - 1, count: needed - capacity });
-    } else if (needed < capacity && 讀到的 != null && 費用項目全在尾端(list, needed)) {
-      // 人工報表把用不到的項目列**整列刪掉**,正文因此緊貼最後一個真項目;
-      // 留著的話報表不但多印五列費用項目(監造報表是給人看施工進度的),
-      // 正文也整段被往下推。
+    } else if (needed < capacity && 量到的 != null
+      && (!只算施工項目 || 費用項目全在尾端(list, needed))) {
+      // 人工報表把用不到的項目列**整列刪掉**。監造報表留著會多印五列費用項目、
+      // 正文整段被往下推;另兩個分頁則是尾巴多出一截空白列,影響列印分頁。
       ops.push({ type: 'deleteRows', sheet, startRow: first + needed, count: capacity - needed });
     }
   }
@@ -249,5 +278,5 @@ function itemsToOperations(items, previousCount = 0, 監造報表現有列數 = 
 
 module.exports = {
   selectSheets, validateItems, diffItems, roundHalfUp,
-  itemsToOperations, supervisionItemRowCount, SHEET, INDEX_ROWS,
+  itemsToOperations, supervisionItemRowCount, formulaItemRowCount, SHEET, INDEX_ROWS,
 };

@@ -256,33 +256,67 @@ test('找不到正文錨點時回 null', () => {
   expect(supervisionItemRowCount(['項次', '', ''])).toBeNull();
 });
 
-test('施工項目少於現有列數時,多餘的列整列刪掉', () => {
-  const ops = itemsToOperations(mixed(25), 0, 31); // 饒平:25 施工 + 5 費用
-  const del = ops.find((o) => o.type === 'deleteRows');
-  expect(del).toEqual({ type: 'deleteRows', sheet: '監造報表', startRow: 35, count: 6 });
+// 三個分頁各自量:監造報表 31 列(10~40)、每日施工紀錄與價目表各 36 列(2~37)
+const 範本列數 = { 監造報表: 31, 每日施工紀錄: 36, 契約詳細價目表: 36 };
+
+test('項目少於現有列數時,三個分頁的多餘列都整列刪掉', () => {
+  const ops = itemsToOperations(mixed(25), 0, 範本列數); // 饒平:25 施工 + 5 費用 = 30 項
+  expect(ops.filter((o) => o.type === 'deleteRows')).toEqual([
+    // 全部項目(30)→ 第 32 列起多餘;順序:被引用的價目表排在引用它的日誌之後
+    { type: 'deleteRows', sheet: '每日施工紀錄', startRow: 32, count: 6 },
+    // 只算施工項目(25)→ 第 35 列起多餘,正文因此緊貼最後一個真項目
+    { type: 'deleteRows', sheet: '監造報表', startRow: 35, count: 6 },
+    { type: 'deleteRows', sheet: '契約詳細價目表', startRow: 32, count: 6 },
+  ]);
 });
 
-// 沒讀到實際列數(檔案讀不開/錨點不見)時只擴不刪
-test('沒給監造報表列數就不刪列', () => {
+// 每日施工紀錄的 A 欄公式引用價目表同列。先刪被引用的那邊,引用端會先變成 #REF!
+// ——雖然接著也會被刪掉,但沒必要製造那個中間狀態。
+test('刪列順序:引用端(每日施工紀錄)排在被引用端(價目表)之前', () => {
+  const ops = itemsToOperations(mixed(25), 0, 範本列數).filter((o) => o.type === 'deleteRows');
+  expect(ops.findIndex((o) => o.sheet === '每日施工紀錄'))
+    .toBeLessThan(ops.findIndex((o) => o.sheet === '契約詳細價目表'));
+});
+
+// 沒量到實際列數(檔案讀不開/錨點不見)時只擴不刪
+test('沒給列數就不刪列', () => {
   expect(itemsToOperations(mixed(25)).filter((o) => o.type === 'deleteRows')).toEqual([]);
+});
+
+// 量得到的分頁才刪,量不到的那個維持現況——不是「有一個量不到就全部不動」
+test('只刪量得到列數的那些分頁', () => {
+  const ops = itemsToOperations(mixed(25), 0, { 監造報表: 31, 每日施工紀錄: null });
+  expect(ops.filter((o) => o.type === 'deleteRows').map((o) => o.sheet)).toEqual(['監造報表']);
 });
 
 // 監造報表第 10+k 列一對一拉價目表第 2+k 列,所以「留前 w 列」等於「留前 w 個項目」
 // ——唯有施工項目全部排在費用項目前面才剛好是要的結果。交錯時刪尾巴會刪到真項目。
-test('費用項目不在尾端時不刪列', () => {
+// 另兩個分頁收全部項目,尾巴一定是空的,不受這條限制。
+test('費用項目不在尾端時,只有監造報表不刪', () => {
   const 交錯 = [item('1', 100), item('貳', 50), item('2', 100)];
-  expect(itemsToOperations(交錯, 0, 31).filter((o) => o.type === 'deleteRows')).toEqual([]);
+  const ops = itemsToOperations(交錯, 0, 範本列數).filter((o) => o.type === 'deleteRows');
+  expect(ops.map((o) => o.sheet)).toEqual(['每日施工紀錄', '契約詳細價目表']);
 });
 
 // 常駐檔已被刪過列之後,擴列要從**現存的最後一列**複製公式,不是範本的第 40 列
 test('擴列的來源列以實檔的列數為準', () => {
-  const ops = itemsToOperations(mixed(28), 0, 25); // 現有 25 列、要 28 列
+  const ops = itemsToOperations(mixed(28), 0, { ...範本列數, 監造報表: 25 });
   expect(ops.find((o) => o.sheet === '監造報表'))
     .toMatchObject({ type: 'insertRowsBelow', srcRow: 34, count: 3 });
 });
 
+// 49 案裡有 2 案項目數超過範本的 36 列(三崙 38、簡易棒球場 49)。價目表的 F 欄
+// 複價是公式且只鋪到第 37 列,不擴的話那幾列複價是空的,再被每日施工紀錄原封不動
+// 拉過去,完成百分比整列算不出來。
+test('項目超過範本容量時,價目表也要擴列', () => {
+  const ops = itemsToOperations(mixed(44), 0, 範本列數); // 簡易棒球場:44 施工 + 5 費用 = 49 項
+  expect(ops.find((o) => o.sheet === '契約詳細價目表'))
+    .toMatchObject({ type: 'copyRowDown', srcRow: 37, count: 13 });
+  expect(ops.filter((o) => o.type === 'deleteRows')).toEqual([]);
+});
+
 test('刪列指令排在寫值之前', () => {
-  const ops = itemsToOperations(mixed(25), 0, 31);
+  const ops = itemsToOperations(mixed(25), 0, 範本列數);
   expect(ops.findIndex((o) => o.type === 'deleteRows'))
     .toBeLessThan(ops.findIndex((o) => o.type === 'setRange'));
 });
