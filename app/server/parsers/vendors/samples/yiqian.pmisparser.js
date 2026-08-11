@@ -180,6 +180,31 @@ function byColumn(band, xs) {
   return cells.map((g) => g.map((i) => i.s).join('').trim());
 }
 
+
+// 「單位」表頭是直排的兩個小字,**掃描件上 OCR 常常整個偵測不到**
+// (饒平 8/1-8/2 真掃描件實測:項次/合約數量/本日完/累計完 四個錨點都讀到,只缺它)。
+// 少這一個就整份 throw,太可惜——單位是封閉白名單、幾乎每列都有,而且欄內的**值**
+// 讀得清清楚楚(那兩頁各 9 個與 12 個,x 全部落在 3 點之內)。故從值回推欄界。
+//
+// 校準:文字層樣本(yiqian.pdf 第 2 頁)表頭 x=392.9、單位值最小 x=393.2,差 0.3。
+// 取「叢集最小 x − 0.5」等於還原表頭位置。byColumn 是用中心點分欄,這個界要落在
+// 值的左緣**之前**,否則單位會被歸到名稱欄。
+const UNIT_CLUSTER_TOLERANCE = 5;   // 同一欄的值 x 落差(實測 <3)
+const MIN_UNIT_SAMPLES = 3;         // 太少就不敢推:可能是名稱裡剛好有「面」「處」
+
+function unitColumnX(items, hNo, hQty) {
+  const xs = items
+    .filter((it) => KNOWN_UNITS.has(String(it.s).trim()) && it.x > hNo.x && it.x < hQty.x)
+    .map((it) => it.x)
+    .sort((a, b) => a - b);
+  if (xs.length < MIN_UNIT_SAMPLES) return null;
+  // 取中位數附近的叢集再取最小值:直接用 min 會被單一離群值(名稱片段)拉走
+  const mid = xs[Math.floor(xs.length / 2)];
+  const cluster = xs.filter((x) => Math.abs(x - mid) <= UNIT_CLUSTER_TOLERANCE);
+  if (cluster.length < MIN_UNIT_SAMPLES) return null;
+  return cluster[0] - 0.5;
+}
+
 /** 第二聯(完成工程詳細表)一頁 → 原始列。 */
 function detailRows(items) {
   const find = (re) => items.find((it) => re.test(it.s.trim()));
@@ -188,8 +213,10 @@ function detailRows(items) {
   const hToday = find(/^本日完/);
   const hCum = find(/^累計完/);
   const hUnit = items.find((it) => /^單$|^單\s*位$/.test(it.s.trim()) && hQty && it.x < hQty.x && it.x > 300);
-  if (!hNo || !hQty || !hToday || !hCum || !hUnit) throw new Error('第二聯表頭欄位找不到(非宜謙格式?)');
-  const xs = [-Infinity, hUnit.x, hQty.x, hToday.x, hCum.x];
+  if (!hNo || !hQty || !hToday || !hCum) throw new Error('第二聯表頭欄位找不到(非宜謙格式?)');
+  const unitX = hUnit ? hUnit.x : unitColumnX(items, hNo, hQty);
+  if (unitX == null) throw new Error('第二聯找不到單位欄(表頭與欄內值都認不出來)');
+  const xs = [-Infinity, unitX, hQty.x, hToday.x, hCum.x];
 
   const raw = [];
   for (const b of bands(items)) {
@@ -197,7 +224,7 @@ function detailRows(items) {
     const t = bandText(b).trim();
     if (t === '' || /^(單|位|成數量|備註)+$/.test(t)) continue;   // 表頭的第二行
     const [left, 單位, 合約, 本日, 累計] = byColumn(b, xs);
-    const parts = b.items.filter((i) => i.x + (i.w || 0) / 2 < hUnit.x);
+    const parts = b.items.filter((i) => i.x + (i.w || 0) / 2 < unitX);
     let 項次 = null;
     let name = left;
     if (parts.length && NO_RE.test(parts[0].s.trim())) {
