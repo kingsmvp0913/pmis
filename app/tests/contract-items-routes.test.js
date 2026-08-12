@@ -140,6 +140,10 @@ const confirm = (app, token, id, files, picks) =>
     .set('Authorization', `Bearer ${token}`)
     .field('picks', JSON.stringify(picks)), files);
 
+// ⚠️ 逾時給 15 秒不是因為它慢得有問題:這是整個檔案裡第一支真的走到報表的測試,
+// 要複製 694KB 的公版範本、再用 SheetJS 讀兩次(itemRowCounts + applyProtection),
+// 單獨跑實測 2.7 秒。Jest 預設 5 秒只剩不到兩倍餘裕,全套並行時就會被 CPU 爭用
+// 推過去,而症狀是「這支紅了」看起來像功能壞掉。
 test('確認後寫入報表並落庫', async () => {
   const { app, token, id } = await makeApp({ award: 1036370 });
   feed('damei');
@@ -155,7 +159,7 @@ test('確認後寫入報表並落庫', async () => {
   expect(rows).toHaveLength(30);
   expect(rows[0].item_no).toBe('1');
   expect(rows[rows.length - 1].item_no).toBe('陸'); // 費用項目排在最後
-});
+}, 15000);
 
 // 前端只送「選了哪幾張分頁」,項目一律由後端重新解析。信任前端送來的項目等於
 // 讓任何人繞過卡控直接寫進契約價目表。
@@ -164,6 +168,22 @@ test('確認時重新解析檔案,不吃前端送來的項目', async () => {
   feed('damei');
   await confirm(app, token, id, ['大美.xlsm'], [{ file: '大美.xlsm', name: '詳細價目表' }]).expect(200);
   expect(readSheets).toHaveBeenCalled();
+});
+
+// 重興是同一張決標的兩個標的(廁所 871,943 + 汙水 812,102),兩張表的項次都是
+// 1、2、3…。合計剛好等於決標金額,所以合計那道卡控攔不住;攔下來的是項次重複。
+// 訊息必須講出「這是兩個標的、報表要分開產生」——原本回的是一整排「項次 N 重複」,
+// 承辦人看不出那代表什麼,只會以為檔案壞了。
+test('兩個標的合併送出時,訊息要說出報表得分開產生', async () => {
+  const { app, token, id } = await makeApp({ award: 1684045 });
+  feed('chongxing-toilet', 'chongxing-sewage');
+  // 分頁名沿用實檔:廁所那張尾端帶一個空白,汙水那張叫「詳細表」
+  const res = await confirm(app, token, id, ['廁所.xls', '汙水.xls'], [
+    { file: '廁所.xls', name: '詳細價目表 ' }, { file: '汙水.xls', name: '詳細表' },
+  ]).expect(400);
+  expect(res.body.error).toMatch(/兩個標的|分開/);
+  const { rows } = await db.query('SELECT COUNT(*)::int AS n FROM contract_items');
+  expect(rows[0].n).toBe(0);
 });
 
 test('選定的組合合計對不上決標金額時擋下', async () => {

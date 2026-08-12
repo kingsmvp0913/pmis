@@ -209,6 +209,17 @@ function registerRoutes(app) {
           });
         }
         const errors = validateItems(items);
+        // 選了兩張以上而且錯的全是項次重複 = 這張決標有兩個標的(重興 廁所+汙水),
+        // 兩張表的項次都是 1、2、3…。原本回的是一整排「項次 1 重複、項次 2 重複…」,
+        // 承辦人看不出那其實是「這兩張不能合併」。監造報表本來就是分開產生的。
+        if (errors.length && chosen.length > 1 && errors.every((e) => /重複/.test(e.訊息))) {
+          return res.status(400).json({
+            error: `選了 ${chosen.length} 張詳細價目表,而它們的項次互相重複——那是同一張決標的` +
+              '兩個標的,不能合併成一份監造報表(範本靠項次拉資料,第二個標的的施工進度會' +
+              '記到第一個頭上)。請一次只選一個標的,並把工程的決標金額改成該標的的金額。',
+            errors,
+          });
+        }
         if (errors.length) {
           return res.status(400).json({ error: '詳細價目表內容不成立,請確認檔案', errors });
         }

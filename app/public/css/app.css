@@ -184,6 +184,13 @@ table.data a { color: var(--link); text-decoration: none; }
 table.data a:hover { text-decoration: underline; }
 table.data td.actions { text-align: right; }
 .empty-row { text-align: center; color: var(--text-muted); padding: 24px 12px; }
+/* 竣工日快到了/已逾期的整列標色(狀態總表)。用半透明疊在底色上而不是寫死顏色,
+   深色模式才不會把 var(--text) 的文字襯到看不見;:hover 也要各自覆蓋一次,
+   否則滑過去整列變回 var(--bg),標色就消失了。 */
+table.data tbody tr.row-due td { background: rgba(245,158,11,0.16); }
+table.data tbody tr.row-due:hover td { background: rgba(245,158,11,0.26); }
+table.data tbody tr.row-overdue td { background: rgba(239,68,68,0.16); }
+table.data tbody tr.row-overdue:hover td { background: rgba(239,68,68,0.26); }
 
 /* ── Card / 編輯區塊 ── */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--space-6); box-shadow: var(--shadow-sm); max-width: 720px; }

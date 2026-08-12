@@ -330,6 +330,9 @@ describe('bundled parsers', () => {
     return jwt.sign({ userId: rows[0].id }, 'test-secret', { expiresIn: '7d' });
   }
 
+  // ⚠️ 逾時 15 秒的理由同 contract-items-routes 那支:這支要掃描並載入 repo 裡
+  // 全部的 bundled 讀取器(目前 30 餘支),單獨跑實測 2.5 秒,而且成本隨補讀取器成長。
+  // 預設 5 秒在全套並行時會被爭用推過去,紅得像功能壞掉。
   test('GET /api/parsers/bundled:列出 jinda/zhidong/jinlin 且欄位齊', async () => {
     const res = await auth(request(app).get('/api/parsers/bundled'));
     expect(res.status).toBe(200);
@@ -349,7 +352,7 @@ describe('bundled parsers', () => {
     // 尚未建廠商 / 尚未安裝
     expect(b.vendorExists).toBe(false);
     expect(b.installed).toBe(false);
-  });
+  }, 15000);
 
   test('GET /api/parsers/bundled:登入即可(不需 admin)', async () => {
     token = await userToken('bundleduser');

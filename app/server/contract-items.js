@@ -128,6 +128,7 @@ function diffItems(舊, 新) {
 const SHEET = '契約詳細價目表';
 const FIRST_ROW = 2; // 第 1 列是欄位標題
 
+
 /**
  * 範本裡以 INDEX/MATCH 引用契約詳細價目表的公式列範圍(實測公版範本),
  * 以及各分頁該容納哪些項目、不足時怎麼補。
@@ -167,6 +168,37 @@ const 項次尾 = (i) => 正體(String(i.項次 == null ? '' : i.項次).split('
 // 費用項目名稱裡承辦人自己註明的範圍:`營業稅((壹~伍)*5%)`。
 // 破折號與波浪號都出現過(來源經費總表寫 `~`、人工報表寫 `-`)。
 const FEE_BASE_RANGE = /壹\s*[-—–~～至]\s*([貳參肆伍陸])/;
+
+/**
+ * 建造費用 = 發包工程費 − 保險費 − 營業稅。
+ *
+ * 監造設計費的「建造費用百分比法」要乘的是這個數,**不是決標金額**
+ * (使用者清單第 20 項)。49 案實測建造費用穩定落在合計的 94.6%~95.1%,
+ * 用錯基數會讓設計費多算約 5%——**這是計費規則,直接影響請款金額**。
+ *
+ * 保險費與營業稅由**費用項目的名稱**認:49 案裡含「保險」與含「營業稅」的
+ * 費用列各自恰好一列(49/49、49/49),沒有零列也沒有多列。認不到就回 null——
+ * 少扣一項會讓設計費偏高,**寧可讓畫面顯示「算不出來」,也不要靜默給一個偏高的數字**。
+ *
+ * 複價不從 DB 讀:`contract_items` 只存數量與單價(權威是 .xlsm 裡的公式),
+ * 故在這裡以同一條 ROUND(數量×單價,0) 重算。
+ *
+ * @param {Array<{項次:string, 項目:string, 數量:number, 單價:number}>} items 全部項目
+ * @returns {{建造費用:number, 發包工程費:number, 保險費:number, 營業稅:number}|null}
+ */
+function constructionCost(items) {
+  const list = items || [];
+  if (!list.length) return null;
+  const 複價 = (i) => roundHalfUp(Number(i.數量) * Number(i.單價)) || 0;
+  const 發包工程費 = list.reduce((s, i) => s + 複價(i), 0);
+  const 費用項 = list.filter((i) => !IS_WORK_ITEM(i));
+  const 保 = 費用項.filter((i) => /保險/.test(String(i.項目 || '')));
+  const 稅 = 費用項.filter((i) => /營業稅/.test(String(i.項目 || '')));
+  if (保.length !== 1 || 稅.length !== 1) return null;
+  const 保險費 = 複價(保[0]);
+  const 營業稅 = 複價(稅[0]);
+  return { 建造費用: 發包工程費 - 保險費 - 營業稅, 發包工程費, 保險費, 營業稅 };
+}
 
 /**
  * 費用項目的費率:**還原得出原本單價的最短小數**。
@@ -386,6 +418,6 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
 }
 
 module.exports = {
-  selectSheets, validateItems, diffItems, roundHalfUp,
+  selectSheets, validateItems, diffItems, roundHalfUp, constructionCost,
   itemsToOperations, supervisionItemRowCount, formulaItemRowCount, SHEET, INDEX_ROWS,
 };

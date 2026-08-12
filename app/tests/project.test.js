@@ -49,6 +49,26 @@ async function createViaAward(app, token, fields = {}) {
   return req.attach('award_notice', Buffer.from('%PDF-1.4'), '決標公告.pdf');
 }
 
+/**
+ * 一份最小的契約詳細價目表:主體 1,000,000 + 保險費 3,000 + 營業稅 50,000
+ * = 發包工程費 1,053,000,建造費用 1,000,000。
+ * 直接寫 DB 而不走 SP2 路由:那條路要真的開 Excel COM,而這裡要驗的是設計費的算式。
+ */
+async function insertItems(projectId, { 保險費名稱 = '營造綜合保險費' } = {}) {
+  const rows = [
+    ['1', '主體工程', 1, 1000000],
+    ['伍', 保險費名稱, 1, 3000],
+    ['陸', '營業稅((壹~伍)*5%)', 1, 50000],
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    await db.query(
+      `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+       VALUES ($1, $2, $3, $4, '式', $5, $6)`,
+      [projectId, i + 1, rows[i][0], rows[i][1], rows[i][2], rows[i][3]]
+    );
+  }
+}
+
 describe('roundHalfUp helper', () => {
   test('0.5 邊界向上進位(非銀行家捨入)', () => {
     expect(roundHalfUp(0.5)).toBe(1);
@@ -73,23 +93,35 @@ describe('computeDesignFeeActual', () => {
     expect(r.unbid).toBe(false);
   });
 
-  test('pct 以決標金額 × % 並 half-up', () => {
-    // 1,234,567 × 2.5% = 30864.175 → 30864
-    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: 1234567, design_fee_pct: 2.5 });
-    expect(r.design_fee_actual).toBe(30864);
-    expect(r.unbid).toBe(false);
+  // ⚠️ 百分比法乘的是**建造費用**(發包工程費−保險費−營業稅),不是決標金額。
+  // 49 案實測建造費用是決標金額的 94.6%~95.1%,拿決標金額算會一律多收約 5%
+  // ——這是計費規則,直接影響請款金額。
+  test('pct 以建造費用 × % 並 half-up,不是拿決標金額算', () => {
+    // 建造費用 1,234,567 × 2.5% = 30864.175 → 30864
+    const p = { design_fee_type: 'pct', award_amount: 9999999, design_fee_pct: 2.5 };
+    expect(computeDesignFeeActual(p, 1234567).design_fee_actual).toBe(30864);
+    // 決標金額比建造費用大得多,若實作退回用它算,上面那個數就會變成 249999
   });
 
   test('pct 進位邊界 half-up(非銀行家)', () => {
     // 100 × 2.5% = 2.5 → 3
-    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: 100, design_fee_pct: 2.5 });
+    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: 100, design_fee_pct: 2.5 }, 100);
     expect(r.design_fee_actual).toBe(3);
   });
 
   test('pct 但決標金額未填 → null + unbid', () => {
-    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: null, design_fee_pct: 3 });
+    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: null, design_fee_pct: 3 }, 100);
     expect(r.design_fee_actual).toBe(null);
     expect(r.unbid).toBe(true);
+  });
+
+  // 算不出建造費用時**不可以退回用決標金額硬算**——那正是原本錯的那個數,
+  // 而且錯得看起來完全正常(金額合理、沒有任何錯誤訊息)。
+  test('pct 但建造費用算不出來 → null + needs_items,不退回決標金額', () => {
+    const r = computeDesignFeeActual({ design_fee_type: 'pct', award_amount: 1000000, design_fee_pct: 3 }, null);
+    expect(r.design_fee_actual).toBe(null);
+    expect(r.needs_items).toBe(true);
+    expect(r.unbid).toBe(false);
   });
 });
 
@@ -119,13 +151,44 @@ describe('project routes', () => {
     expect(res.body.design_fee_unbid).toBe(false);
   });
 
-  test('建立工程(pct,含決標金額)計算實際設計費', async () => {
+  // 建造費用要由契約詳細價目表算出,建案當下一定還沒有——此時給 null 並講出
+  // 缺什麼,而不是拿決標金額硬算一個看起來很正常的數字出來。
+  test('建立工程(pct)時還沒有價目表 → 設計費待補,不拿決標金額硬算', async () => {
     const res = await createViaAward(app, token, {
       name: '操場工程', award_amount: 1234567,
       design_fee_type: 'pct', design_fee_pct: 2.5,
     });
     expect(res.status).toBe(201);
-    expect(res.body.design_fee_actual).toBe(30864);
+    expect(res.body.design_fee_actual).toBe(null);
+    expect(res.body.design_fee_needs_items).toBe(true);
+  });
+
+  // 建造費用 = 發包工程費 − 保險費 − 營業稅。用名稱認保險費與營業稅
+  // (49 案實測各恰好一列);複價由數量×單價重算(DB 不存複價)。
+  test('有了價目表之後,pct 設計費以建造費用計算', async () => {
+    const created = await createViaAward(app, token, {
+      name: '操場工程', award_amount: 1053000,
+      design_fee_type: 'pct', design_fee_pct: 2.5,
+    });
+    await insertItems(created.body.id);
+    const got = await auth(request(app).get(`/api/projects/${created.body.id}`));
+    // 發包工程費 1,053,000 − 保險費 3,000 − 營業稅 50,000 = 1,000,000
+    expect(got.body.design_fee_base).toBe(1000000);
+    expect(got.body.design_fee_actual).toBe(25000); // 1,000,000 × 2.5%
+    expect(got.body.design_fee_needs_items).toBe(false);
+  });
+
+  // 認不出保險費/營業稅時寧可算不出來:少扣一項會讓設計費偏高,而那個偏高的
+  // 數字看起來完全正常,沒有人會發現。
+  test('價目表裡認不出保險費或營業稅 → 設計費待補', async () => {
+    const created = await createViaAward(app, token, {
+      name: '操場工程', award_amount: 1053000,
+      design_fee_type: 'pct', design_fee_pct: 2.5,
+    });
+    await insertItems(created.body.id, { 保險費名稱: '雜項費用' });
+    const got = await auth(request(app).get(`/api/projects/${created.body.id}`));
+    expect(got.body.design_fee_actual).toBe(null);
+    expect(got.body.design_fee_needs_items).toBe(true);
   });
 
   // 註:原有的「建立工程(pct,決標金額空)標記未招標」已移除——決標金額是決標公告
@@ -153,21 +216,44 @@ describe('project routes', () => {
     const created = await createViaAward(app, token, {
       name: '工程A', design_fee_type: 'lump_sum', design_fee_amount: 100,
     });
+    await insertItems(created.body.id);
     const upd = await auth(request(app).put(`/api/projects/${created.body.id}`)).send({
-      name: '工程A', award_amount: 200, design_fee_type: 'pct', design_fee_pct: 10
+      name: '工程A', award_amount: 1053000, design_fee_type: 'pct', design_fee_pct: 10
     });
     expect(upd.status).toBe(200);
-    expect(upd.body.design_fee_actual).toBe(20);
+    expect(upd.body.design_fee_actual).toBe(100000); // 建造費用 1,000,000 × 10%
   });
 
-  test('搜尋 ?q= 依名稱或編號過濾', async () => {
-    await createViaAward(app, token, { name: '操場工程', project_no: 'P-100' });
-    await createViaAward(app, token, { name: '校舍整修', project_no: 'P-200' });
+  // 承辦人平常找檔案用的是**事務所編號**,不是契約編號(使用者清單第 19 項),
+  // 所以那個編號也必須搜得到——搜不到就等於這個欄位只能用眼睛在列表上找。
+  test('搜尋 ?q= 依名稱、工程編號或事務所編號過濾', async () => {
+    await createViaAward(app, token, { name: '操場工程', project_no: 'P-100', firm_doc_no: '11401' });
+    await createViaAward(app, token, { name: '校舍整修', project_no: 'P-200', firm_doc_no: '11402' });
     const byName = await auth(request(app).get('/api/projects?q=操場'));
     expect(byName.body).toHaveLength(1);
     const byNo = await auth(request(app).get('/api/projects?q=P-200'));
     expect(byNo.body).toHaveLength(1);
     expect(byNo.body[0].name).toBe('校舍整修');
+    const byFirmNo = await auth(request(app).get('/api/projects?q=11401'));
+    expect(byFirmNo.body).toHaveLength(1);
+    expect(byFirmNo.body[0].name).toBe('操場工程');
+  });
+
+  // 列表與狀態總表都依事務所編號排序(使用者清單第 21 項)。沒填編號的排最後
+  // ——不能讓它們卡在中間,那會讓「照編號一路往下看」這件事直接失效。
+  test('列表依事務所編號排序,沒填的排最後', async () => {
+    await createViaAward(app, token, { name: 'C 案', firm_doc_no: '11403' });
+    await createViaAward(app, token, { name: '沒編號的案' });
+    await createViaAward(app, token, { name: 'A 案', firm_doc_no: '11401' });
+    const res = await auth(request(app).get('/api/projects'));
+    expect(res.body.map((p) => p.name)).toEqual(['A 案', 'C 案', '沒編號的案']);
+  });
+
+  test('狀態總表也依事務所編號排序', async () => {
+    await createViaAward(app, token, { name: 'C 案', firm_doc_no: '11403' });
+    await createViaAward(app, token, { name: 'A 案', firm_doc_no: '11401' });
+    const res = await auth(request(app).get('/api/projects/status-board?status=全部'));
+    expect(res.body.projects.map((p) => p.name)).toEqual(['A 案', 'C 案']);
   });
 
   test('刪除工程', async () => {

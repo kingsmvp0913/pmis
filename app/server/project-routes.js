@@ -6,7 +6,7 @@
  *   computeDesignFeeActual(project) — 設計費計算(可獨立測試)
  *
  * 路由:
- *   GET    /api/projects        list(?q= 依工程名稱/編號搜尋)
+ *   GET    /api/projects        list(?q= 依工程名稱/工程編號/事務所編號搜尋)
  *   GET    /api/projects/:id    單筆(含 design_fee_actual)
  *   POST   /api/projects        建立
  *   PUT    /api/projects/:id    更新
@@ -14,13 +14,16 @@
  *
  * 設計費規則(design):
  *   lump_sum → 實際金額 = design_fee_amount
- *   pct      → 實際金額 = award_amount × design_fee_pct / 100(四捨五入到整數,half-up)
+ *   pct      → 實際金額 = **建造費用** × design_fee_pct / 100(四捨五入到整數,half-up)
+ *              建造費用 = 發包工程費 − 保險費 − 營業稅,由契約詳細價目表算出
  *              award_amount 為空(未招標)→ 回 null 並標記 unbid=true
+ *              還沒有價目表 → 回 null 並標記 needs_items=true
  */
 const fs = require('fs');
 const path = require('path');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { constructionCost } = require('./contract-items');
 const multer = require('multer');
 const { saveAttachment } = require('./project-attachments-routes');
 const { workbookPath } = require('./report-workbook');
@@ -65,25 +68,41 @@ function roundHalfUp(value) {
   return neg ? -rounded : rounded;
 }
 
-// 依工程資料算出實際設計費;回傳 { design_fee_actual, unbid }
-function computeDesignFeeActual(p) {
+/**
+ * 依工程資料算出實際設計費。
+ *
+ * ⚠️ **百分比法乘的是「建造費用」,不是決標金額**(使用者清單第 20 項):
+ * 建造費用 = 發包工程費 − 保險費 − 營業稅,49 案實測穩定落在決標金額的
+ * 94.6%~95.1%,用決標金額會讓設計費一律多算約 5%。
+ *
+ * 建造費用要有契約詳細價目表才算得出來(見 contract-items.constructionCost)。
+ * 算不出來時**回 null 並標記 needs_items**,不退回用決標金額硬算——那正是原本
+ * 錯的那個數,而且錯得看起來完全正常。
+ *
+ * @param {object} p 工程列
+ * @param {number|null} [建造費用] 由契約詳細價目表算出;未給/為 null 代表算不出來
+ * @returns {{design_fee_actual:number|null, unbid:boolean, needs_items:boolean}}
+ */
+function computeDesignFeeActual(p, 建造費用 = null) {
+  const none = { design_fee_actual: null, unbid: false, needs_items: false };
   const type = p.design_fee_type;
   if (type === 'lump_sum') {
     const amount = p.design_fee_amount;
-    return { design_fee_actual: amount == null ? null : Number(amount), unbid: false };
+    return { ...none, design_fee_actual: amount == null ? null : Number(amount) };
   }
   if (type === 'pct') {
     const award = p.award_amount;
     const pct = p.design_fee_pct;
     if (award == null || award === '') {
       // 決標金額未填 = 未招標,無法計算
-      return { design_fee_actual: null, unbid: true };
+      return { ...none, unbid: true };
     }
-    if (pct == null) return { design_fee_actual: null, unbid: false };
-    const actual = roundHalfUp(Number(award) * Number(pct) / 100);
-    return { design_fee_actual: actual, unbid: false };
+    if (pct == null) return none;
+    // 建造費用算不出來(還沒建立契約詳細價目表,或表裡認不出保險費/營業稅)
+    if (建造費用 == null) return { ...none, needs_items: true };
+    return { ...none, design_fee_actual: roundHalfUp(Number(建造費用) * Number(pct) / 100) };
   }
-  return { design_fee_actual: null, unbid: false };
+  return none;
 }
 
 const COLUMNS = [
@@ -168,12 +187,53 @@ async function replaceInsuranceTypes(projectId, ids) {
   }
 }
 
-function withComputed(row) {
-  const fee = computeDesignFeeActual(row);
+// contract_items 的列 → constructionCost 吃的形狀。複價不存在 DB(權威是 .xlsm
+// 的公式),由數量×單價重算,見 contract-items.constructionCost。
+const asItem = (r) => ({
+  項次: r.item_no, 項目: r.name, 數量: Number(r.quantity), 單價: Number(r.unit_price),
+});
+
+/** 單一工程的建造費用;沒有價目表或認不出保險費/營業稅時回 null。 */
+async function loadConstructionCost(projectId) {
+  const { rows } = await query(
+    'SELECT item_no, name, quantity, unit_price FROM contract_items WHERE project_id = $1 ORDER BY seq',
+    [projectId]
+  );
+  const c = constructionCost(rows.map(asItem));
+  return c ? c.建造費用 : null;
+}
+
+/**
+ * 全部工程的建造費用。**一次全表聚合後在 JS 分組,不得改成每列查一次**
+ * ——理由同 loadWorkflowFlags(100 個工程會變成 100 次查詢)。
+ */
+async function loadConstructionCosts() {
+  const { rows } = await query(
+    'SELECT project_id, item_no, name, quantity, unit_price FROM contract_items ORDER BY project_id, seq'
+  );
+  const byProject = new Map();
+  for (const r of rows) {
+    if (!byProject.has(r.project_id)) byProject.set(r.project_id, []);
+    byProject.get(r.project_id).push(asItem(r));
+  }
+  const out = new Map();
+  for (const [id, items] of byProject) {
+    const c = constructionCost(items);
+    out.set(id, c ? c.建造費用 : null);
+  }
+  return out;
+}
+
+function withComputed(row, 建造費用 = null) {
+  const fee = computeDesignFeeActual(row, 建造費用);
   return {
     ...row,
     design_fee_actual: fee.design_fee_actual,
     design_fee_unbid: fee.unbid,
+    // 百分比法但還沒有契約詳細價目表 → 建造費用算不出來。畫面要講出缺什麼,
+    // 不然承辦人只看到一個「—」,會以為是系統壞了。
+    design_fee_needs_items: fee.needs_items,
+    design_fee_base: 建造費用,
     status: deriveStatus(row),
   };
 }
@@ -215,8 +275,16 @@ async function withWorkflowFlags(rows) {
   let flags = new Map();
   try { flags = await loadWorkflowFlags(); }
   catch (err) { console.error('[projects] 讀取流程狀態失敗:', err); }
+  // 建造費用同樣不讓失敗拖垮整個列表:退回 null,設計費那格顯示「待補價目表」,
+  // 而不是顯示一個用錯基數算出來的金額。
+  let costs = new Map();
+  try { costs = await loadConstructionCosts(); }
+  catch (err) { console.error('[projects] 讀取建造費用失敗:', err); }
   const empty = { has_kickoff: false, has_budget: false, contract_items: 0, log_days: 0 };
-  return rows.map((r) => ({ ...withComputed(r), ...(flags.get(r.id) || empty) }));
+  return rows.map((r) => ({
+    ...withComputed(r, costs.get(r.id) == null ? null : costs.get(r.id)),
+    ...(flags.get(r.id) || empty),
+  }));
 }
 
 function registerRoutes(app) {
@@ -236,7 +304,7 @@ function registerRoutes(app) {
            FROM projects p
            LEFT JOIN vendors v ON v.id = p.vendor_id
            LEFT JOIN schools s ON s.id = p.school_id
-          ORDER BY p.start_date DESC NULLS LAST, p.id DESC`
+          ORDER BY p.firm_doc_no ASC NULLS LAST, p.id DESC`
       );
       const list = rows
         .map((r) => ({ ...r, status: deriveStatus(r) }))
@@ -251,13 +319,17 @@ function registerRoutes(app) {
     try {
       const q = (req.query.q || '').trim();
       let rows;
+      // 排序依事務所編號:承辦人平常找檔案用的就是這個編號,不是契約編號
+      // (使用者清單第 19/21 項)。沒填編號的排在最後,同組再依 id 新的在前。
+      const ORDER = 'ORDER BY firm_doc_no ASC NULLS LAST, id DESC';
       if (q) {
         ({ rows } = await query(
-          `SELECT * FROM projects WHERE name ILIKE $1 OR project_no ILIKE $1 ORDER BY id DESC`,
+          `SELECT * FROM projects
+            WHERE name ILIKE $1 OR project_no ILIKE $1 OR firm_doc_no ILIKE $1 ${ORDER}`,
           [`%${q}%`]
         ));
       } else {
-        ({ rows } = await query('SELECT * FROM projects ORDER BY id DESC'));
+        ({ rows } = await query(`SELECT * FROM projects ${ORDER}`));
       }
       res.json(await withWorkflowFlags(rows));
     } catch (err) {
@@ -270,7 +342,7 @@ function registerRoutes(app) {
       const { rows } = await query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
       res.json({
-        ...withComputed(rows[0]),
+        ...withComputed(rows[0], await loadConstructionCost(req.params.id)),
         insurance_type_ids: await loadInsuranceTypes(req.params.id),
       });
     } catch (err) {
@@ -391,7 +463,7 @@ function registerRoutes(app) {
       if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
       await replaceInsuranceTypes(req.params.id, req.body.insurance_type_ids);
       res.json({
-        ...withComputed(rows[0]),
+        ...withComputed(rows[0], await loadConstructionCost(req.params.id)),
         insurance_type_ids: await loadInsuranceTypes(req.params.id),
       });
     } catch (err) {

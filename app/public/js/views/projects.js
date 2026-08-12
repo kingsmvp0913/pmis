@@ -277,11 +277,19 @@
       } else {
         const award = awardI.amountValue();
         const pct = feePctI.value.trim();
+        // ⚠️ 乘的是**建造費用**(發包工程費−保險費−營業稅),不是決標金額。
+        // 它由契約詳細價目表算出、隨表而定,不隨這張表單上的欄位變動,故直接取
+        // 後端算好的 design_fee_base(見 project-routes.computeDesignFeeActual)。
+        const base = p.design_fee_base == null ? null : Number(p.design_fee_base);
         if (!award) { text = '未招標,設計費待補(需先填決標金額)'; warn = true; }
         else if (!pct) { text = '實際設計費:—(請填百分比)'; }
-        else {
-          const actual = roundHalfUp(Number(award) * Number(pct) / 100);
-          text = `實際設計費:${actual.toLocaleString()} 元(${Number(award).toLocaleString()} × ${pct}%)`;
+        else if (base == null) {
+          text = '實際設計費:—(建造費用要由契約詳細價目表算出,請先完成價目表)';
+          warn = true;
+        } else {
+          const actual = roundHalfUp(base * Number(pct) / 100);
+          text = `實際設計費:${actual.toLocaleString()} 元` +
+            `(建造費用 ${base.toLocaleString()} × ${pct}%)`;
         }
       }
       calcBox.textContent = text;
@@ -668,7 +676,7 @@
 
   async function renderList(content) {
     content.appendChild(el('div', { class: 'page-title' }, '工程'));
-    const search = el('input', { class: 'form-control search', type: 'text', placeholder: '搜尋工程名稱或編號…' });
+    const search = el('input', { class: 'form-control search', type: 'text', placeholder: '搜尋工程名稱、事務所編號或工程編號…' });
     content.appendChild(el('div', { class: 'toolbar' }, [
       search,
       el('div', { class: 'spacer' }),
@@ -678,7 +686,9 @@
     content.appendChild(el('div', { class: 'table-wrap' }, [
       el('table', { class: 'data' }, [
         el('thead', {}, [el('tr', {}, [
-          el('th', { style: 'width:110px' }, '編號'),
+          // 事務所編號而非契約編號:承辦人平常找檔案用的是前者(使用者清單第 19 項)。
+          // 契約編號沒有從列表拿掉,它在工程詳細頁還在。
+          el('th', { style: 'width:110px' }, '事務所編號'),
           el('th', {}, '名稱'),
           el('th', { style: 'width:76px' }, '狀態'),
           el('th', { style: 'width:140px' }, '設計費'),
@@ -767,6 +777,9 @@
       for (const p of rows) {
         let feeText;
         if (p.design_fee_unbid) feeText = '未招標,待補';
+        // 百分比法乘的是建造費用(發包工程費−保險費−營業稅),沒有價目表就算不出來。
+        // 講出缺什麼,不然只看到一個「—」會以為系統壞了。
+        else if (p.design_fee_needs_items) feeText = '待建立價目表';
         else if (p.design_fee_actual != null) feeText = Number(p.design_fee_actual).toLocaleString() + ' 元';
         else feeText = '—';
         const panelCell = el('td', { colspan: '6', style: 'padding:0' });
@@ -840,7 +853,7 @@
         });
 
         const tr = el('tr', {}, [
-          el('td', {}, p.project_no || '—'),
+          el('td', {}, p.firm_doc_no || '—'),
           el('td', {}, p.name),
           el('td', {}, statusBadge(p.status)),
           el('td', {}, feeText),
