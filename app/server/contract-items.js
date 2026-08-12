@@ -159,6 +159,38 @@ const INDEX_ROWS = {
 
 const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
 
+// 「参/贰/陆」是異體字,樣本裡兩種混用(見 budget-sheet.js 的 FEE_NO);
+// 不正規化的話,寫「(壹~参)」的案子會找不到那一列。
+const 正體 = (s) => String(s == null ? '' : s).replace(/参/g, '參').replace(/贰/g, '貳').replace(/陆/g, '陸');
+// 古坑那種兩個子工程的案子項次帶前綴(`A.伍`),比對只看最後一段。
+const 項次尾 = (i) => 正體(String(i.項次 == null ? '' : i.項次).split('.').pop().trim());
+// 費用項目名稱裡承辦人自己註明的範圍:`營業稅((壹~伍)*5%)`。
+// 破折號與波浪號都出現過(來源經費總表寫 `~`、人工報表寫 `-`)。
+const FEE_BASE_RANGE = /壹\s*[-—–~～至]\s*([貳參肆伍陸])/;
+
+/**
+ * 費用項目的費率:**還原得出原本單價的最短小數**。
+ *
+ * 名稱多半自己寫著費率(`職業安全衛生管理費(壹*1%)`),但**不能照抄**——49 案裡
+ * 245 個費用列有 68 個算出來與單價對不上(名稱寫「約壹*7%」實際 6.9857%)。
+ * 而合計等於決標金額是整條線的錨,值不准動,所以費率一律以單價回推。
+ *
+ * 直接寫回推值會得到 `0.300000548898634%` 這種打開來看不懂的東西,連本來就剛好是
+ * 0.3% 的案子都遭殃(保險費那類名稱沒寫費率,對不到名目值)。故由短到長試,
+ * 取第一個仍然算得出同一個單價的位數:剛好的案子拿到 `0.3%`、`1%`、`7%`,
+ * 對不上的案子才落到長小數——而**兩種都保證值不變**。
+ *
+ * @returns {string} Excel 的百分比字面量,如 `0.6%`
+ */
+function 費率(base, 單價) {
+  const pct = (單價 / base) * 100;
+  for (let d = 0; d <= 12; d++) {
+    const 短 = Number(pct.toFixed(d));
+    if (短 > 0 && roundHalfUp(base * (短 / 100)) === 單價) return `${短}%`;
+  }
+  return `${pct}%`;
+}
+
 /**
  * 寫完數字後要重新量寬度的欄(只加寬,見 itemsToOperations 末尾)。
  *
@@ -185,6 +217,63 @@ const 數字欄 = {
  * 就每天都對不上、整份寫不進去。
  */
 const 顯示項次 = (i) => (i.大類 ? `${i.大類}.${i.項次}` : i.項次);
+
+/**
+ * 費用項目(貳~陸)的單價要寫成**公式**,不是死值。
+ *
+ * 49 案的人工報表裡 44 案是公式(245 個費用列中 218 個),形狀一律是
+ * `ROUND(SUM($F$2:$F$n)*rate,0)`——費用是按施工費的百分比算的,施工項目的數量
+ * 一改,費用就該跟著動。寫死值的話報表看起來對,但任何變更設計之後就靜靜地錯了。
+ *
+ * ⚠️ 來源的發包經費總表**搬不過來**:實測 265 個帶公式的來源儲存格幾乎全是跨檔
+ * 跨分頁參照(`總表!E7`、`'[1](預算)詳細價目表'!B37`),照抄進監造報表就是 #REF!。
+ * 所以照的是人工報表自己的算式,不是來源檔的。
+ *
+ * **n(SUM 的上界)** 三選一,依 218 個人工公式歸納(吻合 204 個):
+ *   1. 名稱寫了範圍(`營業稅((壹~伍)*5%)`)→ 該大類那個費用項目所在的列。
+ *      44 個營業稅公式全部吻合,含 4 個寫 `(壹~肆)`(不含保險費)的案子。
+ *   2. 沒寫範圍的營業稅 → 自己的前一列(來源樣本有 3 筆是這樣)。
+ *   3. 其餘 → 最後一個施工項目那列,即「壹」的小計。132 個非保險費的公式 132 個吻合。
+ *      保險費是 29:13——多數同此,少數是連貳~肆一起算;不吻合的那 13 個只差在
+ *      **未來重算的基準**,寫進去的值仍然一樣(見下)。
+ *
+ * **rate** 一律由單價回推,見 `費率`。
+ *
+ * ⚠️ **值必須原封不動**:合計等於決標金額是整條線的錨(見 selectSheets),
+ * 而 F 欄是 ROUND(E*D,0)、費用項目的數量實測 245/245 都是 1,所以 E 一變合計就變。
+ * 回推的 rate 保證 `ROUND(base*rate,0) === 單價`,49 案實測 241/245 相同,
+ * 另外 4 個是四湖無障礙的**小數單價**(11994.26)——ROUND(…,0) 重現不了,故不寫公式。
+ *
+ * @param {Array} list 項目清單(順序即寫入的列順序)
+ * @returns {Map<number, string>} 索引 → 公式字串;算不出來的索引不在 Map 裡(維持死值)
+ */
+function 費用項目單價公式(list) {
+  const out = new Map();
+  const lastWorkIdx = list.reduce((last, it, i) => (IS_WORK_ITEM(it) ? i : last), -1);
+  const rowOf = (i) => FIRST_ROW + i;
+  const 累計到 = (n) => list.slice(0, n - FIRST_ROW + 1)
+    .reduce((s, it) => s + (Number(it.複價) || 0), 0);
+
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i];
+    if (IS_WORK_ITEM(it)) continue;
+    const row = rowOf(i);
+    const 名稱 = 正體(it.項目 || '');
+    const m = FEE_BASE_RANGE.exec(名稱);
+    const j = m ? list.findIndex((o) => 項次尾(o) === m[1]) : -1;
+    const n = j >= 0 ? rowOf(j)
+      : /營業稅/.test(名稱) ? row - 1
+        : lastWorkIdx >= 0 ? rowOf(lastWorkIdx) : 0;
+    // 範圍碰到自己那一列就是循環參照:Excel 跳警告、整欄變 0,而報表看起來只是「費用是 0」
+    if (!(n >= FIRST_ROW && n < row)) continue;
+
+    const base = 累計到(n);
+    const 單價 = Number(it.單價);
+    if (!(base > 0) || !Number.isInteger(單價) || 單價 <= 0) continue;
+    out.set(i, `=ROUND(SUM($F$${FIRST_ROW}:$F$${n})*${費率(base, 單價)},0)`);
+  }
+  return out;
+}
 
 // 監造報表項目區的下界:項目列的正下方就是報表正文。人工報表把用不到的項目列
 // **整列刪掉**,正文因此緊貼最後一個真項目;範本則預留到第 40 列。
@@ -246,6 +335,7 @@ function formulaItemRowCount(hasFormula, first) {
  *
  * F 欄複價**不寫**:那是範本公式 ROUND(E*D,0)。寫死值會把公式換掉,之後任何人
  * 改了數量或單價,複價都不會跟著動(與 SP1 不寫 B9 完工期限同一個理由)。
+ * 同理,費用項目的 E 欄單價寫的是公式而非死值(見 `費用項目單價公式`)。
  *
  * @param {Array} items 已通過 validateItems 的項目
  * @param {number} [previousCount] 這份報表上一版的項目數;新表較短時,多出來的
@@ -278,11 +368,12 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
   }
 
   const rows = Math.max(list.length, Number(previousCount) || 0);
+  const 公式 = 費用項目單價公式(list);
   const values = [];
   for (let i = 0; i < rows; i++) {
     const it = list[i];
     values.push(it
-      ? [顯示項次(it), it.項目, it.單位, it.數量, it.單價]
+      ? [顯示項次(it), it.項目, it.單位, it.數量, 公式.has(i) ? 公式.get(i) : it.單價]
       : [null, null, null, null, null]);
   }
   ops.push({ type: 'setRange', sheet: SHEET, startAddr: `A${FIRST_ROW}`, values });
