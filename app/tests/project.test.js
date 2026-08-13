@@ -256,6 +256,36 @@ describe('project routes', () => {
     expect(res.body.projects.map((p) => p.name)).toEqual(['A 案', 'C 案']);
   });
 
+  // 一張決標含多個標的(橋頭國小＋許厝分校、重興廁所＋汙水…)在總表上是兩列,
+  // 看起來像兩個不相干的案子,而每一列的金額只是該標的的金額。
+  test('同一張決標的多個標的要標出來,單一標的不標', async () => {
+    await createViaAward(app, token, { name: '橋頭國小廁所', project_no: 'A1150507' });
+    await createViaAward(app, token, { name: '許厝分校廁所', project_no: 'A1150507' });
+    await createViaAward(app, token, { name: '單一標的案', project_no: 'A1150999' });
+    const res = await auth(request(app).get('/api/projects/status-board?status=全部'));
+    const by = Object.fromEntries(res.body.projects.map((p) => [p.name, p.同決標標的數]));
+    expect(by['橋頭國小廁所']).toBe(2);
+    expect(by['許厝分校廁所']).toBe(2);
+    expect(by['單一標的案']).toBe(1);
+  });
+
+  // 統計要在**過濾之前**做:一個標的完工、另一個施工中時只看得到一列,
+  // 而那一列仍該顯示「2 個標的之一」——否則承辦人以為這案就這一個。
+  test('另一個標的被狀態篩掉時,仍要標出總標的數', async () => {
+    await createViaAward(app, token, {
+      name: '施工中標的', project_no: 'B1150001', start_date: '2020-01-01',
+    });
+    await createViaAward(app, token, {
+      name: '已完工標的', project_no: 'B1150001',
+      start_date: '2020-01-01', actual_completion_date: '2020-06-01',
+    });
+    const res = await auth(request(app).get('/api/projects/status-board?status=施工中'));
+    const 列 = res.body.projects.filter((p) => p.project_no === 'B1150001');
+    expect(列).toHaveLength(1);
+    expect(列[0].name).toBe('施工中標的');
+    expect(列[0].同決標標的數).toBe(2);
+  });
+
   test('刪除工程', async () => {
     const created = await createViaAward(app, token, { name: '待刪工程' });
     const del = await auth(request(app).delete(`/api/projects/${created.body.id}`));

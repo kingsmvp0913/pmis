@@ -227,6 +227,14 @@ async function migrate() {
   // 欄位級異動(冪等)。刻意不用 ADD COLUMN IF NOT EXISTS——pg-mem 支援不一致,
   // 且既有建表段已採「先查 information_schema 再決定跑不跑」的手法,沿用同一套。
   const ALTERS = [
+    // 決標公告上的**原始**決標總額。與 award_amount 分開存,因為一張決標含多個
+    // 標的時,承辦人會把 award_amount 改成該標的的金額(那是既有作法,見
+    // contract-items-routes 的「請把工程的決標金額改成該標的的金額」)。
+    // 改完之後就沒有任何地方留著決標總額,「各標的加起來等不等於決標金額」
+    // 這條檢核也就無從做起——重興 812,102 + 871,943 = 1,684,045 那種錯配
+    // (少建一個標的、或某個標的金額打錯)在系統裡完全看不出來。
+    // 由伺服器在建案時重新解析決標公告取得,不吃前端送來的值,也不隨後續編輯改變。
+    ['projects', 'award_total', 'NUMERIC'],
     ['projects', 'supervisor_firm', 'TEXT'], // 監造單位,空則吊 settings 預設
     ['projects', 'designer_firm', 'TEXT'],   // 設計單位,空則吊 settings 預設
     // 決標公告 28/28 都有「機關地址」與「廠商地址」,但原本無處可存。

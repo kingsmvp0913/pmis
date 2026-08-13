@@ -149,7 +149,12 @@ const StatusBoard = (() => {
         }
         const trs = d.projects.map((p) => el('tr', { class: rowClass(p) }, [
           el('td', {}, p.firm_doc_no || '—'),
-          el('td', {}, el('a', { href: `#/projects/${p.id}` }, p.name)),
+          // 一張決標含多個標的時,兩列看起來像兩個不相干的案子。標一下,
+          // 承辦人才知道這一列只是其中一個標的(金額也只是該標的的金額)。
+          el('td', {}, p.同決標標的數 > 1
+            ? [el('a', { href: `#/projects/${p.id}` }, p.name),
+              el('span', { class: 'hint' }, `（同一張決標 ${p.同決標標的數} 個標的之一）`)]
+            : el('a', { href: `#/projects/${p.id}` }, p.name)),
           el('td', {}, p.vendor_name || '—'),
           el('td', {}, p.school_name || '—'),
           el('td', {}, fmtDate(p.start_date)),

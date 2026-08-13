@@ -26,6 +26,8 @@ const { verifyToken } = require('./auth');
 const { constructionCost } = require('./contract-items');
 const multer = require('multer');
 const { saveAttachment } = require('./project-attachments-routes');
+const { readAwardNotice } = require('./award-notice');
+const { loadGroup } = require('./award-group');
 const { workbookPath } = require('./report-workbook');
 const { verifyWorkbook } = require('./report-verify');
 const { scanFilledCells, saveProtected } = require('./report-protect');
@@ -306,8 +308,22 @@ function registerRoutes(app) {
            LEFT JOIN schools s ON s.id = p.school_id
           ORDER BY p.firm_doc_no ASC NULLS LAST, p.id DESC`
       );
+      // 一張決標含多個標的時,兩列在總表上看起來像兩個不相干的案子。標出
+      // 「這是 N 個標的之一」——**不改排序**:依事務所編號排是承辦人指定的規則
+      // (清單第 21 項),為了讓同群組相鄰而動它,是拿他要的東西換我覺得好的東西。
+      // 統計要在**過濾之前**做:一個標的完工、另一個施工中時,只看得到一列,
+      // 而那一列仍該顯示「2 個標的之一」——否則承辦人以為這案就這一個。
+      const 群組筆數 = new Map();
+      for (const r of rows) {
+        const no = (r.project_no || '').trim();
+        if (no) 群組筆數.set(no, (群組筆數.get(no) || 0) + 1);
+      }
       const list = rows
-        .map((r) => ({ ...r, status: deriveStatus(r) }))
+        .map((r) => ({
+          ...r,
+          status: deriveStatus(r),
+          同決標標的數: 群組筆數.get((r.project_no || '').trim()) || 1,
+        }))
         .filter((r) => want === '全部' || r.status === want);
       res.json({ status: want, 筆數: list.length, projects: list });
     } catch (err) {
@@ -344,6 +360,8 @@ function registerRoutes(app) {
       res.json({
         ...withComputed(rows[0], await loadConstructionCost(req.params.id)),
         insurance_type_ids: await loadInsuranceTypes(req.params.id),
+        // 同一張決標的其他標的 + 加總檢核(見 award-group.js)
+        award_group: await loadGroup(query, rows[0].project_no),
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -414,11 +432,26 @@ function registerRoutes(app) {
       const data = normalize({
         ...body, name: String(body.name).trim(), project_no: projectNo,
       });
-      const cols = COLUMNS.join(', ');
-      const params = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
+
+      // 決標總額由**伺服器自己重新解析決標公告**取得,不吃 body:承辦人在建案表單
+      // 上會把金額改成該標的的金額(一張決標多個標的時的既有作法),那個值進
+      // award_amount 是對的,但拿它當決標總額就等於把加總的基準也一起改掉了。
+      // 讀不到就留 null——寧可讓檢核顯示「無法檢核」,也不要拿一個錯的基準去算差額。
+      let awardTotal = null;
+      try {
+        const parsed = await readAwardNotice(req.file.buffer);
+        const v = parsed && parsed.契約金額;
+        if (v != null && Number.isFinite(Number(v))) awardTotal = Number(v);
+      } catch (err) {
+        console.error('[projects] 建案時重新解析決標公告失敗(決標總額留空):', err.message);
+      }
+
+      const insertCols = [...COLUMNS, 'award_total'];
+      const cols = insertCols.join(', ');
+      const params = insertCols.map((_, i) => `$${i + 1}`).join(', ');
       const { rows } = await query(
         `INSERT INTO projects (${cols}) VALUES (${params}) RETURNING *`,
-        COLUMNS.map((c) => data[c])
+        [...COLUMNS.map((c) => data[c]), awardTotal]
       );
       const project = withComputed(rows[0]);
 
@@ -441,6 +474,9 @@ function registerRoutes(app) {
         }
       }
 
+      // 同一張決標的其他標的:建完立刻講,不要等他自己發現。少建一個標的
+      // 不會有任何錯誤訊息,而每一份監造報表都會照樣產出來、金額也都合理。
+      project.award_group = await loadGroup(query, projectNo);
       res.status(201).json(project);
     } catch (err) {
       console.error('[projects] 建立工程失敗:', err);

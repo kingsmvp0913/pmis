@@ -219,6 +219,34 @@
       value: p.award_amount != null ? p.award_amount : '',
     }));
 
+    // 一張決標含多個標的時的加總檢核(見 server/award-group.js)。
+    // 少建一個標的、或某個標的金額打錯,系統其他地方**完全看不出來**:
+    // 每個標的的監造報表都照樣產得出來、金額也都合理,沒有任何錯誤訊息。
+    // 配色一律走 app.css 的既有 class,不寫死淺色底(深色模式文字會翻白＝隱形)。
+    const groupBox = el('div', { style: 'display:none' });
+    (function renderAwardGroup(g) {
+      if (!g || g.狀態 === 'single') return;
+      const 錢 = (v) => (v == null ? '未填' : PmisApp.formatAmount(v));
+      const 標的 = (g.標的 || []).map((t) => `${t.name}(${錢(t.金額)})`).join('、');
+      if (g.狀態 === 'unknown') {
+        groupBox.className = 'hint';
+        groupBox.textContent = `這張決標(契約編號 ${p.project_no || '—'})底下有 ${g.標的數} 個標的:`
+          + `${標的}。有標的還沒填決標金額,或這幾筆是舊資料沒有決標總額,暫時無法核對加總。`;
+      } else if (g.狀態 === 'mismatch') {
+        groupBox.className = 'error-msg';
+        const 短少 = g.差額 < 0;
+        groupBox.textContent = `這張決標底下有 ${g.標的數} 個標的,各標的金額加起來是 `
+          + `${錢(g.已分配)},決標公告上的總額是 ${錢(g.決標總額)},`
+          + `${短少 ? '短少' : '超出'} ${錢(Math.abs(g.差額))}。`
+          + `${短少 ? '可能有標的還沒建立,' : ''}請確認每個標的的決標金額。`;
+      } else {
+        groupBox.className = 'hint';
+        groupBox.textContent = `這張決標底下有 ${g.標的數} 個標的:${標的},`
+          + `加起來等於決標公告上的 ${錢(g.決標總額)}。`;
+      }
+      groupBox.style.display = '';
+    })(p.award_group);
+
     // 保險公司 → 險種連動
     const insurerI = selectFrom(insurers, p.insurer_id, '(未選保險公司)');
     // 險種是**多選**:一個工程常同時投營造綜合保險與意外責任險等數種。
@@ -317,6 +345,7 @@
         el('div', { class: 'form-group' }, [el('label', {}, '實際竣工日'), actualI])
       ]),
       el('div', { class: 'form-group' }, [el('label', {}, '決標金額(空=未招標)'), awardI]),
+      groupBox,
       el('div', { class: 'card-title', style: 'margin-top:8px' }, '保險'),
       el('div', { class: 'form-row' }, [
         el('div', { class: 'form-group' }, [el('label', {}, '保險公司'), insurerI]),
