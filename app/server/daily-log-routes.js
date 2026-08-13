@@ -37,6 +37,7 @@ const filetypes = require('./parsers/filetypes');
 const { extractItemsOcr } = require('./parsers/filetypes/pdf');
 const ocr = require('./ocr');
 const { validateDailyLog } = require('./daily-log-validate');
+const { mergeDays } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
 } = require('./daily-log-write');
@@ -65,6 +66,26 @@ async function withTempFile(file, fn) {
   try { return await fn(p); }
   finally { try { fs.rmSync(p, { force: true }); } catch { /* ignore */ } }
 }
+
+/**
+ * 一次解析多個檔並依填報日期合併(見 daily-log-merge.js)。
+ *
+ * 兩聯分成兩個檔(明德)、一案多份月檔(久木 6 份)都走這條路。單檔的行為完全
+ * 不變——只有一個檔時合併是恆等的。
+ *
+ * **讀不動的檔要讓它 throw**,不可略過:回空陣列會被當成「這份沒有資料」,
+ * 而承辦人以為兩個檔都吃進去了。
+ */
+async function parseFiles(files, parser) {
+  const lists = [];
+  for (const f of files) lists.push(await withTempFile(f, (p) => parser.parseAll(p)));
+  return mergeDays(lists);
+}
+
+// multer 的 .array 在只送一個檔時 req.files 仍是陣列;.single 的 req.file 則是物件。
+// 兩種都收,舊前端(送單一 daily_log)不必同步改。
+const uploadedFiles = (req) => (req.files && req.files.length ? req.files
+  : (req.file ? [req.file] : []));
 
 const NO_CONTRACT = '此工程尚未建立契約詳細價目表,無法核對施工日誌的項目。請先上傳發包經費總表。';
 const NO_START = '此工程尚未填開工日期,無法決定每一天要寫進報表的哪一欄。請先完成工程基本資料。';
@@ -193,7 +214,7 @@ function flatten(days) {
  *          source:string, userId:number|null}} p
  *   source 進 daily_records.source:'parser' | 'ocr_confirmed'
  */
-async function writeDays({ projectId, days, rows, ctx, file, source, userId }) {
+async function writeDays({ projectId, days, rows, ctx, files, source, userId }) {
   const dest = ensureWorkbook(projectId);
   let tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
   try {
@@ -224,13 +245,17 @@ async function writeDays({ projectId, days, rows, ctx, file, source, userId }) {
     );
   }
 
-  await saveAttachment({
-    projectId,
-    kind: 'daily_log',
-    buffer: file.buffer,
-    originalName: realName(file),
-    userId: userId || null,
-  });
+  // 多檔上傳時**每一個檔都要歸檔**:附件是憑據,只留其中一個等於另一個從此
+  // 查不到(明德那家的第一聯與第二聯少任何一份都還原不出當初驗過的資料)。
+  for (const f of files) {
+    await saveAttachment({
+      projectId,
+      kind: 'daily_log',
+      buffer: f.buffer,
+      originalName: realName(f),
+      userId: userId || null,
+    });
+  }
 }
 
 // 前端送回來的 days 的上限。不是效能考量——沒有上限的話一個請求就能塞爆
@@ -295,16 +320,15 @@ function sanitizeDays(input) {
 
 function registerRoutes(app) {
   app.post('/api/projects/:id/daily-logs/parse', verifyToken,
-    upload.single('daily_log'), async (req, res) => {
+    upload.array('daily_log'), async (req, res) => {
       try {
-        if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳施工日誌' });
-        }
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌' });
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         const ctx = await loadContext(req.params.id);
         if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
 
-        const days = await withTempFile(req.file, (p) => ctx.parser.parseAll(p));
+        const { days, conflicts } = await parseFiles(files, ctx.parser);
         const rows = flatten(days);
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
@@ -315,6 +339,10 @@ function registerRoutes(app) {
 
         res.json({
           天數: days.length,
+          檔數: files.length,
+          // 同一天同一欄兩個檔給了不同的值。靜默挑一個會讓「這兩份檔其實不是
+          // 同一案」永遠看不見,所以一定要回給前端。
+          衝突: conflicts,
           日期範圍: days.length
             ? [days[0].header && days[0].header.填報日期,
               days[days.length - 1].header && days[days.length - 1].header.填報日期]
@@ -329,17 +357,16 @@ function registerRoutes(app) {
     });
 
   app.post('/api/projects/:id/daily-logs/confirm', verifyToken,
-    upload.single('daily_log'), async (req, res) => {
+    upload.array('daily_log'), async (req, res) => {
       try {
-        if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳施工日誌' });
-        }
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌' });
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         const ctx = await loadContext(req.params.id);
         if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
 
         // 重新解析與驗證,不吃前端送來的任何資料
-        const days = await withTempFile(req.file, (p) => ctx.parser.parseAll(p));
+        const { days } = await parseFiles(files, ctx.parser);
         const rows = flatten(days);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
@@ -358,7 +385,7 @@ function registerRoutes(app) {
           days,
           rows,
           ctx,
-          file: req.file,
+          files,
           source: 'parser',
           userId: req.userId,
         });
@@ -488,7 +515,7 @@ function registerRoutes(app) {
           days,
           rows,
           ctx,
-          file: req.file,
+          files: [req.file],
           source: 'ocr_confirmed',
           userId: req.userId,
         });

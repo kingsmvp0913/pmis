@@ -16,10 +16,15 @@ const DailyLogs = (() => {
   const num = (n) => (n == null ? '—' : Number(n).toLocaleString());
 
   function card(projectId) {
-    let file = null;
+    let files = [];
     let scanned = null;          // scan 回來的草稿(承辦人編輯的對象)
 
-    const fileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf,.xls,.xlsx,.docx' });
+    // 可多選:明德那家的兩聯分在**兩個 PDF 檔**(第一聯有天氣與進度、第二聯有
+    // 完整明細含單價金額),只送一個檔不是少了天氣就是少了單價,而 SP3 只會說
+    // 「此格式不提供」然後放行——少東西不會有人發現。久木那種一案六份月檔同理。
+    const fileI = el('input', {
+      class: 'form-control', type: 'file', multiple: true, accept: '.pdf,.xls,.xlsx,.docx',
+    });
     const parseBtn = el('button', { class: 'btn', type: 'button' }, '驗證施工日誌');
     const scanBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '辨識掃描件');
     const confirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' },
@@ -140,7 +145,8 @@ const DailyLogs = (() => {
         + `(每天 ${(100 / fee.工期天數).toFixed(2)}%),不是廠商施工預定進度表上的曲線。`));
     }
 
-    const fd = () => { const f = new FormData(); f.append('daily_log', file); return f; };
+    // 後端收 upload.array('daily_log'),同一個欄名 append 多次即可
+    const fd = () => { const f = new FormData(); for (const x of files) f.append('daily_log', x); return f; };
 
     // ── 掃描件:逐格確認 ──
 
@@ -291,8 +297,8 @@ const DailyLogs = (() => {
       diffBox.innerHTML = '';
       skipBox.style.display = 'none';
       clearScan();
-      if (!fileI.files[0]) { showErr('請先選擇施工日誌'); return; }
-      file = fileI.files[0];
+      if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
+      files = [...fileI.files];
       scanBtn.disabled = true;
       scanBtn.textContent = '辨識中(每頁約數秒)…';
       try {
@@ -318,15 +324,23 @@ const DailyLogs = (() => {
       diffBox.innerHTML = '';
       skipBox.style.display = 'none';
       clearScan();
-      if (!fileI.files[0]) { showErr('請先選擇施工日誌'); return; }
-      file = fileI.files[0];
+      if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
+      files = [...fileI.files];
       parseBtn.disabled = true;
       parseBtn.textContent = '驗證中…';
       try {
         const d = await Api.upload(`projects/${projectId}/daily-logs/parse`, fd());
         const 範圍 = d.日期範圍 && d.日期範圍[0] ? `${d.日期範圍[0]} ~ ${d.日期範圍[1]}` : '';
-        summary.textContent = `共 ${d.天數} 天 ${範圍}:硬錯 ${d.errors.length} 項、` +
-          `警告 ${d.warnings.length} 項。`;
+        const 檔 = d.檔數 > 1 ? `${d.檔數} 個檔合併後` : '';
+        // 同一天同一欄兩個檔給了不同的值 = 這兩份檔可能不是同一案。合併時保留
+        // 先出現的,但一定要講——靜默挑一個會讓這件事永遠看不見。
+        const 衝突 = (d.衝突 || []).length
+          ? ` ⚠️ 兩個檔有 ${d.衝突.length} 處對不起來(如 ${d.衝突[0].日期} 的`
+            + `${d.衝突[0].欄位}:「${d.衝突[0].值[0]}」vs「${d.衝突[0].值[1]}」),`
+            + '已採先上傳的那份,請確認是否為同一案。'
+          : '';
+        summary.textContent = `${檔}共 ${d.天數} 天 ${範圍}:硬錯 ${d.errors.length} 項、`
+          + `警告 ${d.warnings.length} 項。${衝突}`;
         summary.className = d.errors.length ? 'error-msg' : 'hint';
         summary.style.display = '';
         renderFindings(d.errors, d.warnings);
@@ -409,7 +423,7 @@ const DailyLogs = (() => {
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-title' }, '施工日誌'),
       hint,
-      el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案'), fileI]),
+      el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案(可多選:兩聯分開的檔、逐月的檔一次全選)'), fileI]),
       el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn, uploadBtn]),
       reportFileI,
       uploadBox,

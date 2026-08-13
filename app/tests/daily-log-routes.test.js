@@ -338,3 +338,81 @@ describe('掃描件(OCR 預填 → 逐格確認)', () => {
     expect(Number(rows[0].qty)).toBe(3);
   });
 });
+
+// ── 多檔上傳:兩聯分成兩個檔(明德)、一案多份月檔(久木 6 份)────────────
+//
+// 只送一個檔不是少了天氣與進度,就是少了單價與金額——而**兩者都不會讓任何欄位
+// 看起來有問題**,SP3 只會說「此格式不提供」然後放行。少東西不會有人發現。
+describe('多檔上傳', () => {
+  const 第一聯 = [{
+    header: {
+      填報日期: '2026-04-08', 天氣_上午: '晴', 天氣_下午: '晴',
+      預定進度: 0.63, 實際進度: 1.29, 承包廠商: '明德土木包工業', 工程名稱: '測試工程',
+    },
+    dailyRows: [{
+      項次: '1', 工程項目: '項目1', 單位: '式', 契約單價: null, 契約數量: 10,
+      本日完成數量: 1, 本日完成金額: null, 累計完成數量: 1,
+    }],
+  }];
+  const 第二聯 = [{
+    header: { 填報日期: '2026-04-08', 天氣_上午: null, 天氣_下午: null, 工程名稱: '測試工程' },
+    dailyRows: [{
+      項次: '1', 工程項目: '項目1', 單位: '式', 契約單價: 100, 契約數量: 10,
+      本日完成數量: 1, 本日完成金額: 100, 累計完成數量: 1,
+    }],
+  }];
+
+  // 讀取器一次吃一個檔,依呼叫序回不同的結果(模擬兩個不同的檔)
+  const feedPerFile = (lists) => {
+    let i = 0;
+    registry.getParser.mockReturnValue({ parseAll: async () => lists[i++] || [] });
+  };
+
+  const postTwo = (app, token, id, route) => request(app)
+    .post(`/api/projects/${id}/daily-logs/${route}`)
+    .set('Authorization', `Bearer ${token}`)
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '第一聯.pdf')
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '第二聯.pdf');
+
+  test('兩個檔合併成一天,兩邊的欄位都在', async () => {
+    const { app, token, id } = await makeApp();
+    feedPerFile([第一聯, 第二聯]);
+    const res = await postTwo(app, token, id, 'parse').expect(200);
+    expect(res.body.天數).toBe(1);
+    expect(res.body.檔數).toBe(2);
+    expect(res.body.衝突).toEqual([]);
+    // 第一聯才有天氣 → A2 不該報「天氣未填」;第二聯才有單價 → E6 有得比
+    expect(res.body.errors.map((e) => e.code)).not.toContain('A2');
+  });
+
+  test('兩個檔的同一欄不同 → 回衝突,不靜默挑一個', async () => {
+    const { app, token, id } = await makeApp();
+    const 別案 = [{ ...第二聯[0], header: { ...第二聯[0].header, 工程名稱: '別的工程' } }];
+    feedPerFile([第一聯, 別案]);
+    const res = await postTwo(app, token, id, 'parse').expect(200);
+    expect(res.body.衝突).toHaveLength(1);
+    expect(res.body.衝突[0].欄位).toBe('工程名稱');
+  });
+
+  // 附件是憑據。只留其中一個,另一個從此查不到——明德那家少任何一聯都還原不出
+  // 當初驗過的資料。
+  test('confirm 時每一個檔都要歸檔', async () => {
+    const { app, token, id } = await makeApp();
+    feedPerFile([第一聯, 第二聯]);
+    await postTwo(app, token, id, 'confirm').expect(200);
+    const { rows } = await db.query(
+      `SELECT original_name FROM project_attachments WHERE project_id = $1 AND kind = 'daily_log' ORDER BY id`,
+      [id]
+    );
+    expect(rows.map((r) => r.original_name)).toEqual(['第一聯.pdf', '第二聯.pdf']);
+  });
+
+  // 單檔的行為完全不變(合併在只有一個檔時是恆等的)
+  test('單檔仍然可用', async () => {
+    const { app, token, id } = await makeApp();
+    feed(第二聯);
+    const res = await post(app, token, id, 'parse').expect(200);
+    expect(res.body.天數).toBe(1);
+    expect(res.body.檔數).toBe(1);
+  });
+});
