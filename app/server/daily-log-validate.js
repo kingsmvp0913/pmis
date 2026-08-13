@@ -147,7 +147,17 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   const errors = [];
   const warnings = [];
   const skipped = [];
-  const hard = (code, 日期, 項次, 訊息) => errors.push({ code, 日期, 項次, 訊息 });
+  // 完工日之後的硬錯改列軟警告(見 completionDay)。日期為 null 的彙總類檢查
+  // (F4/C2/E2)不受影響——那是「這批日誌自己兜不起來」,與完工與否無關。
+  let 完工日序 = null;
+  const hard = (code, 日期, 項次, 訊息) => {
+    const 這天 = 日期 == null ? null : dayNum(日期);
+    if (完工日序 != null && 這天 != null && 這天 > 完工日序) {
+      warnings.push({ code, 日期, 項次, 訊息: `${訊息}(完工後的資料,僅供參考)` });
+      return;
+    }
+    errors.push({ code, 日期, 項次, 訊息 });
+  };
   const soft = (code, 日期, 項次, 訊息) => warnings.push({ code, 日期, 項次, 訊息 });
 
   const absent = absentHeaderFields(days);
@@ -196,6 +206,32 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   };
   const 預定Scale = progressScale('預定進度');
   const 實際Scale = progressScale('實際進度');
+
+  // 完工日:實際進度首次達 100% 的那一天(日期最早者,不是 days 陣列的先後——
+  // 一份檔案裡日期不保證遞增,富森那份 2026 的月份排在 2025 之前)。
+  //
+  // 為什麼要這條:廠商常把整個月的表格一次列印出來,工程在月中完工,後面那些天
+  // 照樣印著日期卻沒有實質內容,或累計已超出契約量。承辦人被 C1/C4 一路擋住,
+  // 而那不是廠商填錯。故**完工日之後的硬錯一律降為軟警告**(仍要列出來)。
+  //
+  // 上限 150 是壞值防線:實測超額完成最高到 115.74(富森),250 那種是讀錯或
+  // 填錯,不能藉「完工」把 C4 的值域檢查整條廢掉。
+  const COMPLETE_MIN = 99.995;
+  const COMPLETE_MAX = 150;
+  const 是完工進度 = (v) => v != null && v * 實際Scale >= COMPLETE_MIN
+    && v * 實際Scale <= COMPLETE_MAX;
+  for (const d of days) {
+    const h = d.header || {};
+    if (!是完工進度(num(h.實際進度))) continue;
+    const s = dayNum(h.填報日期);
+    if (s != null && (完工日序 == null || s < 完工日序)) 完工日序 = s;
+  }
+  if (完工日序 != null) {
+    const 完工日 = new Date(完工日序 * MS_PER_DAY).toISOString().slice(0, 10);
+    soft('完工', 完工日, null,
+      '累積進度於此日達 100%,其後各日的硬錯已降為警告(廠商常把整月表格預先列印,'
+      + '完工後那幾天不是填錯)');
+  }
 
   // 契約表以項次為鍵。SP2 建的契約詳細價目表是**唯一權威基準**——
   // 日誌自己填的契約數量/單價只是待驗資料,不能拿來當基準。
@@ -390,7 +426,14 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     // 這條擋的是 -3 或 250 這種明顯壞掉的值。
     for (const 欄 of ['預定進度', '實際進度']) {
       const v = num(h[欄]);
-      if (v != null && (v < 0 || v > 100)) hard('C4', 日期, null, `${欄} ${v} 不在 0~100`);
+      if (v == null || (v >= 0 && v <= 100)) continue;
+      // 超過 100 的那個值,在完工當天就已經出現(富森實測完工日自己是 100.27)。
+      // 只降級「完工日之後」會留下這一個硬錯,整份照樣被擋 → 完工日當天也放行。
+      if (v > 100 && 完工日序 != null && 這天 != null && 這天 >= 完工日序) {
+        soft('C4', 日期, null, `${欄} ${v} 超過 100(已達完工進度,僅供參考)`);
+      } else {
+        hard('C4', 日期, null, `${欄} ${v} 不在 0~100`);
+      }
     }
 
     // F3 實際進度不得逐日變小(軟警告:也可能是廠商重新估算)
