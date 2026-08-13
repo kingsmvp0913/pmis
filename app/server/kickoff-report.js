@@ -329,13 +329,22 @@ function moneySentenceFallback(lines) {
 
 // ── 守門:是不是開工報告表 ───────────────────────────────────────────────
 
-// 判定只看第 1 頁:24 份實測中,除了不合規格的那幾份,其餘每份的關鍵欄位都落在
-// 第 1 頁(後續頁是品管人員登錄表、證書等附件)。若把附件頁也算進來,像
-// 「公誠國小-開工資料+公文.pdf」這種公文封面+附件合併上傳的 PDF,附件裡剛好也有
-// 乾淨的「工程名稱」等標籤,會被誤判成開工報告表本身,反而放過真正該擋下的封面。
-function firstPageLines(pages) {
-  const p1 = pages.filter((p) => p && p.page === 1);
-  const src = p1.length ? p1 : pages;
+// 判定看**前 3 頁**。原本只看第 1 頁,理由是關鍵欄位都落在第 1 頁、後續頁是
+// 品管人員登錄表等附件,把附件算進來會讓公文封面被誤放行。
+//
+// 但實測到真實的反例:承辦人給的 `[開工報告]函+[開工報告].doc` 轉出 4 頁,
+// **頁 1、2 是廠商函的正本與副本,開工報告書在頁 3**。只看第 1 頁的話整份被判
+// 「無法辨識為開工報告表」——而那份文件裡確實有一張完整的開工報告書,
+// 抽取那一段本來就會遍歷全部頁,卡住的只有守門這一關。
+//
+// 取 3 頁的依據:公文函最多正本 + 副本兩頁,開工報告書排在其後。
+// 原本擔心的「封面被誤放行」不成立——公誠那份合併檔現在本來就讀得出 9 欄
+// 且值都正確,擋下它只是讓承辦人多做一次拆檔。
+const GATE_PAGES = 3;
+
+function gateLines(pages) {
+  const head = pages.filter((p) => p && (p.page == null || p.page <= GATE_PAGES));
+  const src = head.length ? head : pages;
   const out = [];
   for (const p of src) for (const l of (p && p.lines) || []) out.push(String(l));
   return out;
@@ -387,7 +396,7 @@ function looksLikeKickoffReport(page1Lines) {
  *
  * @param {{pages: Array<{page:number,width:number,lines:string[],boxes:object[]}>}} ocrOutput
  * @returns {object} 9 欄;讀不到的一律 null
- * @throws {Error} code 'NOT_KICKOFF_REPORT' —— 第 1 頁缺少任何已知欄位標籤與退路句,
+ * @throws {Error} code 'NOT_KICKOFF_REPORT' —— 前 3 頁缺少任何已知欄位標籤與退路句,
  *   或版面完整卻整組決標/開工/竣工日標籤缺席(臺中市簡化格式的已知樣態)
  * @throws {Error} code 'OCR_NO_GEOMETRY' —— OCR 輸出沒有座標。抽取全靠座標,
  *   靜默回滿滿 null 會被誤讀成「這份文件真的沒填」,故明確報錯。
@@ -397,7 +406,7 @@ function extractFields(ocrOutput) {
   const allLines = [];
   for (const p of pages) for (const l of (p && p.lines) || []) allLines.push(String(l));
 
-  if (!looksLikeKickoffReport(firstPageLines(pages))) {
+  if (!looksLikeKickoffReport(gateLines(pages))) {
     const err = new Error('此檔無法辨識為開工報告表(缺少任何已知欄位標籤與退路句),請確認上傳的是開工報告表');
     err.code = 'NOT_KICKOFF_REPORT';
     throw err;
