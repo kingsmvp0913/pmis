@@ -17,6 +17,14 @@ describe('isWordFile', () => {
     expect(isWordFile('A.DOC')).toBe(true);
   });
 
+  // .odt 是 LibreOffice 存的 OpenDocument,承辦人手上真的有(DEBUG專用 14 份裡 2 份)。
+  // 不認的話會被當成 PDF 直接餵給 OCR,回「OCR 全部解析度皆失敗」——訊息在騙人,
+  // 承辦人會以為是掃描品質問題。Word COM 開得了 .odt,兩份實測轉檔後讀到 5 欄與 8 欄。
+  test('認得 .odt', () => {
+    expect(isWordFile('1150729開工報告書.odt')).toBe(true);
+    expect(isWordFile('宜梧國中老舊廁所整修工程_開工報告表.ODT')).toBe(true);
+  });
+
   // PDF 不可被誤判成 Word——那會讓每一份 PDF 都白跑一次 Word COM(數秒)後失敗
   test('PDF 與其他格式不算', () => {
     expect(isWordFile('開工報告表.pdf')).toBe(false);

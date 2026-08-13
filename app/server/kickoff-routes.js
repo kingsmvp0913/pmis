@@ -91,8 +91,19 @@ async function withTempPdf(buffer, fn) {
  * 他手上有的是那份 .doc。
  */
 async function toPdfBuffer(file) {
-  if (!isWordFile(file.originalname)) return file.buffer;
-  return convertToPdf(file.buffer, file.originalname);
+  if (isWordFile(file.originalname)) return convertToPdf(file.buffer, file.originalname);
+  // 既不是 Word 也不是 PDF 的檔,以前會**直接餵給 OCR**,承辦人拿到的是
+  // 「OCR 全部解析度皆失敗」——訊息在騙人,他會去查掃描品質,而真正的原因是
+  // 這個格式系統根本沒轉檔。實測 .odt 就是這樣被擋掉一整輪的。
+  if (!/\.pdf$/i.test(String(file.originalname || ''))) {
+    const ext = (String(file.originalname || '').match(/\.[^.]+$/) || ['(無副檔名)'])[0];
+    const e = new Error(`不支援的檔案格式 ${ext}。開工報告表請上傳 PDF、Word(.doc/.docx)或 .odt`);
+    // 不標記的話會掉進 catch 的 500 通用訊息,等於這個修正沒做——承辦人看到的
+    // 還是「請稍後重試」,而重試永遠不會成功。
+    e.code = 'UNSUPPORTED_FILE_TYPE';
+    throw e;
+  }
+  return file.buffer;
 }
 
 /**
@@ -185,7 +196,7 @@ function registerRoutes(app) {
     upload.single('kickoff_report'), async (req, res) => {
       try {
         if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳開工報告表(PDF 或 Word)' });
+          return res.status(400).json({ error: '請上傳開工報告表(PDF、Word 或 .odt)' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
@@ -208,7 +219,9 @@ function registerRoutes(app) {
         });
       } catch (err) {
         // 「這份檔案不能用」屬 400,訊息本就寫給承辦人看,原樣回
-        if (err.code === 'NOT_KICKOFF_REPORT') return res.status(400).json({ error: err.message });
+        if (err.code === 'NOT_KICKOFF_REPORT' || err.code === 'UNSUPPORTED_FILE_TYPE') {
+          return res.status(400).json({ error: err.message });
+        }
         // 其餘(OCR 驅動失敗、DB 故障)是伺服器問題:內部路徑與驅動細節只留 log
         console.error('[kickoff] 開工報告表解析失敗:', err);
         res.status(500).json({ error: '開工報告表解析失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
@@ -219,7 +232,7 @@ function registerRoutes(app) {
     upload.single('kickoff_report'), async (req, res) => {
       try {
         if (!req.file || !req.file.buffer || !req.file.buffer.length) {
-          return res.status(400).json({ error: '請上傳開工報告表(PDF 或 Word)' });
+          return res.status(400).json({ error: '請上傳開工報告表(PDF、Word 或 .odt)' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         // 多選四欄當「補寫前快照」:confirm 成功後若要補寫主檔,靠這份判斷哪些欄位

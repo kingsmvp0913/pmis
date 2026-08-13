@@ -50,7 +50,9 @@ const KickoffReport = (() => {
     // 判不出來(表單上兩個選項並列、OCR 分不出勾了哪個)就維持未指定讓他自己挑。
     const 基準Sel = opts.basisSelect || null;
 
-    const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf,.doc,.docx' });
+    // .odt 是 LibreOffice 存的,承辦人手上真的有(DEBUG專用 14 份裡 2 份)。
+    // accept 沒列的話檔案總管會把它灰掉——連選都選不到,而後端其實轉得動。
+    const koFileI = el('input', { class: 'form-control', type: 'file', accept: '.pdf,.doc,.docx,.odt' });
     // 原本是裸 .btn(沒有色彩修飾類別,吃瀏覽器原生按鈕樣式,這是「解析按鈕很醜」的
     // 根因)。移到底部按鈕列與其他按鈕並排後改用既有的 .btn-outline,不新增顏色。
     const koParseBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '解析並比對');
@@ -163,7 +165,7 @@ const KickoffReport = (() => {
       koDurationWarn.style.display = 'none';
       koSyncNote.style.display = 'none';
       if (!koFileI.files[0]) {
-        koErr.textContent = '請先選擇開工報告表(PDF 或 Word)';
+        koErr.textContent = '請先選擇開工報告表(PDF、Word 或 .odt)';
         koErr.style.display = '';
         return;
       }

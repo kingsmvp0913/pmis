@@ -15,7 +15,7 @@
  * 的註解)。故輸入輸出一律用 ASCII 暫存檔名,呼叫端不必自己處理。
  *
  * Exports:
- *   isWordFile(name)              副檔名是不是 .doc/.docx
+ *   isWordFile(name)              副檔名是不是 .doc/.docx/.odt
  *   convertToPdf(buffer, name)    → Promise<Buffer>(PDF 內容)
  */
 const fs = require('fs');
@@ -28,7 +28,16 @@ const TIMEOUT_MS = 120000;
 
 let seq = 0;
 
-const isWordFile = (name) => /\.docx?$/i.test(String(name || ''));
+/**
+ * 副檔名是不是 Word COM 開得起來的文件檔。
+ *
+ * **`.odt` 也算**:承辦人手上真的有 LibreOffice 存的 OpenDocument
+ * (`模板\DEBUG專用` 14 份裡就有 2 份),Word 開得起來、轉出來的 PDF 也讀得到
+ * (實測 5 欄與 8 欄)。不認的話它會被當成 PDF 直接餵給 OCR,
+ * 前端收到的是「OCR 全部解析度皆失敗」——**訊息在騙人**,承辦人會去查掃描品質,
+ * 而真正的原因是根本沒轉檔。
+ */
+const isWordFile = (name) => /\.(docx?|odt)$/i.test(String(name || ''));
 
 // Windows PowerShell 5.1(非 pwsh 7)。同 template-engine.js / ocr/index.js 的理由:
 // COM 型別只在 5.1 下載得動。三處各一份是刻意的,不為此建共用模組讓各層互相依賴。
@@ -51,7 +60,9 @@ const DRIVER = path.join(__dirname, 'doc-convert.ps1');
  * @throws {Error} Word 不可用或轉檔失敗;訊息不含伺服器路徑,呼叫端可直接回前端
  */
 function convertToPdf(buffer, originalName) {
-  const ext = /\.docx$/i.test(String(originalName || '')) ? '.docx' : '.doc';
+  // 副檔名要照原樣落檔:Word 靠它決定用哪個轉換器,.odt 存成 .doc 會開不起來。
+  const m = String(originalName || '').match(/\.(docx|odt)$/i);
+  const ext = m ? `.${m[1].toLowerCase()}` : '.doc';
   const base = path.join(os.tmpdir(), `pmis-doc-${process.pid}-${++seq}`);
   const inPath = base + ext;      // ASCII 檔名:中文路徑 Word COM 開不起來
   const outPath = base + '.pdf';
