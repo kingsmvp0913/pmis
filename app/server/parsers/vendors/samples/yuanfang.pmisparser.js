@@ -1,22 +1,4 @@
 /**
- * ⚠️⚠️ **這支還沒交付,有一個已知的讀錯,不要安裝到 data/vendor-parsers/** ⚠️⚠️
- *
- * **跨三行的名稱只收到後半段。** 實測古坑國小 595 列裡有 34 列(每天 2 列)
- * 中招:項次 4 真正的名稱是「4.既有牆面、地坪、磁磚、衛生設備、給排水設施、
- * 搗擺及天花板等拆除(含切割)及運棄」,讀出來只有「設施、搗擺及天花板等拆除
- * (含切割)及運棄」——前半段掉了,連帶 splitNo 切不出項次、項次變成名稱本身。
- * 國中案 612 列裡 102 列中招(每天 6 列)。
- *
- * 根因在 `rowsFrom` 的對稱收編:名稱佔三帶(上/中/下)而數值在中間那帶時,
- * `for k=1..2 && !名.length` 在 k=1 找到東西就停,收到的順序與完整性都不對。
- * 要改成「往上連續收到遇見非純名稱帶為止,往下同理」,並保持上→下的順序。
- *
- * 其餘部分實測是對的:兩案各 17 天、每天 35 列、單位零缺漏、header 九欄
- * (含星期、進度、開工日)全部正確、第二聯的單價與金額也對。
- * **修完那一條之後要重跑 check-parser 三關才算完成。**
- *
- * ─────────────────────────────────────────────────────────────────────
- *
  * yuanfang.pmisparser.js — 元方營造有限公司施工日誌讀取器(古坑國中小老舊廁所整修)
  *
  * vendorKey 取自**決標公告的得標廠商**(古坑國中小廁所決標公告 A1150508);
@@ -49,9 +31,15 @@
  * 「1.乙種施工圍籬…」「2.工程告示牌…」,費用項寫成「伍、營造綜合保險費」。
  * 沒有獨立的項次欄,只能從名稱切。
  *
- * ── 名稱跨行,數值自己一行 ──
- * 名稱佔 y655 與 y643 兩帶,而單位與數值在數值帶。數值帶自己沒有名稱時要
- * 一上一下對稱收編(同沅隆/明德的作法)。
+ * ── 名稱橫跨三帶,而中間那一段就印在數值帶上 ──
+ * 項次 4 長這樣:上一帶「4.既有牆面、地坪、磁磚、衛生設」、數值帶自己
+ * 「設施、搗擺及天花板等拆除(含切割」、下一帶「(含合法證明);環境保護與清潔」。
+ * **不能「數值帶自己有名稱就不往外收」**——那只會拿到中間那一段,而且切不出項次。
+ * 界線用「帶頭有沒有項次標記」(見 rowsFrom)。
+ *
+ * ── 兩個欄位的值會黏在同一個 item ──
+ * 同一列的「1.00    162,321.」是一個 item,整個丟給 num() 得 NaN,
+ * 契約數量與契約單價會一起變 null。用 `w / s.length` 切 token(見 tokens)。
  *
  * ── 進度是 PDF 印的百分數(0.33%),照收不換算。
  */
@@ -113,6 +101,26 @@ function bands(items) {
 const bandText = (b) => b.items.map((i) => i.s).join('');
 const findBand = (bs, re) => bs.find((b) => re.test(despace(bandText(b)))) || null;
 
+/**
+ * 一個 item 切成 token,各自算中心 x。
+ *
+ * **兩個欄位的值常常黏在同一個 item 裡**:項次 4 那列的
+ * 「1.00    162,321.」是一個 item(契約數量與契約單價黏在一起),
+ * 整個丟給 num() 得到 NaN,兩欄一起變 null——實測古坑國小 34 列、國中 102 列
+ * 的契約單價就是這樣掉的。用 `w / s.length` 推每個字元的 x,再取 token 中心歸欄。
+ */
+function tokens(it) {
+  const s = String(it.s);
+  const per = s.length ? it.w / s.length : 0;
+  const out = [];
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    out.push({ s: m[0], cx: it.x + (m.index + m[0].length / 2) * per });
+  }
+  return out;
+}
+
 /** 最近的表頭中心;超過 MAX_DIST 就不指派(見檔頭)。 */
 function nearest(cols, cx) {
   let best = null;
@@ -143,17 +151,31 @@ function rowsFrom(bs, hb, cols, 名稱右界) {
     const u = b.items.map((it) => unitOf(it.s)).find((x) => x);
     if (!u) continue;
     const own = b.items.filter((it) => centerOf(it) < 名稱右界).map((it) => it.s).join('');
-    const 名 = [];
-    if (text(own)) 名.push(own);
-    for (let k = 1; k <= 2 && !名.length; k++) {
-      for (const nb of [body[i - k], body[i + k]]) {
-        if (!nb) continue;
-        if (!nb.items.every((it) => centerOf(it) < 名稱右界)) continue;
-        const t = bandText(nb);
-        if (text(t)) 名.push(t);
+    // **名稱的第二段常常就印在數值帶上**(項次 4:上一帶「4.既有牆面、地坪、磁磚、
+    // 衛生設」、數值帶自己「設施、搗擺及天花板等拆除(含切割」、下一帶
+    // 「(含合法證明);環境保護與清潔」)。所以不能「own 非空就不往外收」——
+    // 那會只拿到中間那一段,而且 splitNo 切不出項次。實測古坑國小 595 列裡
+    // 34 列、國中 612 列裡 102 列都是這樣被切掉前半的。
+    //
+    // 界線用「帶頭有沒有項次標記」:往上收到**帶項次的那一帶為止(含)**,
+    // 往下收到**下一個帶項次之前**。用「離最近的名稱帶」會把名稱接到隔壁項目上。
+    const 純名稱 = (x) => x && x.items.every((it) => centerOf(it) < 名稱右界) && text(bandText(x));
+    const 帶項次 = (x) => /^([0-9]{1,3}|[壹貳參肆伍陸柒捌玖拾一二三四五六七八九十]{1,3})[.、]/
+      .test(despace(bandText(x)));
+    const up = [];
+    if (!/^([0-9]{1,3}|[壹貳參肆伍陸柒捌玖拾一二三四五六七八九十]{1,3})[.、]/.test(despace(own))) {
+      for (let k = i - 1; k >= 0; k--) {
+        if (!純名稱(body[k])) break;
+        up.unshift(bandText(body[k]));
+        if (帶項次(body[k])) break;
       }
     }
-    const { 項次, 名稱 } = splitNo(名.join(''));
+    const down = [];
+    for (let k = i + 1; k < body.length; k++) {
+      if (!純名稱(body[k]) || 帶項次(body[k])) break;
+      down.push(bandText(body[k]));
+    }
+    const { 項次, 名稱 } = splitNo([...up, own, ...down].filter((s) => text(s)).join(''));
     if (!名稱) continue;
     const row = {
       項次: 項次 || 名稱, 工程項目: 名稱, 單位: u,
@@ -162,10 +184,12 @@ function rowsFrom(bs, hb, cols, 名稱右界) {
     };
     for (const it of b.items) {
       if (centerOf(it) < 名稱右界) continue;
-      const key = nearest(cols, centerOf(it));
-      if (!key || key === '備註' || key === '單位') continue;
-      const v = num(it.s);
-      if (v != null && row[key] == null) row[key] = v;
+      for (const t of tokens(it)) {
+        const key = nearest(cols, t.cx);
+        if (!key || key === '備註' || key === '單位') continue;
+        const v = num(t.s);
+        if (v != null && row[key] == null) row[key] = v;
+      }
     }
     out.push(row);
   }
