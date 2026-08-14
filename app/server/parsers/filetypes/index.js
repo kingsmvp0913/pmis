@@ -11,6 +11,8 @@
  *   來自 pdf.js  :extractPages, rowsFromItems, extractRows, extractItems
  *   來自 xlsx.js :readWorkbook, readSheet, gridFromWorksheet,
  *                 colToIndex, indexToCol, excelSerialToISO, isoToExcelSerial
+ *   來自 docx.js :readDocx —— **只吃 `.docx`**;`.doc`(97-2003)仍然讀不了,
+ *                 一律先用 Word COM 轉 PDF(data/parser-tools/doc-to-pdf.ps1)。
  */
 const { extractPages, rowsFromItems, extractRows, extractItems } = require('./pdf');
 const {
@@ -22,6 +24,7 @@ const {
   excelSerialToISO,
   isoToExcelSerial,
 } = require('./xlsx');
+const { readDocx } = require('./docx');
 
 module.exports = {
   extractPages,
@@ -35,4 +38,5 @@ module.exports = {
   indexToCol,
   excelSerialToISO,
   isoToExcelSerial,
+  readDocx,
 };

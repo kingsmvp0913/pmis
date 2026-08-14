@@ -22,8 +22,11 @@ const DailyLogs = (() => {
     // 可多選:明德那家的兩聯分在**兩個 PDF 檔**(第一聯有天氣與進度、第二聯有
     // 完整明細含單價金額),只送一個檔不是少了天氣就是少了單價,而 SP3 只會說
     // 「此格式不提供」然後放行——少東西不會有人發現。久木那種一案六份月檔同理。
+    // `.xlsm` 也要收:橋頭/許厝那兩案的日誌本來就是 .xlsm(寶嶸,60 天/1980 列),
+    // 漏了它承辦人在檔案選擇器裡根本看不到自己的檔。
+    // `.docx` 是玉森那六案的第一聯(天氣/星期/實際進度/出工人數只在那裡)。
     const fileI = el('input', {
-      class: 'form-control', type: 'file', multiple: true, accept: '.pdf,.xls,.xlsx,.docx',
+      class: 'form-control', type: 'file', multiple: true, accept: '.pdf,.xls,.xlsx,.xlsm,.docx',
     });
     const parseBtn = el('button', { class: 'btn', type: 'button' }, '驗證施工日誌');
     const scanBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '辨識掃描件');

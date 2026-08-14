@@ -41,6 +41,24 @@ const HEADER_FIELDS = [
 
 const isBlank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
 
+/**
+ * 兩個 header 值算不算同一個值。
+ *
+ * **數值不能用字串比**:玉森的累計預定進度,第一聯是 Word 上印好的 `0.84%`(→0.84),
+ * 第二聯是 Excel 一天天加出來的 `0.8400000000000001`。字串比對之下每一天都是衝突,
+ * 六案實測噴 256 個——**全是浮點累加誤差**,真正該看的衝突會被淹掉。
+ * 容差取 1e-9:累加誤差在 1e-15 量級,而有意義的差異(0.28 對 0.56)大得多,
+ * 不會被這個容差蓋掉。
+ */
+function 同值(a, b) {
+  const x = Number(a);
+  const y = Number(b);
+  if (Number.isFinite(x) && Number.isFinite(y) && a !== '' && b !== '') {
+    return Math.abs(x - y) <= 1e-9;
+  }
+  return String(a) === String(b);
+}
+
 /** 明細完整度:有單價的列數優先,其次列數。單價是第二聯才有的東西。 */
 function completeness(day) {
   const rows = (day && day.dailyRows) || [];
@@ -81,7 +99,7 @@ function mergeDays(dayLists) {
         if (isBlank(a)) { prev.header[f] = b; continue; }
         // 兩邊都有值且不同:保留先出現的,但一定要報出來。靜默挑一個會讓
         // 「這兩份檔其實不是同一案」這種事永遠看不見。
-        if (String(a) !== String(b)) conflicts.push({ 日期: key, 欄位: f, 值: [a, b] });
+        if (!同值(a, b)) conflicts.push({ 日期: key, 欄位: f, 值: [a, b] });
       }
       if (moreComplete(d, prev)) prev.dailyRows = d.dailyRows || [];
       for (const [k, v] of Object.entries(d.extras || {})) {
