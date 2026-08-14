@@ -20,11 +20,16 @@ description: 產生單一廠商的施工日誌讀取器(.pmisparser.js)。輸入
    卻**永遠不會被叫到,而且沒有任何錯誤訊息**,看起來就像「這家還沒有讀取器」。
    **禁止推定;測試一定要斷言 `meta.vendorKey`**(原本沒有任何測試驗它,所以錯名字能一直躺著)。
    日誌內的廠商名只能當佐證:三崙那案的分頁抬頭寫著「承昇營造」,那是拿承昇的檔改的殘留。
-2. **施工日誌樣本檔**路徑(xls/xlsx/pdf)。**`.doc`/`.docx` 讀不了**——`filetypes/` 只有
-   `pdf.js` 與 `xlsx.js`,沒有 docx.js(別照舊版分層架構的描述去找)。`.doc` 更是連讀都讀不了
-   (OLE2 二進位,SheetJS 開不了,文字流沒有表格欄界)。作法:**用 Word COM 另存 PDF**
+2. **施工日誌樣本檔**路徑(xls/xlsx/pdf/**docx**)。
+   **`.docx` 讀得了**(2026-08-14 起):`ctx.filetypes.readDocx` → `{ blocks, tables }`,
+   純 Node(jszip)不需 Word COM。用法與坑見下方「Word(.docx)」那節。
+   **`.doc`(Word 97-2003)仍然讀不了**——OLE2 二進位,SheetJS 開不了,
+   文字流沒有表格欄界。作法:**用 Word COM 另存 PDF**
    (`data/parser-tools/doc-to-pdf.ps1`,`SaveAs2($path,17)`),讀轉出來的 PDF;
-   讀取器收到 .doc 要 throw 並在訊息裡講「請先轉 PDF」。
+   讀取器收到 .doc 要 throw 並在訊息裡講「請先轉 PDF 或另存 .docx」。
+   ⚠️ 那支 ps1 在目前這台會噴 `Cannot convert the "True" value of type "bool"`,
+   把 `Open($In, $false, $true)` 改成單參數 `Open($In)` 就好;中文路徑要先複製成
+   ASCII 檔名再轉;轉完確認 `Get-Process WINWORD` 是 0。
 3. **目標 schema**:見下方「統一輸出 schema」。
 
 ## 第 0 步:先盤點,再確認「有沒有現成的能用」(做完才准動手)
@@ -134,8 +139,20 @@ module.exports = {
     - `extractPages(filePath)` → 每頁純文字(依 `transform[5]` y 座標換行);**對每頁做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。只適合單欄/標籤-值版面。
     - **`extractItems(filePath)` → 每頁的原始 item `{x, y, w, s}`(座標版)**。多欄表格抽成文字後會變成「1.002,500.00」這種黏連字串,還原不回欄位;**沒有座標就只能靠 token 順序猜,而順序在多欄表格裡不成立**(見下方「每家要客製」第 2 點)。
   - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。⑥**error cell 陷阱**:SheetJS 對 `#REF!`/`#VALUE!` 格的 `.v` 是「錯誤代碼數字」(#REF!→23、#VALUE!→15),會偽裝成正常數字。**已在 `gridFromWorksheet` 於 grid 端把 `t==='e'` 轉 null**(所有 Excel 讀取器自動受保護),但仍要警覺:別去讀那些整片 `#REF!` 的 snapshot sheet(見上「多視圖選乾淨來源」)。
-  - ⚠️ **沒有 Word 讀取器**:`filetypes/index.js` 只 re-export `pdf.js` 與 `xlsx.js`。
-    `.docx`/`.doc` 都讀不了,`.doc` 要先用 Word COM 轉 PDF(見「輸入」第 2 點)。
+  - **Word `.docx`(`docx.js`,2026-08-14 新增)**:`readDocx(path)` → `{ blocks, tables }`,
+    純 Node(jszip),**不需 Word COM**。`.doc` 仍讀不了(見「輸入」第 2 點)。
+    - **`blocks` 是依文件順序的段落與表格**(`{type:'p',text}` / `{type:'tbl',rows}`)。
+      **段落不能丟掉**:玉森第一聯是**一天一個表格,而那天的日期印在表格前面的段落上**;
+      只用 `tables` 的話每一天都沒有日期,而沒有日期的日誌在上游等於整份沒資料。
+    - 合併儲存格已照 xlsx.js 的慣例**填滿**(`gridSpan` 複製、`vMerge` 沿用上一列同欄),
+      讀取器可以用固定欄索引取值。
+    - ⚠️ **最容易錯的一條:資料列不可以壓縮相鄰空格**。合併填充讓「本日」「累計」
+      各佔數欄,當天沒填時那些欄都是空字串,「連續同值只留一個」會把它們併成一格、
+      **整列往左移一欄**——`體力工 | 本日空 空 | 累計 2 2` 讀成「體力工 2」。
+      **表頭列每格都有值,壓縮才安全**:用表頭定欄區段,資料列照區段取。
+      標籤-值那種每格都有值的列才可以壓縮後兩兩配對。
+    - 正典:`yusen.pmisparser.js` 的 `parseFirstCopy`/`headerSegments`/`labelPairs`,
+      測試在 `tests/filetypes-docx.test.js` 與 `tests/parser-yusen.test.js`。
 - **`app/server/parsers/vendors/samples/<key>.pmisparser.js`**:只放**該家版面規則**(從原始結構取值 → 統一 schema)。
 - **純函式 `parsePage(rawText 或 rawGrid)`**:單頁/單日解析,供 `selfTest` 內建樣本呼叫(不碰檔案系統)。
 
@@ -171,6 +188,21 @@ module.exports = {
 ### PDF(座標型)
 - **表頭欄界不能直接用 `[x, x+w]`**:表頭多半置中或靠左、值靠右,「1.00」的中心會落在
   表頭右界外 0.05 點,整欄變 null(宜謙實測)。改用**各表頭的起點 x 當分界**。
+- ⚠️ **先數一數「表頭有幾個標籤」與「資料有幾個數值欄」對不對得上**。
+  力龍那家表頭只印 6 個標籤(施工項目/單位/契約數量/本日完成數量/完成累計數量/備註),
+  資料卻有 **7 個數值欄**——契約單價、契約複價、累計完成金額**全落在「備註」標籤左右**。
+  照通例用表頭起點推,累計完成數量的右界會一路吃到備註,把契約單價收進去,
+  **而複價本身也是個合法數字,錯位不會有任何欄位變 null**。
+  對不上時:推得出來的那幾欄照表頭推,推不出來的**用實測值分佈定界**,
+  並**用算式核對**(力龍:單價 × 契約數量 = 表上印的契約複價,逐列成立)。
+  版面改版時結果會是整欄 null(完整性關卡看得見),不會靜靜錯位。
+- **`########` 是 Excel 欄寬不足印出來的,不是資料**(力龍的累計金額欄實測)。
+  `text()`/`num()` 要把整串 `#` 當 null,否則它會變成一個看起來有值的欄位。
+- **單位的上標數字印在另一個 y 帶**:力龍材料表的 M3,「M」在 y356.5、上標「3」在 y361.0
+  (高 3pt、x 落在 item 右緣 +0~8、寬度 ≤4.5)。不合回來就是裸的「M」,
+  **看起來合法卻錯的單位比 null 危險**。兩個副作用:①上標會被收成一個叫「3」的欄名,
+  而且因為離單位更近,單位會被指派到它身上;②同一欄的值可能分成兩個 item(「0.0」+「M」),
+  只取第一個單位就掉了。
 - **項次與名稱常常都落在「工程項目」表頭的左邊**(嘉原名稱 x87 vs 表頭 x176、
   禾結名稱 x75 vs 表頭 x111)。左半只能靠**形狀**分:最左 token 像項次(數字/中文大寫/
   天干/`A.壹.1`)就是項次,其餘串起來是名稱。
@@ -235,7 +267,10 @@ items),但只用於 `daily-log-scan.js` 的**涵蓋範圍偵測**(日期實測 1
 
    a. `cd app && npx jest` 全綠;`selfTest(ft)` 回 true。
 
-   b. **解析完整性 + 名稱形狀健檢**:`node scripts/check-parser.js <vendorKey> <樣本檔>`。
+   b. **解析完整性 + 名稱形狀健檢**:`node scripts/check-parser.js <讀取器檔名> <樣本檔>`。
+      ⚠️ 第一個參數要傳**檔名 stem**(`lilong`)或完整路徑,**不是中文 vendorKey**——
+      傳「力龍企業有限公司」會去找 `力龍企業有限公司.pmisparser.js`,找不到就報
+      「找不到讀取器」,看起來像讀取器沒裝好。(它也會回退查 registry,但那要 DB 裡裝過。)
       解析**整份**樣本,統計「非大類列中,單位/契約數量/契約單價任一為 null」的比例,
       並掃描項目名稱的形狀。**兩者不是 0 就不得交付**——要逐列說明為何(原文件真的沒有
       vs 讀取器讀錯)。
