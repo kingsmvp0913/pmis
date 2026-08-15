@@ -307,6 +307,46 @@ function 費用項目單價公式(list) {
   return out;
 }
 
+/**
+ * 「每日施工紀錄」費用項目那幾列的底色。
+ *
+ * ## 為什麼要由系統重畫,不能靠範本
+ *
+ * 範本把費用列(最後五列)漆成淺綠 `E2F0D9`,但那個顏色綁在**固定的列號**上
+ * (範本是 r33~r37)。實際項目數每案不同,擴列/刪列之後綠色就留在原地:
+ * 元長實測 33 項 → 費用落在 r30~r34,而綠色還在 r33~r34
+ * ——**貳/參/肆 沒有底色、伍/陸 有**,半塊有色半塊沒有。
+ * 值全都是對的,所以逐格比對永遠看不見(同 [[report-visual-check]] 那一類)。
+ *
+ * ## 為什麼要連「施工列」一起還原
+ *
+ * 項目數超過範本容量時走 `insertRowsBelow`,它是從最後一列 FillDown ——
+ * 而最後一列是綠的,於是新插的列全部帶綠。不還原的話,綠色會反過來蓋到施工列上。
+ * 施工列的原樣是**A~I 無底色 + J~WF 橘色 `FBE5D6`**(日期欄),兩段要分開下。
+ *
+ * 費用項目一律在尾端(見 `費用項目全在尾端`),所以兩塊都是連續區間,各一道指令。
+ */
+const 每日底色 = { 費用: 'E2F0D9', 日期欄: 'FBE5D6' };
+const 每日欄數 = 604;        // A~WF,與範本的 !ref 一致
+const 前段欄數 = 9;          // A~I:項次/名稱/單位/契約數量/單價/複價/累計/金額/百分比
+
+function 費用列底色(list) {
+  const { first } = INDEX_ROWS.每日施工紀錄;
+  const 費用起 = list.findIndex((it) => !IS_WORK_ITEM(it));
+  const 末列 = first + list.length - 1;
+  const ops = [];
+  // 施工列:先還原成範本的樣子(綠色可能是上一版留下來的)
+  const 施工末 = 費用起 < 0 ? 末列 : first + 費用起 - 1;
+  if (施工末 >= first) {
+    ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first, lastRow: 施工末, firstCol: 1, lastCol: 前段欄數, fill: null });
+    ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first, lastRow: 施工末, firstCol: 前段欄數 + 1, lastCol: 每日欄數, fill: 每日底色.日期欄 });
+  }
+  if (費用起 >= 0) {
+    ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first + 費用起, lastRow: 末列, firstCol: 1, lastCol: 每日欄數, fill: 每日底色.費用 });
+  }
+  return ops;
+}
+
 // 監造報表項目區的下界:項目列的正下方就是報表正文。人工報表把用不到的項目列
 // **整列刪掉**,正文因此緊貼最後一個真項目;範本則預留到第 40 列。
 const BODY_ANCHOR = /^二[、,.]?監督/;
@@ -409,6 +449,7 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
       : [null, null, null, null, null]);
   }
   ops.push({ type: 'setRange', sheet: SHEET, startAddr: `A${FIRST_ROW}`, values });
+  ops.push(...費用列底色(list));
   // 數字進去之後才知道要多寬。契約數量欄是固定寬度但數量不是——2,600.00 放不下,
   // Excel 就印出 ########;**值是對的,逐格比對永遠看不到**,要把報表印出來才看得見。
   // 承辦人是自己把那一欄拉寬的(49 份人工報表實測 9.67~13.00)。

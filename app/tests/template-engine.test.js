@@ -82,3 +82,29 @@ describe('fillTemplate 前置檢查(不啟 Excel)', () => {
     ).rejects.toThrow(/範本不存在/);
   });
 });
+
+// setRowFill:費用列底色(見 contract-items 的 費用列底色)。
+// 參數驗證要嚴,壞值往下走會變成 driver 裡 Convert.ToInt32 的 COM 例外,
+// 而那條路徑的訊息對承辦人完全沒有意義。
+describe('setRowFill 參數驗證', () => {
+  const ok = { type: 'setRowFill', sheet: '每日施工紀錄', firstRow: 30, lastRow: 34, firstCol: 1, lastCol: 604, fill: 'E2F0D9' };
+  test('合法參數通過', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [ok])).not.toThrow();
+  });
+  test('fill 為 null 代表清除,合法', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, fill: null }])).not.toThrow();
+  });
+  test('fill 不是 RRGGBB 要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, fill: 'green' }])).toThrow(/RRGGBB/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, fill: '#E2F0D9' }])).toThrow(/RRGGBB/);
+  });
+  test('lastRow 小於 firstRow 要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstRow: 34, lastRow: 30 }])).toThrow(/firstRow/);
+  });
+  test('lastCol 小於 firstCol 要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstCol: 9, lastCol: 1 }])).toThrow(/firstCol/);
+  });
+  test('列號非正整數要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstRow: 0 }])).toThrow(/firstRow/);
+  });
+});

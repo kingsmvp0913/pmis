@@ -461,3 +461,56 @@ test('刪列指令排在寫值之前', () => {
   expect(ops.findIndex((o) => o.type === 'deleteRows'))
     .toBeLessThan(ops.findIndex((o) => o.type === 'setRange'));
 });
+
+// ── 每日施工紀錄:費用列的底色 ────────────────────────────
+// 範本把費用列漆成淺綠,但顏色綁在**固定列號**(r33~r37)。項目數每案不同,
+// 擴列/刪列之後綠色就留在原地——元長實測 33 項時費用落在 r30~r34,綠色卻還在
+// r33~r34:貳/參/肆 沒底色、伍/陸 有。值全是對的,逐格比對永遠看不見。
+describe('費用列底色', () => {
+  const fills = (items) => itemsToOperations(items, 0, null)
+    .filter((o) => o.type === 'setRowFill');
+  const mk = (n主體, n費用) => {
+    const out = [];
+    for (let i = 1; i <= n主體; i++) out.push({ 項次: String(i), 項目: `工項${i}`, 單位: '式', 數量: 1, 單價: 100, 複價: 100 });
+    for (const no of ['貳', '參', '肆', '伍', '陸'].slice(0, n費用)) {
+      out.push({ 項次: no, 項目: `費用${no}`, 單位: '式', 數量: 1, 單價: 10, 複價: 10 });
+    }
+    return out;
+  };
+
+  test('綠色蓋在費用項目那幾列,不是範本的固定列', () => {
+    const ops = fills(mk(28, 5));           // 33 項 → 費用在 r30~r34
+    const 綠 = ops.find((o) => o.fill === 'E2F0D9');
+    expect(綠).toMatchObject({ sheet: '每日施工紀錄', firstRow: 30, lastRow: 34, firstCol: 1 });
+  });
+
+  // 項目數變了,綠色要跟著移——這是整個修正的重點
+  test('項目數不同,綠色跟著移', () => {
+    expect(fills(mk(10, 5)).find((o) => o.fill === 'E2F0D9'))
+      .toMatchObject({ firstRow: 12, lastRow: 16 });
+    expect(fills(mk(50, 5)).find((o) => o.fill === 'E2F0D9'))
+      .toMatchObject({ firstRow: 52, lastRow: 56 });
+  });
+
+  // 超過範本容量時走 insertRowsBelow,它是從最後一列 FillDown——而最後一列是綠的,
+  // 新插的列會全部帶綠。不還原施工列的話,綠色會反過來蓋到施工項目上。
+  test('施工列要還原成範本的樣子(A~I 無底色 + 日期欄橘色)', () => {
+    const ops = fills(mk(28, 5));
+    const 清除 = ops.find((o) => o.fill === null);
+    const 橘 = ops.find((o) => o.fill === 'FBE5D6');
+    expect(清除).toMatchObject({ firstRow: 2, lastRow: 29, firstCol: 1, lastCol: 9 });
+    expect(橘).toMatchObject({ firstRow: 2, lastRow: 29, firstCol: 10, lastCol: 604 });
+  });
+
+  // 日期欄的橘色不可以被一起清掉:那是範本原本就有的,清了整片日期區會變白
+  test('清除範圍只到 I 欄,不碰日期欄', () => {
+    const 清除 = fills(mk(28, 5)).find((o) => o.fill === null);
+    expect(清除.lastCol).toBe(9);
+  });
+
+  test('整份都是施工項目時不下綠色指令', () => {
+    const ops = fills(mk(20, 0));
+    expect(ops.find((o) => o.fill === 'E2F0D9')).toBeUndefined();
+    expect(ops.find((o) => o.fill === null)).toMatchObject({ firstRow: 2, lastRow: 21 });
+  });
+});

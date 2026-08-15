@@ -136,6 +136,36 @@ try {
                     if ([double]$col.ColumnWidth -lt $before) { $col.ColumnWidth = $before }
                 }
             }
+            # Row background fill, applied by row number over a fixed column span.
+            #
+            # Why this is needed: the template paints the fee rows (the last five item
+            # rows) light green, but that colour lives at FIXED row numbers. The number
+            # of real items differs per project, so after deleteRows/insertRowsBelow the
+            # green sits on whatever row happens to be there — measured on 元長: fee items
+            # landed on rows 30-34 while the green stayed on 33-34. Half the block is
+            # coloured and half is not, and no cell-by-cell diff can see it because the
+            # VALUES are all correct.
+            #
+# One rectangle per operation, not a list of rows: the daily-log sheet is 604
+            # columns wide and a project can have 200 item rows, so per-row calls would be
+            # 200 COM round-trips for what Excel does in one. The fee items are always the
+            # last rows (see 費用項目全在尾端), so the block is contiguous either way.
+            #
+            # `fill` is an RGB string like 'E2F0D9'; $null clears the fill. Excel's
+            # Interior.Color is BGR, hence the byte swap.
+            'setRowFill' {
+                $rng = $ws.Range(
+                    $ws.Cells([int]$op.firstRow, [int]$op.firstCol),
+                    $ws.Cells([int]$op.lastRow, [int]$op.lastCol))
+                if ($null -eq $op.fill -or '' -eq $op.fill) {
+                    $rng.Interior.ColorIndex = -4142   # xlColorIndexNone
+                }
+                else {
+                    $rgb = [Convert]::ToInt32([string]$op.fill, 16)
+                    $bgr = (($rgb -band 0xFF) -shl 16) -bor ($rgb -band 0xFF00) -bor (($rgb -shr 16) -band 0xFF)
+                    $rng.Interior.Color = $bgr
+                }
+            }
         }
     }
 

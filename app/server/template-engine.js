@@ -41,6 +41,7 @@ function buildJob(templatePath, outPath, operations) {
 
   const KNOWN = new Set([
     'setCell', 'setRange', 'copyRowDown', 'insertRowsBelow', 'deleteRows', 'autoFitColumns',
+    'setRowFill',
   ]);
   const isPosInt = (n) => Number.isInteger(n) && n >= 1;
   for (const op of operations) {
@@ -66,6 +67,18 @@ function buildJob(templatePath, outPath, operations) {
       if (!Array.isArray(op.cols) || !op.cols.length
         || !op.cols.every((c) => typeof c === 'string' && /^[A-Z]{1,3}$/.test(c))) {
         throw new Error('autoFitColumns 的 cols 須為欄名陣列(如 ["H","I"])');
+      }
+    } else if (op.type === 'setRowFill') {
+      if (!isPosInt(op.firstRow) || !isPosInt(op.lastRow) || op.lastRow < op.firstRow) {
+        throw new Error('setRowFill 的 firstRow/lastRow 須為正整數且 lastRow >= firstRow');
+      }
+      if (!isPosInt(op.firstCol) || !isPosInt(op.lastCol) || op.lastCol < op.firstCol) {
+        throw new Error('setRowFill 的 firstCol/lastCol 須為正整數且 lastCol >= firstCol');
+      }
+      // 只收 RRGGBB 或 null(清除):放行任意字串的話 driver 的 Convert.ToInt32 會丟
+      // COM 例外,而那條路徑的錯誤訊息對承辦人完全沒有意義。
+      if (op.fill != null && !/^[0-9A-Fa-f]{6}$/.test(String(op.fill))) {
+        throw new Error('setRowFill 的 fill 須為 RRGGBB 六位十六進位字串,或 null 表示清除');
       }
     }
   }
