@@ -26,6 +26,7 @@ const { verifyToken } = require('./auth');
 const { constructionCost } = require('./contract-items');
 const multer = require('multer');
 const { saveAttachment } = require('./project-attachments-routes');
+const { safeResolve } = require('./history-routes');
 const { readAwardNotice } = require('./award-notice');
 const { loadGroup } = require('./award-group');
 const { workbookPath } = require('./report-workbook');
@@ -47,6 +48,15 @@ const AWARD_REQUIRED = ['project_no', 'name', 'award_amount', 'school_id', 'vend
 // 「停在找不到廠商的狀態就送出」在 body 裡表現為 vendor_id 空字串,必須擋下。
 // 陣列要另外擋:multipart 同名欄位重複出現時 body[k] 會是陣列,String(['a','b'])
 // 得到 'a,b' 就這樣穿透必填檢查,再被當成單一值寫進 DB。
+// projects.id 是 SERIAL(int4):非此形狀的 :id 永遠比不到任何一列,且會讓
+// PostgreSQL 丟型別錯誤被 catch 成 500,承辦人會以為系統壞了。
+// 本專案已有四份同名判斷(project-attachments-routes / project-basics-routes /
+// kickoff-routes / contract-items-routes)——依裁決不抽共用模組,第五份照抄保留。
+const INT4_MAX = 2147483647;
+function isIdShape(id) {
+  return /^[1-9][0-9]*$/.test(String(id)) && Number(id) <= INT4_MAX;
+}
+
 function isBlank(v) {
   return v == null || !(typeof v === 'number' || typeof v === 'string') || String(v).trim() === '';
 }
@@ -387,6 +397,114 @@ function registerRoutes(app) {
       // 狀態列失敗不該讓整個工程頁進不去,回 0 讓前端照常顯示「未完成」
       console.error('[projects] 讀取流程狀態失敗:', err);
       res.json({ contractItems: 0, logDays: 0 });
+    }
+  });
+
+  /**
+   * 一張決標拆成多個標的時,從既有工程複製出下一個。
+   *
+   * ## 為什麼是「複製」而不是「一個工程對多份報表」
+   *
+   * 2026-08-13 已裁決維持**一標的一工程**(見 award-group.js):系統無法從日誌內容
+   * 判斷標的——橋頭與許厝兩份日誌的工程名稱一模一樣、單價還共用同一套。
+   * 既然標的一定要人指定,做成一對多要在 contract_items/daily_records/報表路徑
+   * 三處都加一層標的維度,而操作成本並不會比較低。缺的只是「第二個工程要重打
+   * 一次共同欄位」,這支就是補那個缺口。
+   *
+   * ## 複製什麼、不複製什麼
+   *
+   * 用**排除清單**而不是列舉:欄位是會長的(duration_days 就是今天才加的),
+   * 列舉法會讓新欄位默默不被複製,而那種漏最難發現——畫面上兩個工程長得一樣,
+   * 只有報表寫出來才看得到差別。
+   *
+   * - `name` 由承辦人指定(兩個標的就是靠名稱分辨)
+   * - `actual_completion_date` 是各自的實際完工日,不是決標帶來的
+   * - `firm_doc_no` 是事務所自己的歸檔編號,一案一號
+   *
+   * **決標金額照抄總額**(承辦人 2026-08-15 選的:「我上傳附件後自己拆」)。
+   * 忘了拆的後果由 contract-items 那關擋:合計對不上決標金額時會擋下,
+   * 而那句訊息已經會講「這張決標有 N 個標的」(見該路由的 NO_AWARD_AMOUNT 附近)。
+   *
+   * 明細一律**不複製**:contract_items 與 daily_records 正是兩個標的不同的地方,
+   * 複製過去只會讓承辦人以為已經做過。監造報表檔同理,由 ensureWorkbook 另建。
+   */
+  const NOT_COPIED = new Set(['id', 'created_at', 'name', 'actual_completion_date', 'firm_doc_no']);
+  const COPY_ATTACHMENT_KINDS = ['award_notice', 'kickoff_report'];
+
+  app.post('/api/projects/:id/duplicate', verifyToken, async (req, res) => {
+    try {
+      if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+      const name = String((req.body && req.body.name) || '').trim();
+      if (!name) return res.status(400).json({ error: '請輸入新工程的名稱' });
+
+      const { rows: src } = await query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
+      if (!src[0]) return res.status(404).json({ error: '找不到工程' });
+      const s = src[0];
+      if (String(s.name).trim() === name) {
+        return res.status(400).json({ error: '新工程的名稱要與原工程不同,否則兩個標的分不出來' });
+      }
+      // 沿用建案的重複判準:案號 + 名稱都相同才算重複(同一案號下本來就會有多個標的)。
+      // 用 `= $1` 而不是 `IS NOT DISTINCT FROM`:後者測試用的 pg-mem 不支援
+      // (同 project-routes 既有的 COUNT(DISTINCT) / to_char 兩處註記)。
+      // project_no 建案時是必填,實務上不會是 null;真的是 null 時這條查不到、
+      // 不擋——與建案那條路的行為一致。
+      const { rows: dup } = await query(
+        'SELECT id, name FROM projects WHERE project_no = $1 AND name = $2',
+        [s.project_no, name]
+      );
+      if (dup[0]) {
+        return res.status(400).json({ error: `已有同案號同名的工程「${dup[0].name}」,請換一個名稱` });
+      }
+
+      const cols = Object.keys(s).filter((c) => !NOT_COPIED.has(c));
+      const { rows: made } = await query(
+        `INSERT INTO projects (name, ${cols.join(', ')})
+         VALUES ($1, ${cols.map((_, i) => `$${i + 2}`).join(', ')}) RETURNING *`,
+        [name, ...cols.map((c) => s[c])]
+      );
+      const created = made[0];
+
+      // 附件:承辦人 2026-08-15 選「都複製過去」——同一張決標、同一份開工報告表,
+      // 新工程立刻可以直接做價目表,不必把同樣的檔案再傳一次、九欄再核對一次。
+      // 複製失敗不 rollback 工程(沿用建案的立場:工程已建好,砍掉是更差的狀態),
+      // 但要誠實回報是哪一種附件沒帶過去。
+      const warnings = [];
+      for (const kind of COPY_ATTACHMENT_KINDS) {
+        const { rows: atts } = await query(
+          `SELECT file_path, original_name FROM project_attachments
+            WHERE project_id = $1 AND kind = $2 ORDER BY id DESC LIMIT 1`,
+          [s.id, kind]
+        );
+        if (!atts[0]) continue;
+        try {
+          const abs = safeResolve(atts[0].file_path);
+          if (!abs) throw new Error('附件路徑不合法');
+          await saveAttachment({
+            projectId: created.id,
+            kind,
+            buffer: fs.readFileSync(abs),
+            originalName: atts[0].original_name || `${kind}`,
+            userId: req.userId || null,
+          });
+        } catch (err) {
+          console.error(`[projects] 複製附件 ${kind} 失敗:`, err);
+          warnings.push(kind === 'award_notice' ? '決標公告' : '開工報告表');
+        }
+      }
+
+      res.json({
+        ok: true,
+        project: withComputed(created),
+        // 金額照抄的是**總額**,要當場講明白——他選的流程是自己拆,而忘了拆的話
+        // 要到價目表那關才會被擋,那時訊息講的是「合計對不上」,不會提醒他這件事。
+        提醒: s.award_amount != null
+          ? `決標金額照抄了原工程的 ${Number(s.award_amount).toLocaleString()},請改成本標的的金額`
+          : null,
+        attachment_warning: warnings.length ? `${warnings.join('、')}沒有複製過去,請手動上傳` : null,
+      });
+    } catch (err) {
+      console.error('[projects] 複製工程失敗:', err);
+      res.status(500).json({ error: '複製工程失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
     }
   });
 

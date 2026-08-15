@@ -28,6 +28,7 @@ const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
 const { basicsToOperations } = require('./project-basics');
+const { loadGroup } = require('./award-group');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -116,10 +117,17 @@ function itemRowCounts(xlsmPath) {
  * 挑到舊底稿殘留的那張(5 個檔案的第一張表施工小計全是南陽的 1,185,308)。
  */
 async function loadAward(projectId) {
-  const { rows } = await query('SELECT award_amount FROM projects WHERE id = $1', [projectId]);
-  if (!rows[0]) return { found: false, amount: null };
+  // project_no 一起取:合計對不上時要靠它查同案號的兄弟標的,才能分辨
+  // 「選錯價目表」與「決標金額還沒從總額拆成本標的的金額」這兩種完全不同的原因。
+  const { rows } = await query(
+    'SELECT award_amount, project_no FROM projects WHERE id = $1', [projectId]);
+  if (!rows[0]) return { found: false, amount: null, project_no: null };
   const a = rows[0].award_amount;
-  return { found: true, amount: a == null || a === '' ? null : Number(a) };
+  return {
+    found: true,
+    amount: a == null || a === '' ? null : Number(a),
+    project_no: rows[0].project_no,
+  };
 }
 
 /**
@@ -258,9 +266,24 @@ function registerRoutes(app) {
         // 合計必須等於決標金額。這條同時是挑表的判準與寫入的卡控——承辦人手動
         // 選錯組合時,擋在這裡的就是它。
         if (合計 !== award.amount) {
+          // 「複製為另一標的」照抄的是決標**總額**,要承辦人自己改成該標的的金額。
+          // 忘了改的話就會撞到這一關,而「合計與決標金額不符」會把他導去查價目表
+          // ——那份其實是對的。這個工程若還有同案號的兄弟標的,就把真正的原因講出來。
+          let hint = '';
+          try {
+            const g = await loadGroup(query, award.project_no);
+            if (g && g.標的數 > 1) {
+              hint = `。⚠️ 這張決標(${award.project_no})底下有 ${g.標的數} 個標的,` +
+                '本工程的決標金額看起來還是**整張決標的總額**——請先把它改成本標的的金額,' +
+                '再回來上傳。';
+            }
+          } catch (err) {
+            // 提示拿不到就只是少一句話,不能讓它把原本的卡控訊息也一起弄丟
+            console.error('[contract-items] 取決標群組失敗(略過提示):', err.message);
+          }
           return res.status(400).json({
             error: `選定分頁的合計 ${合計.toLocaleString()} 與決標金額 ` +
-              `${award.amount.toLocaleString()} 不符,請確認選的是正確的詳細價目表`,
+              `${award.amount.toLocaleString()} 不符,請確認選的是正確的詳細價目表${hint}`,
             合計, 決標金額: award.amount,
           });
         }

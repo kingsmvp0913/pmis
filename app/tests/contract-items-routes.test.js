@@ -312,3 +312,29 @@ describe('confirm 一併寫入工程基本資料', () => {
     expect(res.body.基本資料).toEqual({ 已寫入: addrs.length, 缺: 9 - addrs.length });
   });
 });
+
+// 「複製為另一標的」照抄的是決標**總額**,要承辦人自己改成該標的的金額。忘了改
+// 就會撞到「合計與決標金額不符」——而那句話會把他導去查價目表,那份其實是對的。
+test('合計對不上且同案號有兄弟標的時,直接講明是金額還沒拆', async () => {
+  const { app, token, id } = await makeApp({ award: 1684045 });
+  await db.query(`UPDATE projects SET project_no = 'CX-1', award_total = 1684045 WHERE id = $1`, [id]);
+  await db.query(
+    `INSERT INTO projects (name, project_no, award_amount, award_total)
+     VALUES ('重興國小汙水', 'CX-1', 1684045, 1684045)`);
+  feed('chongxing-toilet');
+  const res = await confirm(app, token, id, ['廁所.xls'], [{ file: '廁所.xls', name: '詳細價目表' }])
+    .expect(400);
+  expect(res.body.error).toMatch(/2 個標的/);
+  expect(res.body.error).toMatch(/總額/);
+});
+
+// 單一標的的案子不可以冒出這句話——那會把「選錯價目表」誤導成「金額沒拆」
+test('只有一個標的時不加那句提示', async () => {
+  const { app, token, id } = await makeApp({ award: 999999 });
+  await db.query(`UPDATE projects SET project_no = 'SOLO-1' WHERE id = $1`, [id]);
+  feed('chongxing-toilet');
+  const res = await confirm(app, token, id, ['廁所.xls'], [{ file: '廁所.xls', name: '詳細價目表' }])
+    .expect(400);
+  expect(res.body.error).toMatch(/不符/);
+  expect(res.body.error).not.toMatch(/個標的/);
+});

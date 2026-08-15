@@ -867,6 +867,10 @@
         const menu = el('div', { class: 'more-menu' }, [
           el('button', { type: 'button', onClick: () => { closeMoreMenu(); toggleHistory(p, panelRow); } }, '歷史'),
           el('button', { type: 'button', onClick: () => { closeMoreMenu(); window.location.hash = '/projects/' + p.id; } }, '詳細'),
+          // 一張決標拆成多個標的時用(重興的廁所+汙水)。決標公告與開工報告表只有
+          // 一份、到發包經費總表才分得開,而系統維持「一標的一工程」,所以要能
+          // 從既有工程複製出下一個,不必把共同欄位重打一次。
+          el('button', { type: 'button', onClick: () => { closeMoreMenu(); duplicate(p); } }, '複製為另一標的'),
           el('button', { class: 'danger', type: 'button', onClick: () => { closeMoreMenu(); remove(p); } }, '刪除'),
         ]);
         const moreBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '⋮');
@@ -1057,6 +1061,49 @@
       if (!ok) return;
       try { await Api.delete('submissions/' + r.id); showToast('已刪除', 'success'); await renderHistory(p, cell); }
       catch (e) { showToast(e.message, 'error'); }
+    }
+
+    /**
+     * 一張決標拆成多個標的:從既有工程複製出下一個。
+     *
+     * 決標公告與開工報告表只有一份、要到發包經費總表才分得開,而系統維持
+     * 「一標的一工程」(見 award-group.js 的裁決),所以缺的就是「第二個工程要把
+     * 共同欄位重打一次」。附件也一起帶過去,新工程可以直接做價目表。
+     */
+    async function duplicate(p) {
+      const nameI = el('input', { class: 'form-control', value: p.name });
+      const err = el('div', { class: 'error-msg', style: 'display:none' });
+      const okBtn = el('button', { class: 'btn', type: 'button' }, '建立');
+      const card = el('div', { class: 'card' }, [
+        el('div', { class: 'hint', style: 'margin-top:0' },
+          '同一張決標拆成兩個標的時用。決標公告與開工報告表會一起複製過去,'
+          + '契約項目與施工日誌不會(那正是兩個標的不同的地方)。'
+          + `決標金額會照抄原工程的${p.award_amount != null ? ` ${Number(p.award_amount).toLocaleString()}` : ''},`
+          + '請記得改成本標的的金額——沒改的話,上傳發包經費總表時會因為「合計對不上決標金額」被擋下。'),
+        el('div', { class: 'form-group' }, [el('label', {}, '新工程名稱'), nameI]),
+        err,
+        el('div', { class: 'form-actions' }, [okBtn]),
+      ]);
+      const dlg = modalDialog({ title: `複製為另一標的—${p.name}`, content: card });
+      const closeBtn = el('button', { class: 'btn btn-outline', type: 'button', onClick: () => dlg.close() }, '取消');
+      card.querySelector('.form-actions').insertBefore(closeBtn, okBtn);
+      nameI.focus();
+      okBtn.addEventListener('click', async () => {
+        err.style.display = 'none';
+        okBtn.disabled = true;
+        try {
+          const r = await Api.post(`projects/${p.id}/duplicate`, { name: nameI.value.trim() });
+          dlg.close();
+          // 提醒與警告都用 toast 講完再重載:金額沒改的後果要到 SP2 才會現形
+          if (r.提醒) showToast(r.提醒, 'info', 8000);
+          if (r.attachment_warning) showToast(r.attachment_warning, 'error', 8000);
+          showToast(`已建立「${r.project.name}」`, 'success');
+          load();
+        } catch (e) {
+          err.textContent = e.message;
+          err.style.display = '';
+        } finally { okBtn.disabled = false; }
+      });
     }
 
     async function remove(p) {

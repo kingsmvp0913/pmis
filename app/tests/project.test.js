@@ -714,3 +714,108 @@ describe('工程投保險種(多選)', () => {
     expect(rows[0].n).toBe(1);
   });
 });
+
+// ── 複製工程(一張決標拆多個標的)────────────────────────────
+// 2026-08-13 已裁決維持「一標的一工程」,缺的只是「第二個工程要重打一次共同欄位」。
+describe('POST /api/projects/:id/duplicate', () => {
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  test('共同欄位都帶過去,名稱換成新的', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所', award_amount: 1684045 });
+    const id = made.body.id;
+    await db.query(
+      `UPDATE projects SET start_date = '2026-07-21', contract_completion_date = '2026-12-27',
+              duration_days = 160, duration_basis = '日曆天',
+              supervisor_firm = '呂罡銘建築師事務所', firm_doc_no = 'F-001',
+              actual_completion_date = '2026-12-01' WHERE id = $1`, [id]);
+
+    const res = await request(app).post(`/api/projects/${id}/duplicate`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '重興國小汙水' }).expect(200);
+
+    const p = res.body.project;
+    expect(p.name).toBe('重興國小汙水');
+    expect(p.id).not.toBe(id);
+    const { rows } = await db.query('SELECT * FROM projects WHERE id = $1', [p.id]);
+    const n = rows[0];
+    // 決標帶來的共同欄位要跟著走
+    expect(n.project_no).toBe(made.body.project_no);
+    expect(n.duration_days).toBe(160);
+    expect(n.duration_basis).toBe('日曆天');
+    expect(n.supervisor_firm).toBe('呂罡銘建築師事務所');
+    expect(n.start_date.toISOString().slice(0, 10)).toBe('2026-07-21');
+    // 各自的東西不可複製:實際完工日與事務所自己的歸檔編號都是一案一個
+    expect(n.actual_completion_date).toBeNull();
+    expect(n.firm_doc_no).toBeNull();
+  });
+
+  // 承辦人選的流程是「上傳附件後自己拆金額」,所以照抄總額——但要當場講明白,
+  // 忘了拆的話要到價目表那關才會被擋,而那句訊息說的是「合計對不上」。
+  test('決標金額照抄總額,並回一句提醒要改', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所', award_amount: 1684045 });
+    const res = await request(app).post(`/api/projects/${made.body.id}/duplicate`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '重興國小汙水' }).expect(200);
+    const { rows } = await db.query('SELECT award_amount FROM projects WHERE id = $1', [res.body.project.id]);
+    expect(Number(rows[0].award_amount)).toBe(1684045);
+    expect(res.body.提醒).toMatch(/1,684,045/);
+    expect(res.body.提醒).toMatch(/本標的的金額/);
+  });
+
+  // 明細正是兩個標的不同的地方,複製過去會讓承辦人以為已經做過
+  test('契約項目與施工日誌一律不複製', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所' });
+    await insertItems(made.body.id);
+    const res = await request(app).post(`/api/projects/${made.body.id}/duplicate`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '重興國小汙水' }).expect(200);
+    const { rows } = await db.query(
+      'SELECT COUNT(*)::int AS n FROM contract_items WHERE project_id = $1', [res.body.project.id]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  test('決標公告附件跟著複製過去', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所' });
+    const res = await request(app).post(`/api/projects/${made.body.id}/duplicate`)
+      .set('Authorization', `Bearer ${token}`).send({ name: '重興國小汙水' }).expect(200);
+    const { rows } = await db.query(
+      `SELECT kind FROM project_attachments WHERE project_id = $1`, [res.body.project.id]);
+    expect(rows.map((r) => r.kind)).toContain('award_notice');
+    expect(res.body.attachment_warning).toBeNull();
+  });
+
+  test('名稱沒填或與原工程相同時擋下', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所' });
+    const url = `/api/projects/${made.body.id}/duplicate`;
+    const a = await request(app).post(url).set('Authorization', `Bearer ${token}`)
+      .send({ name: '  ' }).expect(400);
+    expect(a.body.error).toMatch(/名稱/);
+    const b = await request(app).post(url).set('Authorization', `Bearer ${token}`)
+      .send({ name: '重興國小廁所' }).expect(400);
+    expect(b.body.error).toMatch(/分不出來/);
+  });
+
+  test('同案號同名的工程已存在時擋下', async () => {
+    const { app, token } = await makeAppWithToken();
+    const made = await createViaAward(app, token, { name: '重興國小廁所' });
+    const url = `/api/projects/${made.body.id}/duplicate`;
+    await request(app).post(url).set('Authorization', `Bearer ${token}`)
+      .send({ name: '重興國小汙水' }).expect(200);
+    const again = await request(app).post(url).set('Authorization', `Bearer ${token}`)
+      .send({ name: '重興國小汙水' }).expect(400);
+    expect(again.body.error).toMatch(/已有同案號同名/);
+  });
+
+  test('未帶 token 回 401、工程不存在回 404', async () => {
+    const { app, token } = await makeAppWithToken();
+    await request(app).post('/api/projects/1/duplicate').send({ name: 'x' }).expect(401);
+    await request(app).post('/api/projects/999999/duplicate')
+      .set('Authorization', `Bearer ${token}`).send({ name: 'x' }).expect(404);
+  });
+});
