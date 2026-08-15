@@ -41,7 +41,7 @@ function buildJob(templatePath, outPath, operations) {
 
   const KNOWN = new Set([
     'setCell', 'setRange', 'copyRowDown', 'insertRowsBelow', 'deleteRows', 'autoFitColumns',
-    'setRowFill',
+    'setRowFill', 'setNumberFormat',
   ]);
   const isPosInt = (n) => Number.isInteger(n) && n >= 1;
   for (const op of operations) {
@@ -79,6 +79,18 @@ function buildJob(templatePath, outPath, operations) {
       // COM 例外,而那條路徑的錯誤訊息對承辦人完全沒有意義。
       if (op.fill != null && !/^[0-9A-Fa-f]{6}$/.test(String(op.fill))) {
         throw new Error('setRowFill 的 fill 須為 RRGGBB 六位十六進位字串,或 null 表示清除');
+      }
+    } else if (op.type === 'setNumberFormat') {
+      if (!isPosInt(op.firstRow) || !isPosInt(op.lastRow) || op.lastRow < op.firstRow) {
+        throw new Error('setNumberFormat 的 firstRow/lastRow 須為正整數且 lastRow >= firstRow');
+      }
+      if (!isPosInt(op.firstCol) || !isPosInt(op.lastCol) || op.lastCol < op.firstCol) {
+        throw new Error('setNumberFormat 的 firstCol/lastCol 須為正整數且 lastCol >= firstCol');
+      }
+      // 空字串會被 Excel 當成清掉格式(變 General),那不是任何呼叫端想要的;
+      // 真要 General 就明寫 'General'。
+      if (typeof op.format !== 'string' || op.format === '') {
+        throw new Error('setNumberFormat 的 format 須為非空字串');
       }
     }
   }

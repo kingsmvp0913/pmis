@@ -108,3 +108,19 @@ describe('setRowFill 參數驗證', () => {
     expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstRow: 0 }])).toThrow(/firstRow/);
   });
 });
+
+describe('setNumberFormat 參數驗證', () => {
+  const ok = { type: 'setNumberFormat', sheet: '每日施工紀錄', firstRow: 30, lastRow: 34, firstCol: 7, lastCol: 7, format: '0.0000' };
+  test('合法參數通過', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [ok])).not.toThrow();
+  });
+  // 空字串會被 Excel 當成清掉格式(變 General),那不是任何呼叫端想要的
+  test('format 為空字串或非字串要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, format: '' }])).toThrow(/format/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, format: 3 }])).toThrow(/format/);
+  });
+  test('列/欄範圍顛倒要擋下', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstRow: 34, lastRow: 30 }])).toThrow(/firstRow/);
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, firstCol: 8, lastCol: 7 }])).toThrow(/firstCol/);
+  });
+});

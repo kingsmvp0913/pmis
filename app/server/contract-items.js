@@ -330,19 +330,41 @@ const 每日底色 = { 費用: 'E2F0D9', 日期欄: 'FBE5D6' };
 const 每日欄數 = 604;        // A~WF,與範本的 !ref 一致
 const 前段欄數 = 9;          // A~I:項次/名稱/單位/契約數量/單價/複價/累計/金額/百分比
 
+/**
+ * 費用列與施工列的數值格式也綁在範本的固定列號上,和底色同一個病:
+ * 元長實測 貳/參/肆 印 `0.00`、伍/陸 印 `0.0000`,同一塊的小數位數不一樣。
+ *
+ * 只處理 **G(累計完成數量)與 H(累計完成金額)**——那是兩種列真正不同的兩欄。
+ * ⚠️ 日期欄 J~WF 的格式在範本裡也有差(費用列 4 位小數),但它的分界點在 FT/FU
+ * (第 176 欄)**沒有任何語意**,看起來是範本作者拉格式時的偶然,照抄等於把一個
+ * 偶然固化成規則。維持不動。
+ */
+const 每日格式 = {
+  施工: { G: '0.00_);[Red]\\(0.00\\)', H: '_-* #,##0_-;\\-* #,##0_-;_-* "-"_-;_-@_-' },
+  費用: { G: '0.0000_);[Red]\\(0.0000\\)', H: '_-* #,##0.0_-;\\-* #,##0.0_-;_-* "-"_-;_-@_-' },
+};
+const G欄 = 7;
+const H欄 = 8;
+
 function 費用列底色(list) {
   const { first } = INDEX_ROWS.每日施工紀錄;
   const 費用起 = list.findIndex((it) => !IS_WORK_ITEM(it));
   const 末列 = first + list.length - 1;
   const ops = [];
-  // 施工列:先還原成範本的樣子(綠色可能是上一版留下來的)
+  const 格式 = (firstRow, lastRow, 組) => [
+    { type: 'setNumberFormat', sheet: '每日施工紀錄', firstRow, lastRow, firstCol: G欄, lastCol: G欄, format: 組.G },
+    { type: 'setNumberFormat', sheet: '每日施工紀錄', firstRow, lastRow, firstCol: H欄, lastCol: H欄, format: 組.H },
+  ];
+  // 施工列:先還原成範本的樣子(綠色與 4 位小數可能是上一版留下來的)
   const 施工末 = 費用起 < 0 ? 末列 : first + 費用起 - 1;
   if (施工末 >= first) {
     ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first, lastRow: 施工末, firstCol: 1, lastCol: 前段欄數, fill: null });
     ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first, lastRow: 施工末, firstCol: 前段欄數 + 1, lastCol: 每日欄數, fill: 每日底色.日期欄 });
+    ops.push(...格式(first, 施工末, 每日格式.施工));
   }
   if (費用起 >= 0) {
     ops.push({ type: 'setRowFill', sheet: '每日施工紀錄', firstRow: first + 費用起, lastRow: 末列, firstCol: 1, lastCol: 每日欄數, fill: 每日底色.費用 });
+    ops.push(...格式(first + 費用起, 末列, 每日格式.費用));
   }
   return ops;
 }

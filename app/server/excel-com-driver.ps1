@@ -166,6 +166,24 @@ try {
                     $rng.Interior.Color = $bgr
                 }
             }
+            # Number format over a rectangle. Same reason as setRowFill: the template's
+            # fee rows carry their own formats (4 decimals on the cumulative quantity,
+            # one decimal on the cumulative amount) at FIXED row numbers, so after
+            # deleteRows the decimals sit on the wrong rows — 元長 printed 0.00 for
+            # 貳/參/肆 and 0.0000 for 伍/陸.
+            #
+            # `NumberFormat` (not NumberFormatLocal): the codes are the English ones
+            # ([Red], #,##0), and NumberFormatLocal would expect the localized spelling.
+            #
+            # Set through IDispatch for the same reason setCell does: `$rng.NumberFormat = ...`
+            # dies with "無法設定種類 Range 的 NumberFormat 屬性" (measured, not theoretical)
+            # — PowerShell 5.1's COM property-setter binding does not cope here.
+            'setNumberFormat' {
+                $rng = $ws.Range(
+                    $ws.Cells([int]$op.firstRow, [int]$op.firstCol),
+                    $ws.Cells([int]$op.lastRow, [int]$op.lastCol))
+                [void]$rng.GetType().InvokeMember('NumberFormat', 'SetProperty', $null, $rng, @([string]$op.format))
+            }
         }
     }
 

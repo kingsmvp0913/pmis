@@ -514,3 +514,43 @@ describe('費用列底色', () => {
     expect(ops.find((o) => o.fill === null)).toMatchObject({ firstRow: 2, lastRow: 21 });
   });
 });
+
+// 數值格式與底色同一個病:範本的費用列自帶 4 位小數,綁在固定列號上。
+// 元長實測 貳/參/肆 印 0.00、伍/陸 印 0.0000——同一塊小數位數不一樣。
+describe('費用列數值格式', () => {
+  const fmts = (items) => itemsToOperations(items, 0, null)
+    .filter((o) => o.type === 'setNumberFormat');
+  const mk = (n主體, n費用) => {
+    const out = [];
+    for (let i = 1; i <= n主體; i++) out.push({ 項次: String(i), 項目: `工項${i}`, 單位: '式', 數量: 1, 單價: 100, 複價: 100 });
+    for (const no of ['貳', '參', '肆', '伍', '陸'].slice(0, n費用)) {
+      out.push({ 項次: no, 項目: `費用${no}`, 單位: '式', 數量: 1, 單價: 10, 複價: 10 });
+    }
+    return out;
+  };
+
+  test('費用列的 G(累計數量)是 4 位小數、H(累計金額)是 1 位', () => {
+    const ops = fmts(mk(28, 5)).filter((o) => o.firstRow === 30 && o.lastRow === 34);
+    expect(ops.find((o) => o.firstCol === 7).format).toMatch(/0\.0000/);
+    expect(ops.find((o) => o.firstCol === 8).format).toMatch(/#,##0\.0/);
+  });
+
+  // 上一版若把 4 位小數留在施工列上,不還原就會一直錯下去
+  test('施工列還原成 2 位小數與整數金額', () => {
+    const ops = fmts(mk(28, 5)).filter((o) => o.firstRow === 2 && o.lastRow === 29);
+    expect(ops.find((o) => o.firstCol === 7).format).toBe('0.00_);[Red]\\(0.00\\)');
+    expect(ops.find((o) => o.firstCol === 8).format).not.toMatch(/#,##0\.0/);
+  });
+
+  // 只動 G、H 兩欄:日期欄 J~WF 在範本裡的分界點(FT/FU,第 176 欄)沒有語意,
+  // 照抄等於把範本作者拉格式時的偶然固化成規則。
+  test('只動 G 與 H,不碰日期欄', () => {
+    const cols = new Set(fmts(mk(28, 5)).map((o) => `${o.firstCol}-${o.lastCol}`));
+    expect([...cols].sort()).toEqual(['7-7', '8-8']);
+  });
+
+  test('整份都是施工項目時不下費用格式', () => {
+    const ops = fmts(mk(20, 0));
+    expect(ops.every((o) => !/0\.0000/.test(o.format))).toBe(true);
+  });
+});
