@@ -535,9 +535,20 @@ function xlsBlockStarts(grid) {
  *
  * 「沒填」在 xls 是**空白或 0**(金額欄是公式,沒填時算出 0 而不是空白),
  * 只認 null 會漏掉整批;而 0 單獨出現是合法的「當天沒做」,故必須與「沒有日期」並用。
+ *
+ * ── 第二條路:沒有日期**且**沒有預定進度 ──
+ * 上面那條漏掉中和尾端的 11 個區塊:它們的「本日完成」被公式帶進殘值(項次4 = 0.5、
+ * 項次20 = 195),於是 `every(blank)` 不成立而被當成 11 個「日期讀不到的天」收下來。
+ *
+ * 那 11 個區塊的預定進度在來源是 `=+#REF!`(廠商把上游的參照列刪掉了),
+ * `gridFromWorksheet` 把 error cell 轉 null,所以這裡看到的是 null。
+ * 實測整份**有日期的 101 天預定進度全部有值、無日期的 11 天全部是 null**,
+ * 兩者零重疊——「連預定進度都沒有」與「沒有日期」是兩個獨立訊號,同時成立才丟,
+ * 仍然不是單憑沒日期就丟。
  */
 function isUnfilledBlock(day) {
   if (day.header.填報日期 != null) return false;
+  if (day.header.預定進度 == null) return true;
   const blank = (v) => v == null || v === 0;
   return (day.dailyRows || []).every((r) => blank(r.本日完成數量) && blank(r.本日完成金額));
 }
