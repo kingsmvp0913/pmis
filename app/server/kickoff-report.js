@@ -255,12 +255,41 @@ function joinColumn(cands, best, within) {
  * 只差 5px,「取最左」在此毫無意義。
  */
 function rightOf(anchor, all) {
-  const cands = all.filter((c) =>
-    c.x >= anchor.right - 2 && vOverlap(anchor, c) > 0 && !isAnyLabel(c.text));
+  const 右側 = all.filter((c) => c.x >= anchor.right - 2 && !isAnyLabel(c.text));
+  const cands = 右側.filter((c) => vOverlap(anchor, c) > 0);
   if (!cands.length) return null;
   let best = cands[0];
   for (const c of cands) if (c.x < best.x) best = c;
-  return joinColumn(cands, best, () => true);
+  const group = cands.filter((c) => c === best || sameColumn(best, c));
+
+  // **續行也可能落在標籤上方。** 新光的工程名稱是兩行的一格,而上面那行
+  // (`Danas-…綜合球場地`,y 722..812)與標籤(y 814..882)**差 2px 就重疊**,
+  // vOverlap 判成不同列、連候選都進不去,於是整個前半段丟掉,只拿到
+  // 「坪破損修復災後復建工程」——**而那是個看起來完全合理的工程名稱**,
+  // 不會有任何欄位變 null,是最難發現的那種錯。
+  //
+  // 往上收的條件與 joinColumn 往下收一樣嚴(同欄 + 緊貼一個字高內),而且是
+  // **逐格往上串**,中間斷開就停。既有的同列候選挑選完全不動,只多收上方續行。
+  //
+  // ⚠️ 還要再加一條:**往上收不得跨進別的標籤那一列**。新光的「工程地點」
+  // 與其值的間距是 65px、比一個字高(70)還小,單靠距離門檻擋不住,結果
+  // 「工程地點」把上一列屬於「工程名稱」的值收走,兩欄一起壞掉。
+  // 判準不是調距離而是**看語意**:與某個標籤垂直重疊的格,已經是那個標籤的值,
+  // 不可能同時是這一格的續行。真正的續行是「超出標籤那一列」的那幾行,
+  // 它們不會與任何標籤重疊。
+  const 標籤格 = all.filter((c) => isAnyLabel(c.text));
+  const 是別人的值 = (c) => 標籤格.some((lb) => vOverlap(lb, c) > 0);
+  let top = group.reduce((m, c) => (c.y < m.y ? c : m), group[0]);
+  for (;;) {
+    const up = 右側.find((c) => !group.includes(c) && sameColumn(top, c)
+      && top.y - c.bottom >= 0 && top.y - c.bottom <= Math.max(top.h, c.h)
+      && !是別人的值(c));
+    if (!up) break;
+    group.push(up);
+    top = up;
+  }
+  group.sort((a, b) => a.y - b.y);
+  return group.map((c) => c.text).join('');
 }
 
 /**
@@ -313,6 +342,32 @@ function durationSentenceFallback(lines) {
     if (parseDuration(s).天數 != null) return s;
   }
   return null;
+}
+
+// 表單上的工期欄長這樣:「（80）日曆天 /（  ）工作天」。**括號會讓 OCR 把數字與
+// 基準詞斷成兩個框**,而且分屬不同行——`80` 自成一行、`日曆天` 自成一行,
+// 所以 durationSentenceFallback 在行層永遠拼不出「80日曆天」。
+// 但在**座標層它們是水平相鄰的**(文安:80 的右緣 2456、「日曆天」左緣 2481)。
+// 以基準詞為錨、往左取同列最近的純數字,拼成 parseDuration 認得的「80日曆天」。
+//
+// **兩個基準詞都帶數字時回 null,不猜**——沿用 parseDuration 的立場:猜錯會把
+// 日曆天的案子當工作天驗,產生一個必然的假硬錯,而承辦人本來就知道是哪一種。
+const 基準詞 = /^[)）\s]*(日曆天|工作天)$/;
+function durationCellFallback(cells) {
+  const hits = [];
+  for (const c of cells) {
+    const m = 基準詞.exec(String(c.text).replace(/\s/g, ''));
+    if (!m) continue;
+    let best = null;
+    for (const d of cells) {
+      if (!/^\d{1,4}$/.test(String(d.text).trim())) continue;
+      if (d.x >= c.x || vOverlap(c, d) <= 0) continue;          // 只認同列、在左邊
+      if (c.x - d.right > Math.max(c.h, d.h)) continue;          // 隔太遠不是同一格的內容
+      if (!best || d.right > best.right) best = d;               // 取最靠近的
+    }
+    if (best) hits.push(`${best.text.trim()}${m[1]}`);
+  }
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // 金額標籤被 OCR 毀掉時的退路(元長的「契約總價」被讀成「丁約總價」,
@@ -435,6 +490,14 @@ function extractFields(ocrOutput) {
   // 一個非 null 的垃圾字串會把退路整個擋掉。
   if (parseDuration(raw.契約工期).天數 == null) {
     raw.契約工期 = durationSentenceFallback(allLines);
+  }
+  // 行層也拼不出來,才走座標層(括號把數字與基準詞斷成兩行的那種版面)。
+  // 排最後是為了讓既有樣本的判定路徑完全不變。
+  if (parseDuration(raw.契約工期).天數 == null) {
+    for (const cs of pageCells) {
+      const v = durationCellFallback(cs);
+      if (v) { raw.契約工期 = v; break; }
+    }
   }
 
   const 開工日 = rocToISO(raw.契約規定開工日) || startDateFallback(allLines);
