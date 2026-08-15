@@ -3,6 +3,10 @@
  *
  * 依 `docs/samples/驗證清單/監造報表_施工日誌驗證檢查清單_v1.xlsx` 實作。
  * 該清單共 46 條,客戶勾除 7 條(B1/D2/G5/H2/I1/I2/I3),實作 39 條。
+ * 2026-08-15 承辦人逐家走查後再加三條,合計 **42 條**:
+ *   A9 整天只有名稱、沒有單位與數量(優和那份 45 天 41 列,原本 42 條一條都不觸發)
+ *   J5 名稱形狀健檢(原本只活在 scripts/check-parser.js,產線沒有防線)
+ *   D5 當月最後一天要有完整明細(逐日只列當天施作的格式,沒有月結對帳點)
  *
  * 嚴重度二分(客戶已確認,不給強制產出):
  *   硬錯誤 → 阻擋寫入,列出**全部**錯誤位置(哪天/哪項次)
@@ -21,6 +25,51 @@
 
 const isBlank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
 const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+
+/**
+ * 名稱形狀健檢(J5)。**原本只活在 `scripts/check-parser.js`**——那是開發用腳本,
+ * 產線的 daily-log-routes 不跑它,所以讀取器把名稱切錯時上線後一條防線都沒有。
+ *
+ * 為什麼非有不可:完整性關卡只看「單位/契約數量/契約單價是否為 null」,而
+ * **名稱被切錯不會讓任何欄位變 null**;E3(與契約表比名稱)只在有外部契約表時才驗得動。
+ * 2026-08-15 逐家走查修掉的四支讀取器,壞法全是這一類——明德第二聯把長名稱的整列
+ * 丟掉、富森把兩個項目的名稱黏在一起——**產線一個都擋不下來**。
+ *
+ * 這裡的規則刻意都**不需要外部基準**,單看名稱本身的形狀。
+ */
+const countOf = (s, re) => (s.match(re) || []).length;
+const NAME_RULES = [
+  { code: '標點開頭', why: '名稱前段可能被切掉(接到上一列去了)',
+    test: (n) => /^[、，,;；。:：)）\]】}]/.test(n) },
+  { code: '括號不對稱', why: '名稱可能在括號中途被截斷',
+    test: (n) => countOf(n, /[(（]/g) !== countOf(n, /[)）]/g) },
+  { code: '名稱過短', why: '可能只剩被切碎的殘骸',
+    test: (n) => n.length < 3 },
+];
+
+/**
+ * 掃描明細列的項目名稱形狀,回報疑似跨行重組錯位的列。
+ * 同一項次的同一種異常只回報一次——同個項次通常每天都出現,重複 119 次只會淹掉輸出。
+ * @param {Array<object>} rows dailyRows(可跨多天串接)
+ * @returns {Array<{項次:string, code:string, why:string, 名稱:string}>}
+ */
+function detectNameAnomalies(rows) {
+  const out = [];
+  const seen = new Set();
+  for (const r of rows || []) {
+    if (isCategoryRow(r)) continue;              // 大類列本來就只有類別名,不是明細
+    const name = r.工程項目 == null ? '' : String(r.工程項目).trim();
+    if (!name) continue;                          // 空名稱由既有的 A5 必填檢查負責
+    for (const rule of NAME_RULES) {
+      if (!rule.test(name)) continue;
+      const key = `${r.項次}|${rule.code}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ 項次: String(r.項次), code: rule.code, why: rule.why, 名稱: name });
+    }
+  }
+  return out;
+}
 
 // 金額與數量在 PDF/Excel 來回轉換後會帶浮點尾差(實測金大 header 的本日累計金額
 // 是 10400.248),用嚴格相等會把整份日誌判成錯。容差取 0.01 元/單位。
@@ -287,6 +336,17 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       soft('A3', 日期, null, '星期未填(可由日期回推)');
     }
 
+    // A9 這一天有明細列,但**沒有任何一列有單位/數量/單價**——整天都被 isCategoryRow
+    // 濾掉,於是下面每一條規則都不會執行,整份日誌零錯誤通過。
+    // 實測優和那份:45 天 / 41 列,單位與數量欄整份全空,三道關卡與 42 條規則
+    // **一條都沒觸發**,可以一路寫進監造報表。承辦人 2026-08-15 裁決這種要退回。
+    // ⚠️ 只在「有列但全是大類列」時判錯;整天 0 列是「當天沒施工」,同一天裁決為不處理。
+    const 明細列 = (d.dailyRows || []).filter((r) => !isCategoryRow(r));
+    if ((d.dailyRows || []).length > 0 && 明細列.length === 0) {
+      hard('A9', 日期, null,
+        '這一天的明細只有項目名稱,沒有單位也沒有數量,無法核對進度');
+    }
+
     for (const r of d.dailyRows || []) {
       if (isCategoryRow(r)) continue;
       const 項次 = r.項次 == null ? null : String(r.項次);
@@ -528,6 +588,37 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     }
   }
 
+  // J5 名稱形狀健檢(見檔頭)。軟警告:形狀可疑不等於一定錯——來源本身就可能少打
+  // 一個右括號(以勒實測,`基本資料!K8` 就是那樣),照擋會把來源的錯算到廠商頭上。
+  // 真正的用途是讓「讀取器把名稱切錯」在產線上**看得見**,而不是靜靜寫進報表。
+  for (const a of detectNameAnomalies(days.flatMap((d) => d.dailyRows || []))) {
+    soft('J5', null, a.項次, `項目名稱形狀可疑(${a.code}):「${a.名稱}」——${a.why}`);
+  }
+
+  // D5 每個月的最後一天要列出全部項目(承辦人 2026-08-15 裁決)。
+  // 有些格式**逐日只列當天施作的項目**(利成 96 天 86 列、沅隆、嘉原),平常沒問題,
+  // 但這樣就沒有任何一天可以拿來對「到這個月為止總共做了多少」。
+  // 折衷:平日照舊,**當月最後一天必須是完整清單**,承辦人才有月結的對帳點。
+  // 基準優先用真實契約表;沒有契約表時(自我基準)用這批日誌出現過的全部項次。
+  const 應有項次 = contract.length ? contract.map((c) => String(c.項次)) : [...seenItemNos];
+  const 月末 = new Map();
+  for (const d of days) {
+    const 日 = (d.header || {}).填報日期;
+    if (isBlank(日)) continue;
+    const 月 = String(日).slice(0, 7);
+    const cur = 月末.get(月);
+    if (!cur || 日 > cur.日) 月末.set(月, { 日, d });
+  }
+  for (const { 日, d } of 月末.values()) {
+    const 有 = new Set((d.dailyRows || []).filter((r) => !isCategoryRow(r)).map((r) => String(r.項次)));
+    const 缺 = 應有項次.filter((n) => !有.has(n));
+    if (缺.length) {
+      hard('D5', 日, null,
+        `當月最後一天只列了 ${有.size} 項,缺 ${缺.length} 項(${缺.slice(0, 5).join('、')}`
+        + `${缺.length > 5 ? '…' : ''});月結要有一天是完整清單才對得起來`);
+    }
+  }
+
   // C2 全案累計完成金額不得超過契約金額
   if (!skippedCodes.has('C2') && project.契約金額 != null) {
     const 總累計 = [...cumAmount.values()].reduce((s, v) => s + v, 0);
@@ -540,4 +631,4 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   return { errors, warnings, skipped };
 }
 
-module.exports = { validateDailyLog, isCategoryRow };
+module.exports = { validateDailyLog, isCategoryRow, detectNameAnomalies, NAME_RULES };

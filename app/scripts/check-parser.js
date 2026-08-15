@@ -12,57 +12,19 @@
  *   - `selfTest` 的內建小樣本是**產生者自己挑的**,自然挑解得出來的那幾列
  *   - fixture 測試只斷言「某幾個項次」,沒驗到的列錯了也不會紅
  *
- * 這支改成解析**整份**樣本並統計缺漏率,再把結果餵進 SP3 的 39 條驗證——
+ * 這支改成解析**整份**樣本並統計缺漏率,再把結果餵進 SP3 的 42 條驗證——
  * 讀取器讀錯的東西會在那裡變成一大片硬錯(金大會噴 A7:160、J2:160、B3:318)。
  */
 const fs = require('fs');
 const path = require('path');
 const filetypes = require('../server/parsers/filetypes');
-const { validateDailyLog, isCategoryRow } = require('../server/daily-log-validate');
+// ⚠️ 名稱形狀健檢**已搬進 daily-log-validate**(產線的 J5),這裡改成共用同一份。
+// 原本兩邊各一份:這支腳本擋得住的東西,上線之後一條防線都沒有——2026-08-15
+// 逐家走查修掉的四支讀取器(明德整列不見、富森兩個名稱黏在一起)正是這一類。
+// 留兩份也必然漂掉:改了一邊,另一邊還在用舊規則,而且不會有任何錯誤訊息。
+const { validateDailyLog, isCategoryRow, detectNameAnomalies } = require('../server/daily-log-validate');
 
 const REQUIRED_ROW_FIELDS = ['單位', '契約數量', '契約單價'];
-
-// ── 名稱形狀健檢 ─────────────────────────────────────────
-// 上面的完整性關卡只看「單位/契約數量/契約單價是否為 null」,而**名稱被切錯不會讓
-// 任何欄位變 null**;下面的跨層驗證又是拿日誌自己的第一次出現值當契約基準,讀取器
-// 若每天都用同樣方式讀錯,自我比對永遠一致。富森讀取器把長名稱跨行重組錯位
-// (項次4 的開頭被切掉、項次5 混進項次4 的尾巴)就這樣三關全過,直到接上真實契約表
-// 跑 pipeline 才現形——六成的項目名稱是錯的。
-//
-// 這裡的規則刻意都**不需要外部基準**,單看名稱本身的形狀就能抓到錯位。
-const countOf = (s, re) => (s.match(re) || []).length;
-const NAME_RULES = [
-  { code: '標點開頭', why: '名稱前段可能被切掉(接到上一列去了)',
-    test: (n) => /^[、，,;；。:：)）\]】}]/.test(n) },
-  { code: '括號不對稱', why: '名稱可能在括號中途被截斷',
-    test: (n) => countOf(n, /[(（]/g) !== countOf(n, /[)）]/g) },
-  { code: '名稱過短', why: '可能只剩被切碎的殘骸',
-    test: (n) => n.length < 3 },
-];
-
-/**
- * 掃描明細列的項目名稱形狀,回報疑似跨行重組錯位的列。
- * 同一項次的同一種異常只回報一次——同個項次通常每天都出現,重複 119 次只會淹掉輸出。
- * @param {Array<object>} rows dailyRows(可跨多天串接)
- * @returns {Array<{項次:string, code:string, why:string, 名稱:string}>}
- */
-function detectNameAnomalies(rows) {
-  const out = [];
-  const seen = new Set();
-  for (const r of rows || []) {
-    if (isCategoryRow(r)) continue;              // 大類列本來就只有類別名,不是明細
-    const name = r.工程項目 == null ? '' : String(r.工程項目).trim();
-    if (!name) continue;                          // 空名稱由既有的 A5 必填檢查負責
-    for (const rule of NAME_RULES) {
-      if (!rule.test(name)) continue;
-      const key = `${r.項次}|${rule.code}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ 項次: String(r.項次), code: rule.code, why: rule.why, 名稱: name });
-    }
-  }
-  return out;
-}
 
 function loadParser(ref) {
   const direct = path.resolve(ref);
@@ -180,7 +142,7 @@ async function main() {
     console.log(`  header 整份皆空:${headerAllMissing.map(([k]) => k).join('、')}`);
   }
 
-  // ── 關卡 c:跨層驗證(SP3 的 39 條)────────────────────────
+  // ── 關卡 c:跨層驗證(SP3 的 42 條)────────────────────────
   // 預設基準:該份日誌自己的第一次出現值。這樣不需要真的 SP2 契約表就能跑,
   // 但**只看得到「同一項次跨天不一致」,看不到系統性讀錯**——讀取器若每天都用
   // 同樣方式讀錯,自我比對永遠一致(富森的名稱錯位就是這樣躲過三道關卡的)。
@@ -213,7 +175,7 @@ async function main() {
     for (const e of arr) m[e.code] = (m[e.code] || 0) + 1;
     return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}:${v}`).join(' ') || '(無)';
   };
-  console.log('\n── 關卡 c:跨層驗證(SP3 39 條)──');
+  console.log('\n── 關卡 c:跨層驗證(SP3 42 條)──');
   console.log(`  ${基準說明}`);
   console.log(`硬錯 ${result.errors.length} 項 → ${tally(result.errors)}`);
   console.log(`軟警告 ${result.warnings.length} 項 → ${tally(result.warnings)}`);

@@ -7,13 +7,91 @@
  * ## 兩條路:讀取器(文字層)與掃描件(OCR 預填 + 逐格確認)
  *
  * 掃描件那條路的產出**是草稿不是答案**:OCR 的 dailyRows 層實測 62.8% 對、
- * 1.7% 會讀成另一個合法數字,而那 1.7% 值本身自洽、累計也自洽,39 條驗證
+ * 1.7% 會讀成另一個合法數字,而那 1.7% 值本身自洽、累計也自洽,42 條驗證
  * 一條都攔不住。所以畫面上有三件事不可省:①逐格可編輯 ②沒讀到的格子要
  * 一眼看得出來 ③送出前必須勾「已逐格核對紙本」。少任何一件,這條路就變成
  * 「把 OCR 的猜測直接寫進估驗計價」。
  */
 const DailyLogs = (() => {
   const num = (n) => (n == null ? '—' : Number(n).toLocaleString());
+
+  /**
+   * 期初累計:**開始用本系統之前**已經完成的數量(逐項)。
+   *
+   * 為什麼要有這個入口:驗證層拿「這批日誌最早日期之前的累計」當起點,而系統只推得出
+   * 「已經上傳過的」那些。久木那家一個月一個檔,承辦人只拿到 6 月那一份時,第一天的
+   * 累計就已經是 302(前幾個月做的)——從 0 起算的話每天都報「金額對不起來」,
+   * 實測 155 筆假硬錯、整份被擋,而原因不是廠商也不是讀取器。
+   *
+   * 預設收合:多數工程從開工就開始用系統,沒有期初,攤開只會多一大片空表格。
+   */
+  function openingCard(projectId) {
+    const body = el('div', { class: 'table-wrap', style: 'display:none' });
+    const msg = el('div', { class: 'hint' });
+    const saveBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '儲存期初累計');
+    const toggle = el('button', { class: 'btn btn-outline', type: 'button' }, '設定期初累計');
+    const box = el('div', { style: 'display:none' }, [
+      el('div', { class: 'hint' },
+        '只有「開工後一段時間才開始用系統」或「前幾個月的日誌拿不到」時才需要填。'
+        + '填了之後,系統會把它當成第一批日誌的起點,累計才對得起來。留白或 0 表示沒有期初。'),
+      body, el('div', { class: 'form-actions' }, [saveBtn]), msg,
+    ]);
+    const inputs = new Map();
+
+    async function load() {
+      body.innerHTML = '';
+      inputs.clear();
+      let d;
+      try { d = await Api.get(`projects/${projectId}/daily-logs/openings`); }
+      catch (e) { msg.textContent = e.message; msg.className = 'error-msg'; return; }
+      const tb = el('tbody', {});
+      for (const it of d.items) {
+        const i = el('input', {
+          class: 'form-control', type: 'number', step: 'any', min: '0',
+          value: it.期初累計 == null ? '' : String(it.期初累計),
+        });
+        inputs.set(it.項次, i);
+        tb.append(el('tr', {}, [
+          el('td', {}, it.項次), el('td', {}, it.項目),
+          el('td', {}, it.單位 || '—'), el('td', { class: 'num' }, num(it.契約數量)),
+          el('td', {}, i),
+        ]));
+      }
+      body.innerHTML = '';
+      body.append(el('table', { class: 'table' }, [
+        el('thead', {}, el('tr', {}, ['項次', '工程項目', '單位', '契約數量', '期初累計數量']
+          .map((h) => el('th', {}, h)))),
+        tb,
+      ]));
+      body.style.display = '';
+    }
+
+    toggle.addEventListener('click', async () => {
+      const 開 = box.style.display === 'none';
+      box.style.display = 開 ? '' : 'none';
+      toggle.textContent = 開 ? '收合期初累計' : '設定期初累計';
+      if (開 && !inputs.size) await load();
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      msg.className = 'hint';
+      msg.textContent = '';
+      try {
+        const items = [...inputs.entries()]
+          .map(([項次, i]) => ({ 項次, 期初累計: i.value === '' ? 0 : Number(i.value) }));
+        const r = await Api.put(`projects/${projectId}/daily-logs/openings`, { items });
+        msg.textContent = `已儲存 ${r.筆數} 項期初累計。下次驗證施工日誌就會從這裡起算。`;
+      } catch (e) {
+        msg.className = 'error-msg';
+        msg.textContent = e.message;
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    return el('div', { style: 'margin-top:var(--space-4)' }, [toggle, box]);
+  }
 
   function card(projectId) {
     let files = [];
@@ -49,7 +127,7 @@ const DailyLogs = (() => {
     const diffBox = el('div', { class: 'table-wrap' });
     const scanBox = el('div', {});
     const hint = el('div', { class: 'hint' },
-      '上傳廠商提供的施工日誌,系統依 39 條規則檢查後才寫入監造報表。' +
+      '上傳廠商提供的施工日誌,系統依 42 條規則檢查後才寫入監造報表。' +
       '有硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。' +
       '沒有文字層的掃描件按「辨識掃描件」,系統會用 OCR 預填讓你逐格核對。');
 
@@ -246,7 +324,7 @@ const DailyLogs = (() => {
       scanned = { days: d.days };
       scanBox.appendChild(el('div', { class: 'error-msg' }, [
         '⚠️ 以下數字是 OCR 讀的,不是廠商填的。實測每 100 格約有 63 格讀對、'
-        + '2 格會讀成「另一個看起來合法的數字」,而系統的 39 條檢查一條都攔不住那種錯'
+        + '2 格會讀成「另一個看起來合法的數字」,而系統的 42 條檢查一條都攔不住那種錯'
         + '(值本身自洽、累計也自洽)。',
         el('strong', {}, '請對著紙本逐格核對'),
         '——這些數字會一路流進監造報表與估驗計價。',
@@ -436,6 +514,7 @@ const DailyLogs = (() => {
       diffBox,
       scanBox,
       listBox,
+      openingCard(projectId),
     ]);
   }
 

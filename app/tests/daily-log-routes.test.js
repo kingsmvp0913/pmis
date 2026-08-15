@@ -416,3 +416,72 @@ describe('多檔上傳', () => {
     expect(res.body.檔數).toBe(1);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  期初累計(承辦人 2026-08-15 裁決)
+//
+//  久木那家一個月一個檔。只拿到 6 月那一份時,第一天的累計就已經是前幾個月做的量,
+//  系統從 0 起算 → 每天都報 B3「金額對不起來」,實測 155 筆假硬錯、整份被擋,
+//  而原因不是廠商也不是讀取器。這一組驗的是「填了期初之後那些假硬錯會消失」。
+// ══════════════════════════════════════════════════════════════════
+describe('期初累計', () => {
+  const openings = (app, token, id) => request(app)
+    .get(`/api/projects/${id}/daily-logs/openings`).set('Authorization', `Bearer ${token}`);
+  const setOpenings = (app, token, id, items) => request(app)
+    .put(`/api/projects/${id}/daily-logs/openings`).set('Authorization', `Bearer ${token}`).send({ items });
+
+  test('未帶 token 回 401', async () => {
+    const { app, id } = await makeApp();
+    await request(app).get(`/api/projects/${id}/daily-logs/openings`).expect(401);
+  });
+
+  // 只回「已存的那幾筆」會讓還沒填的項目在畫面上隱形,承辦人以為填完了。
+  test('以契約表為骨架逐項列出,沒填的回 null', async () => {
+    const { app, token, id } = await makeApp();
+    const res = await openings(app, token, id).expect(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).toMatchObject({ 項次: '1', 項目: '項目1', 契約數量: 10, 期初累計: null });
+  });
+
+  test('存了讀得回來', async () => {
+    const { app, token, id } = await makeApp();
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
+    const res = await openings(app, token, id).expect(200);
+    expect(res.body.items[0].期初累計).toBe(3);
+  });
+
+  // 逐筆 upsert 的話,清空某一項時那筆會留在庫裡:畫面看起來清掉了、驗證仍用舊值,
+  // 而且不會有任何錯誤訊息。所以是整批覆蓋。
+  test('再存一次會整批覆蓋,清空的項目要真的消失', async () => {
+    const { app, token, id } = await makeApp();
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
+    const res2 = await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 0 }]).expect(200);
+    expect(res2.body.筆數).toBe(0);
+    const res = await openings(app, token, id).expect(200);
+    expect(res.body.items[0].期初累計).toBeNull();
+  });
+
+  test('不在契約表裡的項次不收,負數擋下', async () => {
+    const { app, token, id } = await makeApp();
+    const ok = await setOpenings(app, token, id, [{ 項次: '999', 期初累計: 5 }]).expect(200);
+    expect(ok.body.筆數).toBe(0);
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: -1 }]).expect(400);
+  });
+
+  // 這條是整組的重點:同一份日誌,填期初之前被擋、填了之後就過。
+  // 情境同久木:前期已做 3,這批的第一天做 2、累計欄印 5。系統看不到那 3 的話,
+  // 累計 5 對不上「0 + 2」,也對不上金額 5×100——B3(金額)與 F4(期末累計)一起噴。
+  const 久木情境 = () => day('2026-04-08', [r('1', 2, { 累計完成數量: 5 })]);
+
+  test('填了期初累計之後,累計對不起來的假硬錯會消失', async () => {
+    const { app, token, id } = await makeApp();
+    feed([久木情境()]);
+    const 前 = await post(app, token, id, 'parse').expect(200);
+    expect(前.body.errors.map((e) => e.code)).toEqual(expect.arrayContaining(['B3', 'F4']));
+
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
+    feed([久木情境()]);
+    const 後 = await post(app, token, id, 'parse').expect(200);
+    expect(後.body.errors).toEqual([]);
+  });
+});

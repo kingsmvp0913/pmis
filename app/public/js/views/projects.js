@@ -33,7 +33,7 @@
 
   // ── 登錄繳交彈窗:選 督導/每月 + 週期 + 上傳施工日誌 ──
   // 這裡**只登錄繳交**。產監造報表已於 2026-08-05 收斂到工程頁的施工日誌區塊,
-  // 那條路徑會跑 39 條驗證再寫進常駐 .xlsm;兩顆按鈕並存時承辦人看不出差別,
+  // 那條路徑會跑 42 條驗證再寫進常駐 .xlsm;兩顆按鈕並存時承辦人看不出差別,
   // 按到舊的就產出一份沒驗證過的報表。
   function submissionDialog(defaultPeriod) {
     return new Promise((resolve) => {
@@ -1048,7 +1048,7 @@
       fd.append('daily_log', r.file);
       try {
         await Api.upload('projects/' + p.id + '/submissions', fd);
-        // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 39 條
+        // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 42 條
         // 驗證——訊息要講清楚去哪產,否則承辦人會以為按完這裡報表就有了。
         showToast('已登錄繳交。要產監造報表請至工程頁的「施工日誌」區塊', 'success');
         if (cell) await renderHistory(p, cell);

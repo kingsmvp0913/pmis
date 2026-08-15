@@ -176,6 +176,23 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 期初累計:**開始用本系統之前**已經完成的數量(逐項)。
+    //
+    // 為什麼需要:施工日誌是分批提交的,驗證層要拿「這批最早日期之前的累計」當起點,
+    // 而 priorCum() 只推得出「已經上傳過的」那些。久木那家一個月一個檔,承辦人只拿到
+    // 6 月那一份時,第一天的累計就已經是 302(前幾個月做的)——系統從 0 起算,
+    // 於是每天都報 B3「金額對不起來」,實測 155 筆假硬錯,整份被擋。
+    //
+    // 與 daily_records 分開存,不用「一筆假的日期」混進去:那會讓跨批次差異、
+    // 月結、F4 期末累計全部要記得排除那一天,而漏排除不會有任何錯誤訊息。
+    `CREATE TABLE IF NOT EXISTS daily_openings (
+      id         SERIAL PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      item_no    TEXT NOT NULL,
+      qty        NUMERIC,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+
     // 工程投保的險種(多選)。一個工程常同時投營造綜合保險與意外責任險等數種,
     // 原本 projects.insurance_type_id 是單一 FK,只存得下一種——承辦人得挑一個
     // 填、其餘的沒有地方記。
@@ -260,7 +277,7 @@ async function migrate() {
     // 'ocr_confirmed'(掃描件 OCR 預填、承辦人逐格確認過)。空值視為 'parser'
     // ——升級前既有的資料都是那條路來的。
     // 分得出來才回答得了「這個數字為什麼跟日誌對不起來」:OCR 那條路實測
-    // 1.7% 的格會讀成另一個合法數字,而 39 條驗證一條都攔不住(值本身自洽、
+    // 1.7% 的格會讀成另一個合法數字,而 42 條驗證一條都攔不住(值本身自洽、
     // 累計也自洽)。事後查帳只剩這個欄位能指出該回頭看哪幾天的紙本。
     ['daily_records', 'source', 'TEXT'],
     // 事務所自己的檔案編號,與決標公告無關(project_no 是決標公告上的契約編號)。

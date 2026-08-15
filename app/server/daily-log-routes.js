@@ -2,7 +2,7 @@
  * daily-log-routes.js — 施工日誌 → 每日施工紀錄(SP3)
  *
  * 路由:
- *   POST /api/projects/:id/daily-logs/parse           上傳 → 39 條驗證 + 跨批次差異(唯讀)
+ *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
  *   POST /api/projects/:id/daily-logs/confirm         無硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
  *   POST /api/projects/:id/daily-logs/confirm-scanned 承辦人逐格確認後才寫入
@@ -19,7 +19,7 @@
  * 前端。硬套原鐵則就等於把承辦人改的值丟掉。
  *
  * 所以 `confirm-scanned` 收前端送來的 days,但:①欄位型別逐一消毒(見 sanitizeDays)
- * ②39 條驗證照跑,不因為「人確認過」就放行 ③落庫標記 source='ocr_confirmed',
+ * ②42 條驗證照跑,不因為「人確認過」就放行 ③落庫標記 source='ocr_confirmed',
  * 事後查得出哪些數字是這條路來的。文字層那條路一行都沒動。
  *
  * 硬錯**整份擋下**(2026-08-05 裁決):一天不對就不寫。只跳過有問題的那幾天會讓
@@ -167,18 +167,30 @@ async function loadRecords(projectId) {
  * 做過的量,從 0 起算的話 B3 在每一批的第一天都必然誤判。
  * 金額用「數量 × 契約單價」還原——daily_records 只存數量。
  */
-function priorCum(records, 最早日, contract) {
+function priorCum(records, 最早日, contract, openings = []) {
   const priceOf = new Map(contract.map((c) => [String(c.項次), Number(c.單價)]));
   const out = {};
+  const 加 = (項次, q) => {
+    const cur = out[項次] || { 數量: 0, 金額: 0 };
+    cur.數量 += q;
+    cur.金額 += q * (priceOf.get(項次) || 0);
+    out[項次] = cur;
+  };
+  // 承辦人輸入的期初累計:**開始用本系統之前**做掉的量,永遠算在最前面。
+  // 沒有這一段的話,只拿得到後半段月檔的案子(久木那型)第一天就必然對不起來。
+  for (const o of openings) 加(String(o.項次), Number(o.數量) || 0);
   for (const r of records) {
     if (最早日 && r.日期 >= 最早日) continue;
-    const q = Number(r.本日完成數量) || 0;
-    const cur = out[r.項次] || { 數量: 0, 金額: 0 };
-    cur.數量 += q;
-    cur.金額 += q * (priceOf.get(r.項次) || 0);
-    out[r.項次] = cur;
+    加(r.項次, Number(r.本日完成數量) || 0);
   }
   return out;
+}
+
+/** 承辦人輸入的期初累計(逐項)。 */
+async function loadOpenings(projectId) {
+  const { rows } = await query(
+    'SELECT item_no AS "項次", qty AS "數量" FROM daily_openings WHERE project_id = $1', [projectId]);
+  return rows.map((r) => ({ 項次: r.項次, 數量: r.數量 == null ? null : Number(r.數量) }));
 }
 
 /** 這批涵蓋的最早日期。沒有可用日期時回 null(視為沒有前期累計)。 */
@@ -319,6 +331,57 @@ function sanitizeDays(input) {
 }
 
 function registerRoutes(app) {
+  // 期初累計:開始用本系統之前已完成的數量。回傳一律以契約表為骨架逐項列出,
+  // 承辦人才看得到「哪些項目還沒填」——只回已存的那幾筆會讓漏填的項目隱形。
+  app.get('/api/projects/:id/daily-logs/openings', verifyToken, async (req, res) => {
+    try {
+      if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+      const ctx = await loadContext(req.params.id);
+      if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
+      const have = new Map((await loadOpenings(req.params.id)).map((o) => [String(o.項次), o.數量]));
+      res.json({
+        items: ctx.contract.map((c) => ({
+          項次: String(c.項次), 項目: c.項目, 單位: c.單位, 契約數量: c.數量,
+          期初累計: have.has(String(c.項次)) ? have.get(String(c.項次)) : null,
+        })),
+      });
+    } catch (err) {
+      console.error('[daily-log] 讀取期初累計失敗:', err);
+      res.status(500).json({ error: '讀取期初累計失敗' });
+    }
+  });
+
+  // 整批覆蓋(先刪後插)。逐筆 upsert 的話,承辦人把某一項清空時那一筆會留在庫裡,
+  // 畫面上看起來清掉了、驗證仍照舊用舊值——而且不會有任何錯誤訊息。
+  app.put('/api/projects/:id/daily-logs/openings', verifyToken, async (req, res) => {
+    try {
+      if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+      const ctx = await loadContext(req.params.id);
+      if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
+      const 合法項次 = new Set(ctx.contract.map((c) => String(c.項次)));
+      const list = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+      const rows = [];
+      for (const it of list) {
+        const no = String((it || {}).項次 == null ? '' : it.項次).trim();
+        if (!合法項次.has(no)) continue;          // 不在契約表裡的項次一律不收
+        const q = Number((it || {}).期初累計);
+        if (!Number.isFinite(q) || q === 0) continue;   // 空白與 0 就是「沒有期初」
+        if (q < 0) return res.status(400).json({ error: `項次 ${no} 的期初累計不可為負數` });
+        rows.push([no, q]);
+      }
+      await query('DELETE FROM daily_openings WHERE project_id = $1', [req.params.id]);
+      for (const [no, q] of rows) {
+        await query(
+          'INSERT INTO daily_openings (project_id, item_no, qty) VALUES ($1, $2, $3)',
+          [req.params.id, no, q]);
+      }
+      res.json({ ok: true, 筆數: rows.length });
+    } catch (err) {
+      console.error('[daily-log] 寫入期初累計失敗:', err);
+      res.status(500).json({ error: '寫入期初累計失敗' });
+    }
+  });
+
   app.post('/api/projects/:id/daily-logs/parse', verifyToken,
     upload.array('daily_log'), async (req, res) => {
       try {
@@ -333,7 +396,7 @@ function registerRoutes(app) {
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(records, 最早日(rows), ctx.contract),
+          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
         const diff = diffDays(records, rows);
 
@@ -370,7 +433,7 @@ function registerRoutes(app) {
         const rows = flatten(days);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract),
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
         if (result.errors.length) {
           // 一次列全:逐條修正會讓承辦人與廠商來回好幾趟
@@ -454,7 +517,7 @@ function registerRoutes(app) {
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days: out.days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(records, 最早日(rows), ctx.contract),
+          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
 
         res.json({
@@ -499,11 +562,11 @@ function registerRoutes(app) {
         const rows = flatten(days);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract),
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
         if (result.errors.length) {
           // 「人確認過」不等於放行:OCR 漏掉的格子承辦人也可能漏補,
-          // 39 條驗證照擋——這正是它存在的理由。
+          // 42 條驗證照擋——這正是它存在的理由。
           return res.status(400).json({
             error: `確認後的內容仍有 ${result.errors.length} 項硬錯,未寫入監造報表`,
             ...result,
