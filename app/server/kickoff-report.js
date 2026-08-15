@@ -39,7 +39,9 @@ const { ocrPdf } = require('./ocr');
 // 一個擋住歸檔的假硬錯。
 const LABELS = {
   工程名稱: ['工程名稱'],
-  契約編號: ['契約編號'],
+  // `案號或契約號碼` 是敘述式開工報告書(寶嶸)的用詞,值 A1150507 就在右邊,
+  // 與決標公告的契約編號完全相符。
+  契約編號: ['契約編號', '案號或契約號碼'],
   契約金額: ['契約金額', '契約總價', '承包工程費'],
   決標日期: ['決標日期'],
   契約工期: ['契約規定工期', '契約約定工期'],
@@ -269,7 +271,16 @@ function joinColumn(cands, best, within) {
  * 只差 5px,「取最左」在此毫無意義。
  */
 function rightOf(anchor, all) {
-  const 右側 = all.filter((c) => c.x >= anchor.right - 2 && !isAnyLabel(c.text));
+  // ⚠️ 「在右側」不可以只認 `x >= 標籤右緣`。**標籤框可能比標籤文字寬**:
+  // OCR 會把旁邊的雜訊併進標籤框——寶嶸實測「工程名稱」被讀成「工程名稱木」,
+  // 框從 x448 延到 1033,而值從 **x996** 開始,起點落在標籤框裡面。
+  // 嚴格判準下一個候選都篩不到,`工程名稱` 整欄變 null。
+  //
+  // 放寬成「起點在標籤中心右邊 **且** 右緣超出標籤右緣」:那只可能是右邊那一欄的值。
+  // 兩個條件都要——只看中心會把與標籤大幅重疊的同欄續行收進來。
+  const 在右側 = (c) => c.x >= anchor.right - 2
+    || (c.x > anchor.cx && c.right > anchor.right);
+  const 右側 = all.filter((c) => 在右側(c) && !isAnyLabel(c.text));
   const cands = 右側.filter((c) => vOverlap(anchor, c) > 0);
   if (!cands.length) return null;
   let best = cands[0];
@@ -329,8 +340,14 @@ function valueFor(cells, labels, fieldKey) {
     const s = typeof v === 'string' ? v : cleanValue(v);
     return s && isPlausibleValue(fieldKey, s) ? s : null;
   };
-  if (f.rest) return take(f.rest);
-  return take(cleanValue(rightOf(f.anchor, cells))) || take(cleanValue(belowOf(f.anchor, cells)));
+  // ⚠️ 同格餘文**沒過型別把關時要繼續往下找**,不可以直接 return。
+  // 上面那句「每一步都要過型別把關,不過就當沒找到」本來就是這個意思,
+  // 但原本寫成 `if (f.rest) return take(f.rest)` —— 餘文一存在就結案。
+  // 實測寶嶸:OCR 把標籤讀成「工程名稱木」,餘文是「木」、過不了把關,
+  // 於是整欄變 null,而**值就在右邊那一格**(x996,與標籤垂直重疊 53px)。
+  return (f.rest ? take(f.rest) : null)
+    || take(cleanValue(rightOf(f.anchor, cells)))
+    || take(cleanValue(belowOf(f.anchor, cells)));
 }
 
 // ── 敘述句退路 ──────────────────────────────────────────────────────────
@@ -420,6 +437,35 @@ function orgHeaderFallback(cells) {
 // 值「新台幣 1,091,313 元整」卻好端端在旁邊)。**不**改用模糊比對標籤——
 // 「竣工日期」與「開工日期」只差一個字,放寬字元容差會把這兩欄配錯,
 // 那比抽不到嚴重得多。改認值本身的形態:以「新台幣/新臺幣」開頭。
+/**
+ * 竣工日的退路:敘述式報告書沒有獨立的竣工日欄位,日期埋在句子裡。
+ * 實測寶嶸:「（工期：180日曆天，完工限期為116年1月10日）」。
+ *
+ * ⚠️ **不可以抓句子裡的任何日期**。同一句裡還有「180」與工期字樣,而更常見的是
+ * 開工句與竣工句擠在一起;抓錯會生出一個看起來完全合法的竣工日,比對層攔不住。
+ * 只認幾個明確指向竣工的說法,並取**該詞之後**的第一個日期。
+ */
+const 竣工說法 = /(完工限期|竣工期限|竣工日期|完工日期|限期完工)[^0-9]{0,6}/;
+function endDateSentenceFallback(lines) {
+  for (const line of lines) {
+    const s = String(line).replace(/[\s　]/g, '');
+    const m = 竣工說法.exec(s);
+    if (!m) continue;
+    const iso = rocToISO(s.slice(m.index + m[0].length));
+    if (iso) return iso;
+  }
+  // 「…前竣工」「…前完工」是日期在**詞之前**的寫法,單獨處理才不會與上面那條打架。
+  for (const line of lines) {
+    const s = String(line).replace(/[\s　]/g, '');
+    const m = /(\d{1,3}[/年\-.]\d{1,2}[/月\-.]\d{1,2}日?)前(?:竣工|完工)/.exec(s);
+    if (m) {
+      const iso = rocToISO(m[1]);
+      if (iso) return iso;
+    }
+  }
+  return null;
+}
+
 function moneySentenceFallback(lines) {
   for (const line of lines) {
     const s = String(line).trim();
@@ -581,9 +627,18 @@ function extractFields(ocrOutput) {
   if (parseMoney(raw.契約金額) == null) {
     raw.契約金額 = moneySentenceFallback(allLines) || raw.契約金額;
   }
-  // 抬頭的機關全銜(見 orgHeaderFallback)。只看第 1 頁:抬頭在那裡,而後續頁的
-  // 署名欄、備註句裡也有同一個機關名,y 沒有跨頁可比性。
-  if (!raw.主辦機關 && pageCells[0]) raw.主辦機關 = orgHeaderFallback(pageCells[0]);
+  // 抬頭的機關全銜(見 orgHeaderFallback)。**逐頁試,先命中者保留**——
+  // 原本只看第 1 頁,理由是「抬頭在那裡」。但真實的合併檔不是這樣:寶嶸那份
+  // 「函 + 開工報告書」的公文函佔了第 1、2 頁,**報告書在第 3 頁**,抬頭
+  // 「雲林縣麥寮鄉橋頭國民小學」也在那裡,只看第 1 頁就永遠抓不到。
+  // 跨頁的顧慮(署名欄與備註句裡也有同名字串)由 orgHeaderFallback 自己的判準擋:
+  // 它只收「以縣市開頭、以學校結尾」且最上方的那一個。
+  if (!raw.主辦機關) {
+    for (const cs of pageCells) {
+      if (raw.主辦機關) break;
+      raw.主辦機關 = orgHeaderFallback(cs);
+    }
+  }
   // 退路的觸發條件是「解不出天數」而非「標籤沒命中」:標籤命中但那格不是工期時,
   // 一個非 null 的垃圾字串會把退路整個擋掉。
   if (parseDuration(raw.契約工期).天數 == null) {
@@ -599,6 +654,11 @@ function extractFields(ocrOutput) {
   }
 
   const 開工日 = rocToISO(raw.契約規定開工日) || startDateFallback(allLines);
+  // 竣工日的退路:敘述式報告書沒有「契約規定竣工日」這一欄,日期埋在句子裡
+  // ——寶嶸實測「(工期:180日曆天,完工限期為116年1月10日)」。
+  // 只認「完工限期/竣工期限/前竣工/前完工」這幾個明確的說法,**不是抓句子裡任何日期**:
+  // 同一句裡就有「180」與工期,抓錯會生出一個看起來合法的竣工日。
+  const 竣工日 = rocToISO(raw.契約規定竣工日) || endDateSentenceFallback(allLines);
 
   return {
     工程名稱: raw.工程名稱,
@@ -612,7 +672,7 @@ function extractFields(ocrOutput) {
     // 本來就以縣市開頭(「臺中市西區大勇國民小學」),而且只在工程地點抽不到時才用。
     縣市: extractCounty(raw.工程地點) || extractCounty(raw.主辦機關),
     契約規定開工日: 開工日,
-    契約規定竣工日: rocToISO(raw.契約規定竣工日),
+    契約規定竣工日: 竣工日,
   };
 }
 
