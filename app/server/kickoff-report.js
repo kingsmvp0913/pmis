@@ -352,8 +352,14 @@ function startDateFallback(lines) {
 function durationSentenceFallback(lines) {
   for (const line of lines) {
     const s = String(line);
-    if (!/日曆天|工作天/.test(s)) continue;
-    if (parseDuration(s).天數 != null) return s;
+    // 守門改用 parseDuration 自己的結果,不要在這裡再寫一次「日曆天|工作天」。
+    // 那份判準含**異體字折疊**(義賢 OCR 讀到的是「120日暦天」,`暦` 是 `曆` 的異體字),
+    // 寫兩份的下場是:折疊只在其中一邊生效,而這一邊靜靜略過整行——
+    // 契約工期整欄讀不到,畫面上只看到「工期缺漏」,指不出原因。
+    // 兩個都非 null 才收:基準為 null 代表兩個基準詞同時出現(表單上是並列選項),
+    // 那種行本來就不該當成工期來源。
+    const d = parseDuration(s);
+    if (d.天數 != null && d.基準 != null) return s;
   }
   return null;
 }
@@ -418,6 +424,39 @@ function moneySentenceFallback(lines) {
   for (const line of lines) {
     const s = String(line).trim();
     if (/^新[台臺]幣/.test(s) && parseMoney(s) != null) return s;
+  }
+  return null;
+}
+
+/**
+ * 金額退路的**座標版**:國字大寫金額常被 OCR 斷成上下兩格。
+ *
+ * 行層接不起來——中間會夾別的欄位。實測豐榮的行序是
+ * 「新臺幣參佰貳拾伍萬壹」(行5) / 「契約編號A1150527」(行7) / 「仟柒佰陸拾玖元整」(行8);
+ * 義賢同樣被「契約金額」「契約編號」兩行夾在中間。
+ *
+ * 但**座標上它們是正上下相鄰的**(豐榮 x503/x500、垂直間距 5px;義賢 x772/x769、
+ * 間距 20px),用同欄 + 緊貼往下接就對得起來。
+ *
+ * ⚠️ 為什麼非接不可:只拿到前半段「新臺幣參佰貳拾伍萬壹」時,
+ * `parseMoney` 會解出 **3,250,001** —— 真值是 3,251,769。那是個看起來完全合法的
+ * 金額,比對層與承辦人都看不出問題。接起來才是 3,251,769。
+ */
+function moneyCellFallback(cells) {
+  for (const c of cells) {
+    if (!/^新[台臺]幣/.test(String(c.text).trim())) continue;
+    let s = String(c.text).trim();
+    let cur = c;
+    for (;;) {
+      const next = cells.find((d) => d !== cur && d.y >= cur.bottom
+        && d.y - cur.bottom <= Math.max(cur.h, d.h)
+        && sameColumn(cur, d) && !isAnyLabel(d.text));
+      if (!next) break;
+      s += String(next.text).trim();
+      cur = next;
+      if (/[元整]$/.test(s)) break;          // 收到「元整」就結束,不再往下吃
+    }
+    if (parseMoney(s) != null) return s;
   }
   return null;
 }
@@ -525,7 +564,23 @@ function extractFields(ocrOutput) {
     if (!raw[key]) raw[key] = null;
   }
 
-  if (!raw.契約金額) raw.契約金額 = moneySentenceFallback(allLines);
+  // 金額退路:**座標版優先**。國字大寫金額常被斷成上下兩格,而中間夾著別的欄位,
+  // 行層接不起來——只拿到前半段會解出一個看起來完全合法的錯金額(豐榮 3,250,001
+  // vs 真值 3,251,769)。座標版接得起來;它找不到時才退回行層(那是給
+  // 「金額本來就在同一行、只是標籤被 OCR 毀掉」的樣本用的)。
+  // ⚠️ 觸發條件是「**解不出金額**」而不是「標籤沒命中」——同 durationSentenceFallback
+  // 那條的教訓。豐榮的標籤路徑會抓到被 OCR 斷成兩半的前半段「新臺幣參佰貳拾伍萬壹」:
+  // 非 null,於是退路整個被擋掉,而那串 parseMoney 解不出來(尾數的單位被切掉了),
+  // 最後契約金額還是空的——**畫面上看起來像「這份沒有金額」,其實是接漏了一半**。
+  if (parseMoney(raw.契約金額) == null) {
+    for (const cs of pageCells) {
+      const v = moneyCellFallback(cs);
+      if (v != null) { raw.契約金額 = v; break; }
+    }
+  }
+  if (parseMoney(raw.契約金額) == null) {
+    raw.契約金額 = moneySentenceFallback(allLines) || raw.契約金額;
+  }
   // 抬頭的機關全銜(見 orgHeaderFallback)。只看第 1 頁:抬頭在那裡,而後續頁的
   // 署名欄、備註句裡也有同一個機關名,y 沒有跨頁可比性。
   if (!raw.主辦機關 && pageCells[0]) raw.主辦機關 = orgHeaderFallback(pageCells[0]);

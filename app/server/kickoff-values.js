@@ -19,7 +19,15 @@
 // 合法、比對層攔不住的錯值,比讀不到危險得多。
 // NFKC 只放在這一層(金額/日期/工期),不可上移到 items 層:NFKC 會把「㎡」
 // 拆成「m2」,那會打壞施工日誌讀取器的單位比對。
-const stripSpace = (s) => String(s).normalize('NFKC').replace(/[\s　]/g, '');
+//
+// 另外折一組**異體字形**。NFKC 不折這些(它們不是相容字),而 `ocr/variants.js`
+// 的範圍是「簡體→繁體」,異體字放進去會破壞那個檔的判準。
+// 目前只收實測看過的:義賢那份 OCR 讀出「120日暦天」——`暦` 是 `曆` 的異體字,
+// 而 parseDuration 的緊鄰式判準寫的是 `日曆天`,於是**整個契約工期讀不到**。
+// ⚠️ 只收驗證過的字,不憑想像擴充:多折一個字就多一種把別的東西折壞的可能。
+const VARIANT_FORMS = { 暦: '曆' };
+const stripSpace = (s) => String(s).normalize('NFKC').replace(/[\s　]/g, '')
+  .replace(/[暦]/g, (c) => VARIANT_FORMS[c]);
 
 /**
  * 民國年轉西元 ISO。接受 '115/06/16'、'115/6/3'、'中華民國115年6月16日'。
@@ -67,7 +75,16 @@ const CN_BIG = { 萬: 10000, 万: 10000, 億: 100000000 };
  */
 function cnNumToNumber(v) {
   if (v == null) return null;
-  const s = stripSpace(v).replace(/^.*?[:：]/, '').replace(/[元圓整]/g, '');
+  // 幣別前綴要**明確剝掉**。下面的迴圈遇到不認得的字就整串放棄(那條規則是對的
+  // ——夾雜 OCR 雜訊時硬解會生出看起來合理的錯金額),但「新臺幣」不是雜訊,
+  // 是每張表都有的前綴。實測義賢:OCR 讀到的是完整正確的
+  // 「新臺幣貳佰柒拾參萬玖仟貳佰零陸元整」,卻**因為第一個字是「新」而整串回 null**,
+  // 契約金額整欄讀不到。剝掉之後得 2,739,206。
+  // ⚠️ 剝的是白名單前綴,不是「跳過不認得的字」——後者等於把上面那條規則廢掉。
+  const s = stripSpace(v)
+    .replace(/^.*?[:：]/, '')
+    .replace(/^(新臺幣|新台幣|臺幣|台幣|NT\$|NT|\$)/, '')
+    .replace(/[元圓整]/g, '');
   if (s === '' || !/[零〇一壹二貳兩三叁參四肆五伍六陸七柒八捌九玖十拾百佰千仟萬万億]/.test(s)) return null;
 
   let total = 0;
@@ -89,6 +106,16 @@ function cnNumToNumber(v) {
       return null;
     }
   }
+  // ⚠️ **被切斷的大寫金額不可以硬解**。國字大寫的慣例是:跳過的位數要用「零」補
+  // (貳佰柒拾參萬玖仟貳佰**零**陸)。所以「…萬」後面直接接一個數字、而且那是最後
+  // 一個字時,後面的單位是被切掉的,不是真的個位數。
+  // 實測豐榮:OCR 把金額斷成「新臺幣參佰貳拾伍萬壹」+「仟柒佰陸拾玖元整」兩格,
+  // 只拿到前半段時會解出 **3,250,001**,而真值是 3,251,769——一個看起來完全合法、
+  // 比對層與承辦人都看不出問題的錯金額。寧可回 null 讓它顯示成讀不到。
+  const last = s[s.length - 1];
+  const prev = s[s.length - 2];
+  if (CN_DIGIT[last] !== undefined && prev && CN_BIG[prev]) return null;
+
   const n = total + section + digit;
   return n > 0 ? n : null;
 }
