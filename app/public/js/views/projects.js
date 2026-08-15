@@ -709,30 +709,68 @@
   async function renderList(content) {
     content.appendChild(el('div', { class: 'page-title' }, '工程'));
     const search = el('input', { class: 'form-control search', type: 'text', placeholder: '搜尋工程名稱、事務所編號或工程編號…' });
+    // 狀態是後端**推導**的(deriveStatus:看實際竣工日與開工日),不是 projects 的欄位,
+    // 所以篩選做在前端——為了一個推導值去改 SQL 會讓那條查詢多背一份狀態邏輯,
+    // 兩邊的定義一漂掉就會出現「列表說施工中、詳細頁說已竣工」。
+    const STATUSES = ['未開工', '施工中', '已竣工'];
+    const statusSel = el('select', { class: 'form-control', style: 'width:auto' },
+      [el('option', { value: '' }, '全部狀態'), ...STATUSES.map((s) => el('option', { value: s }, s))]);
     content.appendChild(el('div', { class: 'toolbar' }, [
       search,
+      statusSel,
       el('div', { class: 'spacer' }),
       el('button', { class: 'btn btn-primary', onClick: () => { window.location.hash = '/projects/new'; } }, '＋ 新增工程')
     ]));
     const tbody = el('tbody', {});
+
+    // 排序:預設沿用後端的順序(事務所編號 ASC NULLS LAST, id DESC —— 使用者清單
+    // 第 19/21 項定的)。**點欄位才改**,而且再點一次回到預設,不讓承辦人被鎖在
+    // 某個排序裡出不來。
+    let sortKey = null;
+    let sortDir = 1;
+    const SORTS = {
+      firm_doc_no: { 名: '事務所編號', 值: (p) => p.firm_doc_no },
+      name: { 名: '名稱', 值: (p) => p.name },
+      // 狀態照工程的時序排(未開工→施工中→已竣工),不照字面——字面排出來是
+      // 「已竣工/未開工/施工中」,對承辦人沒有意義。
+      status: { 名: '狀態', 值: (p) => STATUSES.indexOf(p.status) },
+      design_fee_actual: { 名: '設計費', 值: (p) => p.design_fee_actual },
+    };
+    const 排序頭 = (key, style) => {
+      const th = el('th', { style: `${style || ''};cursor:pointer;user-select:none`, title: '點擊排序' },
+        SORTS[key].名 + (sortKey === key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''));
+      th.addEventListener('click', () => {
+        if (sortKey !== key) { sortKey = key; sortDir = 1; }
+        else if (sortDir > 0) { sortDir = -1; }
+        else { sortKey = null; }                     // 第三次點回到預設順序
+        renderHead();
+        paint();
+      });
+      return th;
+    };
+    const headRow = el('tr', {});
+    function renderHead() {
+      headRow.innerHTML = '';
+      headRow.append(
+        // 事務所編號而非契約編號:承辦人平常找檔案用的是前者(使用者清單第 19 項)。
+        // 契約編號沒有從列表拿掉,它在工程詳細頁還在。
+        排序頭('firm_doc_no', 'width:110px'),
+        排序頭('name'),
+        排序頭('status', 'width:88px'),
+        排序頭('design_fee_actual', 'width:140px'),
+        el('th', { style: 'width:300px' }, '流程'),
+        el('th', { style: 'width:50px' }, ''),
+      );
+    }
+    renderHead();
     content.appendChild(el('div', { class: 'table-wrap' }, [
-      el('table', { class: 'data' }, [
-        el('thead', {}, [el('tr', {}, [
-          // 事務所編號而非契約編號:承辦人平常找檔案用的是前者(使用者清單第 19 項)。
-          // 契約編號沒有從列表拿掉,它在工程詳細頁還在。
-          el('th', { style: 'width:110px' }, '事務所編號'),
-          el('th', {}, '名稱'),
-          el('th', { style: 'width:76px' }, '狀態'),
-          el('th', { style: 'width:140px' }, '設計費'),
-          el('th', { style: 'width:300px' }, '流程'),
-          el('th', { style: 'width:50px' }, '')
-        ])]),
-        tbody
-      ])
+      el('table', { class: 'data' }, [el('thead', {}, [headRow]), tbody]),
     ]));
 
     let timer;
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
+    // 狀態與排序只動已載入的資料,不重打 API——搜尋字串沒變,重打只會多一次往返。
+    statusSel.addEventListener('change', paint);
 
     // 流程關卡。判定與 WorkflowStatus.bar 同一套語意(附件種類、契約項目數、
     // 日誌天數),不重寫一份規則——真正的把關仍在各自的後端路由。
@@ -791,19 +829,42 @@
       }
     }
 
+    // 後端回來的原始清單。狀態篩選與排序都只動這一份的**副本**,不重打 API。
+    let 全部 = [];
+
     async function load() {
+      const q = search.value.trim();
+      try { 全部 = await Api.get('projects' + (q ? '?q=' + encodeURIComponent(q) : '')); }
+      catch (e) { showToast(e.message, 'error'); return; }
+      paint();
+    }
+
+    function paint() {
       // 開著的 ⋮ 選單已搬到 document.body(不在即將清空的 tbody 底下)。
       // 打字期間(debounce 未觸發)點開某列選單、debounce 觸發整表重繪的話,
       // 選單會孤兒掛在 body 上、位置停在舊列座標,且閉包指向已被丟棄的
       // panelRow——先關掉,重繪後要開哪列再重新點開。
       closeMoreMenu();
-      const q = search.value.trim();
-      let rows;
-      try { rows = await Api.get('projects' + (q ? '?q=' + encodeURIComponent(q) : '')); }
-      catch (e) { showToast(e.message, 'error'); return; }
+      const want = statusSel.value;
+      let rows = want ? 全部.filter((p) => p.status === want) : 全部.slice();
+      if (sortKey) {
+        const 取 = SORTS[sortKey].值;
+        // **空值一律排最後,不受升降序影響**。跟著翻的話,按「設計費」降序時
+        // 一整片「—」會擠在最前面,承辦人要找的是有金額的那幾案。
+        rows.sort((a, b) => {
+          const x = 取(a);
+          const y = 取(b);
+          const 空x = x == null || x === '';
+          const 空y = y == null || y === '';
+          if (空x || 空y) return 空x && 空y ? 0 : (空x ? 1 : -1);
+          if (typeof x === 'number' && typeof y === 'number') return (x - y) * sortDir;
+          return String(x).localeCompare(String(y), 'zh-TW') * sortDir;
+        });
+      }
       tbody.innerHTML = '';
       if (!rows.length) {
-        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '6' }, '沒有資料')]));
+        tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '6' },
+          全部.length ? `沒有「${want}」的工程` : '沒有資料')]));
         return;
       }
       for (const p of rows) {

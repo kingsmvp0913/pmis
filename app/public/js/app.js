@@ -84,13 +84,15 @@ async function renderLogin() {
 
 // 主選單項目。首頁已移除(2026-08-05):登入後直接落在工程列表,
 // 未註冊的 hash 也一律導向工程列表,見下方 route() 結尾。
+// 工程與狀態總表排最前面(2026-08-15):那兩個是每天都在用的,
+// 廠商/學校/保險公司/事務所是建檔用的主檔,建好之後很少再進去。
 const NAV = [
+  { hash: '#/projects', label: '📋 工程' },
+  { hash: '#/status-board', label: '📊 狀態總表' },
   { hash: '#/vendors', label: '🏗️ 廠商' },
   { hash: '#/schools', label: '🏫 學校' },
   { hash: '#/insurers', label: '🛡️ 保險公司' },
   { hash: '#/firms', label: '🏢 事務所' },
-  { hash: '#/projects', label: '📋 工程' },
-  { hash: '#/status-board', label: '📊 狀態總表' },
   { hash: '#/parsers', label: '🧩 讀取器' },
   { hash: '#/settings', label: '⚙️ 系統設定' }
 ];
