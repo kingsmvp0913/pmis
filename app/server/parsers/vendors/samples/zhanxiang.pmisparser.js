@@ -2,17 +2,24 @@
  * zhanxiang.pmisparser.js — 展翔營造股份有限公司(仁德國小)施工日誌讀取器
  *
  * 來源:`展翔仁德國小施工日誌(115.06.26~115.06.30).pdf`,21 頁 = 5 天,
- * 每天 4 頁(封面/分隔 + 施工日誌 1 頁 + 第二聯 2 頁)。
+ * 每天 4 頁(封面/分隔 + 第一聯 1 頁 + **第二聯 2 頁**)。
  *
- * ── 只讀施工日誌頁,不讀第二聯 ──
- * 第二聯雖然有單價與金額,但**它沒有項目名稱**(只有數量/單價/金額三組數字),
- * 要對回項目只能靠列序,而各天的列數不一致——對錯一列,整份金額就掛到別的項目上,
- * 而且看起來完全正常。故契約單價與本日完成金額一律 null 不硬湊,
- * SP3 會據此把 B3/B4/C2 列入 skipped 並在報告中說明。
+ * ── ⛔ v1.0.0 的重大錯誤:整個第二聯都沒讀 ──
+ * 舊檔頭寫著「第二聯沒有項目名稱,只有數量/單價/金額三組數字」——**那是錯的**,
+ * 名稱就印在 x=52。真正的分工是:
+ *   第一聯 = 天氣/進度/工期 + **只列當天施作的項目**
+ *   第二聯 = **完整清單**(項次 1~31 + 費用項),含契約數量、契約單價、
+ *            本日完成數量與金額、累計完成數量與金額
  *
- * ── 版面事實(實測第 2 頁)──
- * 明細表頭:施工項目 118 / 單位 222 / 契約數量 266 / 本日完成數量 337 /
- *           累計完成數量 421 / 備註 516。
+ * 只讀第一聯的後果(實測仁德 7 月檔 31 天):「整月只出現 2 個項目、每天 0.6 列、
+ * 此格式不提供契約單價」。承辦人打開檔案一看就說「每天都是完整明細」。
+ * 改讀第二聯之後:每天 37 列、缺欄位 0、單價與金額齊全。
+ * **這種漏讀不會讓任何欄位變 null,也不會有任何錯誤訊息**——少的是整批列,
+ * 而留下來的那幾列自己都對得起來,SP3 一條都不會叫。
+ *
+ * ── 版面事實 ──
+ * 第二聯明細表頭:施工項目 x52 / 單位 x222 / 六個數值子欄由子表頭決定
+ *   (契約數量 數量·單價 | 本日完成數量 數量·金額 | 累計完成數量 數量·金額)。
  * **項次與名稱黏在同一格**(「1.乙種施工圍籬…」「伍、營造綜合保險費」),需拆。
  * 明細之後緊接「二、工地材料管理概況」的表格,欄位配置一模一樣——不在那裡停下來,
  * 材料會被當成施工項目收進去。
@@ -129,24 +136,159 @@ function parseHeader(rows) {
   };
 }
 
-// 施工日誌頁的判定:有「表報編號」且**沒有**「第二聯」。第二聯的頁面也有明細
-// 表格但沒有項目名稱,收進來只會產生一堆無名項目。
+// 第一聯(有「表報編號」且沒有「第二聯」):天氣、進度、工期都在這裡。
 const isLogPage = (rows) => {
   const all = rows.map((r) => r.items.map((i) => i.s).join('')).join('');
   return /表報編號/.test(all) && !/第二聯/.test(all);
 };
+const isSecondPage = (rows) => rows.some((r) => r.items.some((i) => /第二聯/.test(i.s)));
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  第二聯
+ *
+ * ⛔ 舊版的檔頭寫著「第二聯沒有項目名稱,只有數量/單價/金額三組數字」,
+ *    據此**整個第二聯都不讀**。那個判斷是錯的:名稱就印在 x=52,
+ *    而且第二聯才是**完整清單**——第一聯逐日只列當天施作的項目。
+ *
+ * 實測仁德 7 月檔(31 天):只讀第一聯得到「整月只有 2 個項目、每天 0.6 列、
+ * 沒有契約單價」;承辦人打開檔案一看就說「每天都是完整明細」。
+ * 讀第二聯之後每天 20 項、單價與金額齊全。
+ *
+ * **這種漏讀不會讓任何欄位變 null,也不會有任何錯誤訊息**——少的是整批列,
+ * 而剩下的那幾列自己都對得起來,SP3 一條都不會叫。
+ *
+ * ── 版面(實測 7/1 第二聯第 1 頁)──
+ *   施工項目 x52 / 單位 x226 / 六個數值子欄由子表頭決定:
+ *   契約數量 數量·單價 | 本日完成數量 數量·金額 | 累計完成數量 數量·金額
+ * 一個 item 可能同時裝著兩個數字(「1.00    253,106.00」),要用 w/s.length
+ * 推每個字元的 x 再取 token 中心歸欄——照 item 的起點歸欄會把單價當成數量。
+ * ═══════════════════════════════════════════════════════════════════ */
+
+const SUB_COLS = ['契約數量', '契約單價', '本日完成數量', '本日完成金額', '累計完成數量', '累計完成金額'];
+const NUM_TOKEN_RE = /-?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[-－—–]/g;
+const centerOf = (it) => it.x + (it.w || 0) / 2;
+
+/** 把一個 item 裡的數字/破折號切成帶 x 中心的 token(見上方註解)。 */
+function numTokens(it) {
+  const s = String(it.s == null ? '' : it.s);
+  const per = s.length ? (it.w || 0) / s.length : 0;
+  const out = [];
+  NUM_TOKEN_RE.lastIndex = 0;
+  let m = NUM_TOKEN_RE.exec(s);
+  while (m) {
+    out.push({ t: m[0], cx: it.x + per * (m.index + m[0].length / 2) });
+    m = NUM_TOKEN_RE.exec(s);
+  }
+  return out;
+}
+
+/** 子表頭那一列(數量 單價 數量 金額 數量 金額)→ 六個欄位中心。 */
+function subColumns(rows) {
+  for (const r of rows) {
+    const labs = r.items.filter((i) => /^(數量|單價|金額)$/.test(String(i.s).trim()));
+    if (labs.length >= 5) return labs.sort((a, b) => a.x - b.x).map(centerOf);
+  }
+  return null;
+}
+
+function parseSecondPage(rows) {
+  const cols = subColumns(rows);
+  if (!cols) return [];
+  const 名稱右界 = 200;
+  // ⚠️ **單位欄與第一個數值欄的界線要從表頭取,不可以用固定偏移。**
+  // 單位是「M2」「M3」時裡面有數字:界劃得太左,那個 2 會被當成契約數量
+  // (實測項次 7「砌1/2B磚牆」契約 28 被讀成 **2**,而 28.00 因為「先到先得」被丟掉);
+  // 界劃得太右,單位「M」整格落進數值區、被當成沒有數字的 token 丟掉,
+  // 單位變 null(實測項次 15)。兩種都不會有錯誤訊息。
+  // 取「單位表頭中心」與「第一個數值欄中心」的中點。
+  const 單位表頭 = rows.map((r) => r.items.find((i) => String(i.s).trim() === '單位'))
+    .find(Boolean);
+  const 值左界 = 單位表頭 ? (centerOf(單位表頭) + cols[0]) / 2 : cols[0] - 20;
+  const out = [];
+  let started = false;
+  for (const row of rows) {
+    const head = row.items.filter((i) => i.x < 名稱右界).map((i) => i.s).join('').trim();
+    if (!started) { if (/施工項目/.test(head)) started = true; continue; }
+    if (SECTION_END_RE.test(head)) break;
+
+    const 單位 = text(row.items.filter((i) => i.x >= 名稱右界 && i.x < 值左界)
+      .map((i) => i.s).join('').trim());
+    const vals = {};
+    for (const it of row.items.filter((i) => centerOf(i) >= 值左界)) {
+      for (const tk of numTokens(it)) {
+        let bi = 0;
+        for (let i = 1; i < cols.length; i++) {
+          if (Math.abs(cols[i] - tk.cx) < Math.abs(cols[bi] - tk.cx)) bi = i;
+        }
+        const key = SUB_COLS[bi];
+        if (vals[key] === undefined) vals[key] = numOf(tk.t);
+      }
+    }
+
+    const m = ITEM_HEAD_RE.exec(head);
+    if (!m) {
+      // 名稱續行:名稱補回去,值只補「還沒拿到的」——實測項次 4 的單位與全部數字
+      // 都印在續行那一列,不補的話那一列整排 null 而名稱看起來完好。
+      const last = out[out.length - 1];
+      if (last) {
+        // ⚠️ **補值不可以用「head 非空」當前提**。名稱換行時值自己佔一列
+        // (實測項次 1:名稱 642.1 / 值 637.0 / 單位 636.4 / 名稱續行 631.6),
+        // 那一列的名稱欄是空的 → 舊寫法整列跳過 → 項次 1、3 的單位與六個數值
+        // 全部變 null,而名稱看起來完好。名稱只在 head 非空時才接。
+        if (head) last.工程項目 = `${last.工程項目 || ''}${head}`;
+        if (last.單位 == null) last.單位 = 單位;
+        for (const k of ['契約數量', '契約單價', '本日完成數量', '本日完成金額', '累計完成數量']) {
+          if (last[k] == null && vals[k] !== undefined) last[k] = vals[k];
+        }
+      }
+      continue;
+    }
+    out.push({
+      項次: m[1],
+      工程項目: text(m[2]),
+      單位,
+      契約單價: vals.契約單價 === undefined ? null : vals.契約單價,
+      契約數量: vals.契約數量 === undefined ? null : vals.契約數量,
+      本日完成數量: vals.本日完成數量 === undefined ? null : vals.本日完成數量,
+      本日完成金額: vals.本日完成金額 === undefined ? null : vals.本日完成金額,
+      累計完成數量: vals.累計完成數量 === undefined ? null : vals.累計完成數量,
+    });
+  }
+  return out;
+}
+
+/** 第二聯頁上的日期(用來與第一聯配對;一天有兩頁第二聯)。 */
+const dateOfPage = (rows) => rocToISO(rows.map((r) => r.items.map((i) => i.s).join('')).join(''));
 
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
   if (!ft) throw new Error('缺少 ctx.filetypes(檔型工具需由 registry 注入)');
   const pages = await ft.extractItems(filePath);
-  const out = [];
+  const 第一聯 = [];                 // { 日期, header }
+  const 第二聯 = new Map();          // 日期 → dailyRows(一天兩頁,要接起來)
   for (const p of pages) {
     const rows = groupRows(p.items);
+    if (isSecondPage(rows)) {
+      const 日 = dateOfPage(rows);
+      if (!日) continue;
+      const cur = 第二聯.get(日) || [];
+      cur.push(...parseSecondPage(rows));
+      第二聯.set(日, cur);
+      continue;
+    }
     if (!isLogPage(rows)) continue;
-    out.push({ header: parseHeader(rows), dailyRows: collectRows(rows), extras: {} });
+    const header = parseHeader(rows);
+    第一聯.push({ 日期: header.填報日期, header, rows });
   }
-  return out;
+  if (!第一聯.length) throw new Error('讀不到任何「表報編號」頁(非展翔格式?)');
+
+  // 明細一律取第二聯(完整清單)。某一天的第二聯缺頁時**退回第一聯那一天的列**,
+  // 不回空陣列——空陣列會被上游當成「這天沒施工」而靜靜略過,而實際上是缺頁。
+  return 第一聯.map(({ 日期, header, rows }) => ({
+    header,
+    dailyRows: 第二聯.get(日期) || collectRows(rows),
+    extras: {},
+  }));
 }
 
 async function parse(filePath, ctx) {
@@ -176,15 +318,16 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '2.0.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
-      '項次', '工程項目', '單位', '契約數量', '本日完成數量', '累計完成數量',
+      '項次', '工程項目', '單位', '契約數量', '契約單價',
+      '本日完成數量', '本日完成金額', '累計完成數量',
     ],
   },
   parse,
   parseAll,
   selfTest,
-  _internal: { groupRows, collectRows, parseHeader, rocToISO },
+  _internal: { groupRows, collectRows, parseHeader, rocToISO, parseSecondPage },
 };
