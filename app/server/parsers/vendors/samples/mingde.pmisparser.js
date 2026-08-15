@@ -173,30 +173,55 @@ function parseFirst(items) {
   const cols = headerCols(hb, L1_COLS);
   const dailyRows = [];
   if (hb && cols) {
-    // 明細帶:表頭之下。名稱在最左(表頭「施工項目」的左邊),數值靠白名單單位認。
-    const 名稱左界 = Math.min(...Object.values(cols)) - 60;
+    // 明細帶:表頭之下。
+    //
+    // ⚠️ **同一帶裡「名稱 vs 值」不可以只用 x 界切。**
+    // 原本的界是 `min(表頭中心) - 60` = 施工項目中心 97 − 60 = **37**,
+    // 而名稱本來就從 x=18 一路長到 x≈170——於是名稱只有最左邊那幾個字被收下,
+    // 其餘被當成「值」。「牆面與平頂塗刷水泥漆(含清潔,批土整平,一底漆二度面漆)」
+    // 在來源是**完整的一行**,卻被截成「…一底漆二」;而截掉的那截是文字、
+    // `num()` 回 null,所以不會寫進任何欄位,**也不會有任何欄位變 null**。
+    //
+    // 改用語意判準:一個 item 要算「值」,得**既是單位或數字,又落在名稱區以右**。
+    // 兩個條件都要,是因為單靠語意會誤傷名稱裡的純數字片段(「1~2分霓虹石」),
+    // 單靠 x 界則是現在這個病。名稱區以右取「施工項目」與「單位」兩個表頭中心的中點。
+    // 「施工項目」不是值欄,不在 L1_COLS 裡(放進去會讓 assignByNearest 生出假欄位),
+    // 所以直接從表頭帶把它的中心取出來算界。
+    const 項目表頭 = hb.items.find((it) => despace(it.s) === '施工項目');
+    const 名稱右界 = 項目表頭 ? (centerOf(項目表頭) + cols.單位) / 2 : cols.單位 - 40;
+    const 是值 = (it) => (unitOf(it.s) || num(it.s) != null) && centerOf(it) > 名稱右界;
     const body = bs.filter((b) => b.y < hb.y);
     for (let i = 0; i < body.length; i++) {
       const b = body[i];
-      const 值 = b.items.filter((it) => centerOf(it) > 名稱左界);
+      const 值 = b.items.filter(是值);
       const u = 值.map((it) => unitOf(it.s)).find((x) => x);
       if (!u) continue;                                   // 沒有單位的帶不是數值帶
       // 數值帶自己沒有名稱 → 一上一下對稱收編(見檔頭)
-      const 名 = [];
-      const own = b.items.filter((it) => centerOf(it) <= 名稱左界).map((it) => it.s).join('');
-      if (text(own)) 名.push(own);
-      for (let k = 1; k <= 2 && !名.length; k++) {
-        const up = body[i - k];
-        const dn = body[i + k];
-        for (const nb2 of [up, dn]) {
-          if (!nb2) continue;
-          const only = nb2.items.every((it) => centerOf(it) <= 名稱左界);
-          if (!only) continue;
-          const t = bandText(nb2);
-          if (text(t)) 名.push(t);
-        }
+      const own = b.items.filter((it) => !是值(it)).map((it) => it.s).join('');
+      // ⚠️ 「這一帶是不是名稱帶」**不能用 x 界判**。原本要求整帶的 item 都落在
+      // 名稱左界以內,但名稱本來就會往右長:「安裝輕鋼架、金屬烤漆透空網與耐燃一級
+      // 貼皮天花板(含必要」那一行最右的 item 在 x=167,遠超過左界,於是整行被當成
+      // 不是名稱而丟掉,只收到下面那行「之側封板與窗簾盒批土刷漆)」——
+      // **名稱變成從中間截斷的後半段,而且沒有任何欄位變 null**。
+      // 改用語意判準:一個帶只要沒有單位、也沒有任何數字,它就只可能是名稱續行。
+      const 是名稱帶 = (nb2) => !!(nb2 && nb2.items.every((it) => !unitOf(it.s) && num(it.s) == null)
+        && text(bandText(nb2)));
+      // ⚠️ **對稱收編不可以因為「自己這帶已經有名稱」就跳過。**
+      // 三行的名稱長這樣:名稱 / 名稱+數值 / 名稱(數值印在整塊名稱的垂直中央)。
+      // 原本的 `!名.length` 讓 own 一有值就不再往上下收,於是
+      // 「拆除(含切割)集中廁所既有牆面…」只留下中間那段「隔板、所有衛生設備…廢棄物」
+      // ——**名稱頭尾都不見了,而且不會有任何欄位變 null**。
+      //
+      // 要求**上下同時是名稱帶**才收(檔頭講的對稱):每個項目都有自己的數值帶,
+      // 兩個數值帶之間若只有一行名稱,單邊收會把隔壁項目的續行搶過來。
+      const ups = []; const dns = [];
+      for (let k = 1; k <= 2; k++) {
+        const up = body[i - k]; const dn = body[i + k];
+        if (!是名稱帶(up) || !是名稱帶(dn)) break;
+        ups.unshift(bandText(up));                        // 由上而下排
+        dns.push(bandText(dn));
       }
-      const 工程項目 = text(名.join(''));
+      const 工程項目 = text([...ups, text(own) || '', ...dns].join(''));
       if (!工程項目) continue;
       const row = {
         項次: 工程項目, 工程項目, 單位: u,
@@ -277,12 +302,29 @@ function parseSecond(items) {
   const db = findBand(bs, /^工程名稱[::]/);
   const 名稱左界 = (cols.單位 || 320) - 60;
   const dailyRows = [];
-  for (const b of bs.filter((x) => x.y < hb.y)) {
+  // 第二聯的長名稱同樣會跨行、數值印在名稱區塊的垂直中央(項次3 實測:名稱 722.7、
+  // 項次與數值 719.6、單位單價 719.1、名稱續行 715.5)。原本只認「自己這帶裡的名稱」,
+  // 名稱在別帶時 `名` 是空的 → **整列被 continue 丟掉**。
+  // 實測第一聯 29 列、第二聯只有 26 列工程項目 + 5 列費用:**項次 3、7、26 整列不見**,
+  // 而那三項正是名稱最長的三項。列數少了不會有任何欄位變 null,
+  // 對帳時看起來就像「這幾項今天沒做」。改成與第一聯同一套對稱收編。
+  const 是名稱帶 = (nb) => !!(nb && nb.items.every((it) => !unitOf(it.s) && num(it.s) == null)
+    && text(bandText(nb)));
+  const body = bs.filter((x) => x.y < hb.y);
+  for (let i = 0; i < body.length; i++) {
+    const b = body[i];
     const u = b.items.map((it) => unitOf(it.s)).find((x) => x);
     if (!u) continue;
-    const 名 = b.items.filter((it) => centerOf(it) < 名稱左界 && centerOf(it) > (cols.項次 || 66) + 20)
+    const own = b.items.filter((it) => centerOf(it) < 名稱左界 && centerOf(it) > (cols.項次 || 66) + 20)
       .map((it) => it.s).join('');
-    const 工程項目 = text(名);
+    const ups = []; const dns = [];
+    for (let k = 1; k <= 2; k++) {
+      const up = body[i - k]; const dn = body[i + k];
+      if (!是名稱帶(up) || !是名稱帶(dn)) break;
+      ups.unshift(bandText(up));
+      dns.push(bandText(dn));
+    }
+    const 工程項目 = text([...ups, text(own) || '', ...dns].join(''));
     if (!工程項目) continue;
     const row = {
       項次: null, 工程項目, 單位: u,

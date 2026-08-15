@@ -59,11 +59,29 @@ describe('第二聯(完整明細)', () => {
 
   test('必要欄位零缺漏', () => {
     const rows = days.flatMap((d) => d.dailyRows);
-    expect(rows).toHaveLength(806);
+    // 34 列 = 29 工程項目 + 5 費用項,× 26 天。曾經是 806(31 列/天)——
+    // 名稱跨行的項次 3、7、26 **整列被丟掉**,見下一條。
+    expect(rows).toHaveLength(884);
     expect(rows.filter((r) => r.單位 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.工程項目 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.契約單價 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.項次 == null)).toHaveLength(0);
+  });
+
+  // 名稱跨行時數值印在名稱區塊的垂直中央,而原本只認「自己這帶裡的名稱」,
+  // 於是名稱最長的項次 3、7、26 每天都整列消失(806 vs 884)。
+  // **少了列不會有任何欄位變 null**,對帳時看起來就像「這幾項今天沒做」——
+  // 所以要斷言項次連續,不能只斷言欄位不為 null。
+  test('項次 1~29 每天都要在(長名稱那幾項曾整列消失)', () => {
+    const 應有 = Array.from({ length: 29 }, (_, i) => String(i + 1));
+    for (const d of days) {
+      const got = d.dailyRows.map((r) => r.項次);
+      expect(應有.filter((n) => !got.includes(n))).toEqual([]);
+    }
+    const r3 = days[0].dailyRows.find((r) => r.項次 === '3');
+    expect(r3.工程項目).toBe('拆除(含切割)集中廁所既有牆面、地坪、磁磚、牆面小便斗與隔板、'
+      + '所有衛生設備、給排水設施、導擺及天花板等;廢棄物清運處理(含合法證明)與環境清潔');
+    expect(r3.契約單價).toBe(210000);
   });
 
   // 廠商在 7/8、7/9 把費用項「貳」的本日完成金額整格留白(本日數量 0.006、

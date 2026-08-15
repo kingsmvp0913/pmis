@@ -98,13 +98,26 @@ describe('PDF(麥寮)', () => {
     for (const d of days) for (const r of d.dailyRows) expect(r.項次).toBe(r.工程項目);
   });
 
-  // 單位走白名單:3/10 那列的來源印的是「M4」(不是有效單位),留 null 讓 A6 報出來,
-  // 不要為了讓它有值而放寬判定。
-  test('不在字典裡的單位留 null', () => {
+  // ⛔ 這條原本斷言「不在字典裡的單位留 null」——**方向錯了**。
+  // 3/10 那列來源印的是「M4」(同一項其他 25 天都是 M2,是廠商打錯),
+  // 抹成 null 會報成 A6「單位未填」,承辦人翻開表看到明明有字,指不到問題;
+  // 照收才會報 J2「單位不在已知單位字典中:M4」並把值印出來。
+  // 專案鐵則是「來源的錯照收、不要修好它」,而白名單在這支並沒有拿來切欄界。
+  // 同一列的名稱也被打成 (0.7t以上)(其他天都是 0.6t),兩處都要看得見。
+  test('單位照收,不因為不在字典就抹成 null', () => {
     const d = days.find((x) => x.header.填報日期 === '2026-03-10');
     const r = d.dailyRows.find((y) => y.工程項目.includes('0.7t以上'));
-    expect(r.單位).toBeNull();
+    expect(r.單位).toBe('M4');
     expect(r.契約數量).toBe(1287);
+  });
+
+  // 但無資料標記與「明顯不是單位」的長字串仍要擋掉:單位欄若因版面偏移吃進
+  // 名稱片段,照收會生出假的項目識別,比留 null 更難查。
+  test('無資料標記與過長字串仍留 null', () => {
+    expect(mod._internal.unitOf('-')).toBeNull();
+    expect(mod._internal.unitOf('  ')).toBeNull();
+    expect(mod._internal.unitOf('鍍鋁鋅SMP烤漆鋼板')).toBeNull();
+    expect(mod._internal.unitOf('M4')).toBe('M4');
   });
 });
 

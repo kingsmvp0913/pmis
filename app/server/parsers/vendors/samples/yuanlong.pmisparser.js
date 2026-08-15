@@ -54,9 +54,24 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * 單位欄照收,**不以字典把不認得的值抹成 null**。
+ *
+ * 這裡的單位是靠表頭定位到的欄(xls 走 `colOf(hdr,'單位')`、pdf 走欄界),
+ * 白名單並沒有拿來切欄界,只是事後過濾——而過濾掉的後果是把
+ * **「廠商把單位印錯」變成「廠商沒填單位」**,兩件事的處置完全不同。
+ *
+ * 實測麥寮 2026-03-10 那一列:表上印的是 `M4`(其他 25 天同一項都是 M2),
+ * 抹成 null 之後報的是 A6「單位未填」,承辦人翻開表看到明明有字;
+ * 照收則報 J2「單位不在已知單位字典中」並把 M4 印出來——那才指得到問題。
+ *
+ * 仍擋兩種東西:空白/破折號(無資料標記),以及長度 >6 的字串
+ * (單位欄若因版面偏移吃進名稱片段,那不是單位,照收會變成假的項目識別)。
+ */
 const unitOf = (v) => {
   const s = despace(v);
-  return s && KNOWN_UNITS.has(s) ? s : null;
+  if (!s || /^[-－—–]+$/.test(s)) return null;
+  return s.length <= 6 ? s : null;
 };
 
 /** 「2026年3月2日」/「115年3月2日」→ ISO(民國⇄西元雙制)。 */
@@ -579,5 +594,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parseDayGrid, parsePage, blockStarts },
+  _internal: { parseDayGrid, parsePage, blockStarts, unitOf },
 };
