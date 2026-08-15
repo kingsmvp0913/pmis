@@ -308,8 +308,15 @@ describe('confirm 一併寫入工程基本資料', () => {
     expect(addrs).not.toContain('B7');    // 契約工期:沒設過
     expect(addrs).not.toContain('B8');    // 開工日期:沒設過
     expect(addrs).not.toContain('B10');   // 工程編號:沒設過
-    // 回應要講清楚寫了幾欄、缺幾欄——不講的話承辦人無從得知那頁是不是滿的
-    expect(res.body.基本資料).toEqual({ 已寫入: addrs.length, 缺: 9 - addrs.length });
+    // 回應要講清楚寫了幾欄、缺幾欄——不講的話承辦人無從得知那頁是不是滿的。
+    // **缺的還要指名道姓**:只回一個數字,承辦人還是不知道要去補什麼,
+    // 而空著的後果要到報表印出來才看得見。
+    expect(res.body.基本資料.已寫入).toBe(addrs.length);
+    expect(res.body.基本資料.缺).toBe(9 - addrs.length);
+    expect(res.body.基本資料.缺欄位).toEqual(
+      expect.arrayContaining(['契約工期', '開工日期', '工程編號']));
+    expect(res.body.基本資料.缺欄位).toHaveLength(9 - addrs.length);
+    expect(res.body.基本資料.缺欄位).not.toContain('工程名稱');
   });
 });
 

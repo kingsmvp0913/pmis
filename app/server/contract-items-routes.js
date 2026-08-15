@@ -170,9 +170,12 @@ async function basicsOpsFromMaster(projectId) {
     [projectId]
   );
   const p = rows[0];
-  if (!p) return [];
+  // ⚠️ 回傳形狀是 `{ ops, 缺 }` 而不是單純的 ops 陣列:承辦人要知道**還缺哪幾欄**,
+  // 只給一個數字他還是不知道要去補什麼(而空著的後果要到報表印出來才看得見)。
+  if (!p) return { ops: [], 缺: [] };
   const values = {};
-  const put = (k, v) => { if (v != null && v !== '') values[k] = v; };
+  const 缺 = [];
+  const put = (k, v) => { if (v != null && v !== '') values[k] = v; else 缺.push(k); };
   put('工程名稱', p.name);
   put('監造單位', p.supervisor_firm);
   put('主辦機關', p.school_name);
@@ -182,7 +185,7 @@ async function basicsOpsFromMaster(projectId) {
   put('契約工期', p.duration_days);
   put('開工日期', toISODate(p.start_date));
   put('工程編號', p.project_no);
-  return basicsToOperations(values);
+  return { ops: basicsToOperations(values), 缺 };
 }
 
 const NO_AWARD_AMOUNT = '此工程尚未填決標金額,無法判斷該用哪一張詳細價目表。' +
@@ -306,7 +309,7 @@ function registerRoutes(app) {
         const existing = await loadExisting(req.params.id);
         // 基本資料與價目表**併成同一批指令**送進去:分開送要開兩次 Excel COM,
         // 而 COM 是這條線上最慢也最容易失敗的一段(見 xlsm-excel-com-findings)。
-        const basicsOps = await basicsOpsFromMaster(req.params.id);
+        const { ops: basicsOps, 缺: 基本資料缺 } = await basicsOpsFromMaster(req.params.id);
         const dest = ensureWorkbook(req.params.id);
         // 各分頁現有幾列項目列,一律量實檔(見 itemRowCounts)
         const 現有列數 = itemRowCounts(dest);
@@ -351,7 +354,8 @@ function registerRoutes(app) {
           ok: true, count: items.length, 合計, workbookPath: dest,
           // 讓承辦人知道基本資料也一起寫了(以及還缺哪幾欄)——不講的話他無從得知
           // 那一頁是不是滿的,而空著的後果要到印出來才看得見。
-          基本資料: { 已寫入: basicsOps.length, 缺: 9 - basicsOps.length },
+          // **缺的要指名道姓**:只回一個數字,他還是不知道要去補什麼。
+          基本資料: { 已寫入: basicsOps.length, 缺: 基本資料缺.length, 缺欄位: 基本資料缺 },
         });
       } catch (err) {
         if (err.code === 'BAD_BUDGET_FILE') return res.status(400).json({ error: err.message });
