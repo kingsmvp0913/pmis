@@ -82,18 +82,25 @@ describe('parseAll(古坑國中棒球宿舍)', () => {
     expect(rows.some((r) => /直接工程費/.test(r.工程項目))).toBe(false);
   });
 
-  test('單位/契約數量/契約單價整份零缺漏', () => {
+  test('單位與契約數量整份零缺漏', () => {
     const rows = days.flatMap((d) => d.dailyRows);
     expect(rows.length).toBe(459);
-    for (const k of ['單位', '契約數量', '契約單價']) {
+    for (const k of ['單位', '契約數量']) {
       expect(rows.filter((r) => r[k] == null).length).toBe(0);
     }
   });
 
-  // 這家沒有本日金額欄(只有累計),不可拿累計頂替
-  test('本日完成金額整份都是 null', () => {
-    expect(days.flatMap((d) => d.dailyRows).every((r) => r.本日完成金額 === null)).toBe(true);
+  // 表格右邊的 R~V 五欄全是隱藏的計算區(S 累計數量 / T 單價 / U 金額=S*T),
+  // 承辦人在畫面上看不到。它與發包經費總表 17 項裡有 14 項不同,但逐項複價的
+  // 合計兩邊都是 1,193,638——同一筆總價的另一種分攤。
+  // 承辦人 2026-08-15 裁決:不讀,契約單價一律以發包經費總表為準。
+  // 讀進來的話這一案每天都會被 SP3 的 E6 擋下,而原因只是廠商自己看不到的計算欄。
+  test('隱藏欄的單價與金額一律不讀', () => {
+    const rows = days.flatMap((d) => d.dailyRows);
+    expect(rows.every((r) => r.契約單價 === null)).toBe(true);
+    expect(rows.every((r) => r.本日完成金額 === null)).toBe(true);
   });
+
 });
 
 // 「公共工程施工日誌」是工程會標準表單的共通錨點,至少 8 家都有。只回空陣列比讀不動
