@@ -88,11 +88,28 @@ function collectRows(rows) {
   // 資料區從表頭列(項次/施工項目/單位…)之下開始。**頁首的校名、天氣、工程名稱、
   // 工期、進度等文字也落在名稱欄的 x 範圍內**,不設這條界線就會被當成名稱片段
   // 吸進第一個項次(實測:項次1 的名稱變成「雲林縣四湖鄉四湖國民小學9下午:上午:晴…」)。
-  const headerRow = rows.find((r) => {
+  //
+  // ⚠️ **一天佔兩頁,而續頁重印頁首卻沒有明細表頭**(實測頁 7:校名/天氣/工程名稱/
+  // 核定工期/開工日期/預定進度全都重印一次,表頭列不見)。只認表頭列的話續頁的
+  // 上界是 Infinity,整段頁首就被當成名稱片段黏到該頁的第一個項次上——
+  // 實測 69 天裡 61 天的項次 31、8 天的項次「貳」名稱前面掛著
+  // 「雲林縣四湖鄉四湖國民小學9下午:上午:晴…開工日期2025/4/231.35%」。
+  // **這種名稱括號是平衡的、長度也夠,名稱形狀健檢完全看不到。**
+  // 故上界改取「表頭列」與「頁首各標籤列」之中最低的那一條。
+  // ⚠️ 標籤比對**只能看最上面那個項次列以上的列**:表尾註記寫著
+  // 「…預定進度及實際進度應填變更設計後計算之進度。」也會命中,取全頁最低的一條
+  // 會把上界壓到 y=161.9,整頁明細一列不剩(實測會掉掉每天的貳~陸)。
+  const 是項次 = (i) => i.x < X.項次 && ITEM_NO_RE.test(String(i.s || '').trim());
+  const 項次Ys = rows.filter((r) => r.items.some(是項次)).map((r) => r.y);
+  const 最上項次 = 項次Ys.length ? Math.max(...項次Ys) : -Infinity;
+  const 頁首標籤 = /表報編號|本日天氣|工程名稱|核定工期|開工日期|預定進度|承攬廠商名稱/;
+  let 資料區上界 = Infinity;
+  for (const r of rows) {
+    if (r.y <= 最上項次) continue;
     const t = r.items.map((i) => i.s).join('');
-    return /項次/.test(t) && /施工項目/.test(t);
-  });
-  const 資料區上界 = headerRow ? headerRow.y : Infinity;
+    const 是表頭 = /項次/.test(t) && /施工項目/.test(t);
+    if (是表頭 || 頁首標籤.test(t)) 資料區上界 = Math.min(資料區上界, r.y);
+  }
 
   for (const row of rows) {
     if (row.y >= 資料區上界) continue;
@@ -119,12 +136,53 @@ function collectRows(rows) {
   }
   if (!anchors.length) return [];
 
-  // 每個名稱片段歸給 y 最近的項次列。名稱區塊以項次列為中心上下分佈,故距離即歸屬。
-  for (const f of frags) {
-    let best = anchors[0];
-    for (const a of anchors) {
-      if (Math.abs(a.y - f.y) < Math.abs(best.y - f.y)) best = a;
+  // ⚠️ **「歸給 y 最近的項次列」不夠**——名稱塊會長過與鄰居的中點。
+  // 實測項次 28「緊急求救按鈕…」跨四行(163.1 / 153.1 / 值 147.9 / 143.2 / 133.2),
+  // 塊高 30pt 而列距只有 13~26:最外那行 163.1 離項次 27(174.0)只有 10.9、
+  // 離自己 15.2,於是被 27 搶走,同理 133.2 被 29 搶走。
+  // 結果**兩個項目的名稱黏在一起**(「給排水系統配管與安裝(連工帶料)緊急求救按鈕(含閃光…」)
+  // ——名稱錯不會讓任何欄位變 null,完整性關卡看不到。
+  //
+  // 改用**對稱配對**:數值本來就印在名稱塊的垂直中央(這是此版面的既有事實,
+  // 檔頭已經寫了),所以一個項次列每次只能「一上一下同時收一段」,
+  // 而且兩段離它的距離要差不多。項次 27 的名稱在自己那列、上下沒有成對的片段,
+  // 自然一段也收不到——這正是要的。
+  const 已配 = new Set();
+  const 中間有錨點 = (a, f) => anchors.some((x) => x !== a
+    && (x.y - a.y) * (x.y - f.y) < 0);
+  // 與項次列同高的片段是它自己的(多行名稱的中間那行必然與數值同高)
+  for (const a of anchors) {
+    for (const f of frags) {
+      if (已配.has(f) || Math.abs(f.y - a.y) > Y_TOL) continue;
+      已配.add(f); a.frags.push(f);
     }
+  }
+  // ⚠️ 收編的**順序**會決定結果:同一段可能同時是兩個項次列的合法候選,先跑的先拿。
+  // 實測項次 29 在第一輪就把 133.2 拿走,害項次 28 第二輪湊不成對稱、
+  // 163.1 與 133.2 雙雙落到 fallback,名稱又黏在一起。
+  // 優先權給「自己那列**沒有**名稱」的項次——它的名稱一定在別的帶,非收不可;
+  // 自己那列已經有名稱的(項次 27 那種完整單行)排後面,通常什麼也收不到,那正是對的。
+  const 自己沒名稱 = (a) => a.frags.length === 0;
+  const 依優先 = anchors.slice().sort((p, q) => (自己沒名稱(q) ? 1 : 0) - (自己沒名稱(p) ? 1 : 0));
+  const SYM_TOL = 6;
+  const 收完 = new Set();
+  for (let k = 1; k <= 4; k++) {
+    for (const a of 依優先) {
+      if (收完.has(a)) continue;
+      const free = frags.filter((f) => !已配.has(f) && !中間有錨點(a, f));
+      const up = free.filter((f) => f.y > a.y).sort((p, q) => p.y - q.y)[0];
+      const dn = free.filter((f) => f.y < a.y).sort((p, q) => q.y - p.y)[0];
+      if (!up || !dn || Math.abs((up.y - a.y) - (a.y - dn.y)) > SYM_TOL) { 收完.add(a); continue; }
+      已配.add(up); 已配.add(dn);
+      a.frags.push(up, dn);
+    }
+  }
+  // 對稱配不上的片段**不可以靜靜丟掉**(那會讓名稱少一段而沒有任何欄位變 null),
+  // 退回「最近的錨點」。
+  for (const f of frags) {
+    if (已配.has(f)) continue;
+    let best = anchors[0];
+    for (const a of anchors) if (Math.abs(a.y - f.y) < Math.abs(best.y - f.y)) best = a;
     best.frags.push(f);
   }
 
