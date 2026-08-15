@@ -803,14 +803,25 @@
       if (key === 'submit') { generate(p, null); return; }
       const title = { kickoff: '開工報告表', items: '契約詳細價目表', logs: '施工日誌' }[key];
       let changed = false;
-      const done = () => { changed = true; };
+      let dlg = null;
+      // 歸檔成功就直接把彈窗關掉——留在原地只剩一顆「關閉」可按,承辦人還要多想
+      // 一秒「是不是還有事沒做」。onClose 會接著重載列表,流程狀態即時更新。
+      //
+      // ⚠️ **有提示級警告時不關**。那些警告刻意不用 toast(會隨跳轉消失),
+      // 而是留在畫面上要承辦人回頭確認(見 kickoff-report.js 該段註解);
+      // 一律關掉等於把它們丟掉,而歸檔已經成功、他也不會再打開這個彈窗。
+      const done = (info) => {
+        changed = true;
+        const 有提示 = !!(info && info.warnings && info.warnings.length);
+        if (dlg && !有提示) dlg.close();
+      };
       const body = key === 'kickoff'
         ? KickoffReport.card(p.id, { onArchived: done })
         : (key === 'items' ? ContractItems.card(p.id) : DailyLogs.card(p.id));
       // 重載邏輯放 onClose、不是「關閉」鈕的 onClick:modalDialog 有三條關閉路徑
       // (Escape、點 overlay、呼叫 close()),塞在按鈕上只堵得住第三條——比照
       // submissionDialog 已經在用的模式,把重載收斂到 onClose 統一處理。
-      const dlg = modalDialog({
+      dlg = modalDialog({
         title: `${title}—${p.name}`, content: body, wide: true,
         onClose: () => { if (changed || key !== 'kickoff') load(); },
       });

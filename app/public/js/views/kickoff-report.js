@@ -275,7 +275,9 @@ const KickoffReport = (() => {
         }
         showToast('開工報告表已核對並歸檔', 'success');
         koConfirmBtn.style.display = 'none';
-        if (opts.onArchived) opts.onArchived();
+        // 把提示帶給呼叫端:彈窗要據此決定「歸檔完能不能直接關掉」。
+        // 有提示時關掉就等於把上面那段刻意留在畫面上的東西丟掉。
+        if (opts.onArchived) opts.onArchived({ warnings: r.warnings || [] });
       } catch (e) {
         // 硬錯清單一次列全,逐條修正會讓承辦人來回發文
         const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
