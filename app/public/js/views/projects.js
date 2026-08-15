@@ -817,7 +817,7 @@
       };
       const body = key === 'kickoff'
         ? KickoffReport.card(p.id, { onArchived: done })
-        : (key === 'items' ? ContractItems.card(p.id) : DailyLogs.card(p.id));
+        : (key === 'items' ? ContractItems.card(p.id, { onWritten: done }) : DailyLogs.card(p.id));
       // 重載邏輯放 onClose、不是「關閉」鈕的 onClick:modalDialog 有三條關閉路徑
       // (Escape、點 overlay、呼叫 close()),塞在按鈕上只堵得住第三條——比照
       // submissionDialog 已經在用的模式,把重載收斂到 onClose 統一處理。
