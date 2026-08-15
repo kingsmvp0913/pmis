@@ -190,6 +190,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
    ⚠️ 只改彈窗內。列表頁的 nowrap 是刻意的:一列一行才掃得快。 */
 .modal table.data th,
 .modal table.data td { white-space: normal; overflow-wrap: anywhere; }
+/* ⚠️ 上面那條會波及「短標籤」。施工日誌驗證結果的「級別」欄只有 56px,而裡面是
+   帶邊框與內距的 .error-msg,兩個字的「硬錯」被拆成上下兩行,看起來像壞掉。
+   標籤與訊息要分開處理:**只有標籤不換行**——同一張表的「說明」欄與開工報告表的
+   「結果」欄裝的是整句話(「工作天,單位不同無法比對,請自行核對填寫」),
+   那些非換行不可,不能一律 nowrap。 */
+.modal table.data td > .lvl-badge { white-space: nowrap; }
 .table-wrap table.data thead th { position: sticky; top: 0; z-index: 1; }
 /* 解析前的 .table-wrap(開工報告表/契約價目表)是空容器,但邊框還在——
    實測高度只有 2px,畫面上就是一條沒頭沒尾的橫線。用 :empty 而不是 JS

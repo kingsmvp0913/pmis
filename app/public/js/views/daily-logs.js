@@ -142,7 +142,10 @@ const DailyLogs = (() => {
       ];
       if (!all.length) return;
       const trs = all.map((f) => el('tr', {}, [
-        el('td', {}, el('span', { class: f.級別 === '硬錯' ? 'error-msg' : 'hint' }, f.級別)),
+        // `lvl-badge`:這一格是兩個字的標籤,不是訊息。彈窗裡的表格已改成可換行
+        // (見 app.css 的 `.modal table.data td`),不標記的話「硬錯」會被拆成
+        // 「硬」「錯」上下兩行——那一欄只有 56px,而 .error-msg 是帶邊框與內距的框。
+        el('td', {}, el('span', { class: `lvl-badge ${f.級別 === '硬錯' ? 'error-msg' : 'hint'}` }, f.級別)),
         el('td', {}, f.code),
         el('td', {}, f.日期 || '—'),
         el('td', {}, f.項次 || '—'),
