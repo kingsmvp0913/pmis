@@ -29,6 +29,13 @@ if (!cfg.JWT_SECRET) {
   process.exit(1);
 }
 
+// 直接下載 ZIP 的資料夾沒有 .git,「啟動.bat」的自動更新會整段跳過,
+// 而畫面上完全看不出來——使用者會一直以為自己用的是最新版。不能只是靜默略過。
+if (!fs.existsSync(path.join(ROOT, '.git'))) {
+  console.warn('[更新] 這份是直接下載的,不會自動更新到新版本。');
+  console.warn('       請雙擊一次「安裝.bat」補好,之後每次啟動就會自動更新。');
+}
+
 const port = cfg.PORT || 4141;
 process.env.JWT_SECRET = cfg.JWT_SECRET;
 process.env.PORT = String(port);
