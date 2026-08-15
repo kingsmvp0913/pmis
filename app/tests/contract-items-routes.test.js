@@ -261,3 +261,54 @@ test('來源檔歸檔為 budget_sheet 且重傳只留最新', async () => {
     [id]);
   expect(rows.map((r) => r.original_name)).toEqual(['大美修正.xlsm']);
 });
+
+// ── 價目表寫入時一併寫「工程基本資料」 ──────────────────────
+// 這兩件事在畫面上是兩顆獨立按鈕,承辦人做完價目表就以為報表好了。2026-08-14
+// 對帳他手上那三份產出,工程基本資料 9 欄全空,正是這樣來的——而空白的後果
+// 不只那一頁:封面整片印裸的 0、完工期限算成 -1、每日施工紀錄的日期軸變 0,1,2…。
+describe('confirm 一併寫入工程基本資料', () => {
+  const 基本資料ops = () => {
+    const ops = fillTemplate.mock.calls[0][2];
+    return ops.filter((o) => o.sheet === '工程基本資料');
+  };
+
+  test('主檔有值的欄位都寫進去,且與價目表同一次 Excel 呼叫', async () => {
+    const { app, token, id } = await makeApp({ award: 1036370 });
+    await db.query(
+      `UPDATE projects SET project_no = 'A115', start_date = '2026-03-18',
+              duration_days = 150, supervisor_firm = '呂罡銘建築師事務所',
+              designer_firm = '大墩規劃設計顧問有限公司' WHERE id = $1`, [id]);
+    feed('damei');
+    await confirm(app, token, id, ['大美.xlsm'], [{ file: '大美.xlsm', name: '詳細價目表' }])
+      .expect(200);
+    // 開兩次 COM 是這條線上最慢也最容易失敗的一段,故必須併成同一批
+    expect(fillTemplate).toHaveBeenCalledTimes(1);
+    const ops = 基本資料ops();
+    const byAddr = Object.fromEntries(ops.map((o) => [o.addr, o.value]));
+    expect(byAddr.B1).toBe('測試工程');
+    expect(byAddr.B2).toBe('呂罡銘建築師事務所');
+    expect(byAddr.B4).toBe('大墩規劃設計顧問有限公司');
+    expect(byAddr.B6).toBe(1036370);
+    expect(byAddr.B7).toBe(150);          // 契約工期:開工報告表回寫來的
+    expect(byAddr.B10).toBe('A115');
+    // 開工日期要寫 Excel 序號,B9 的 =B8+B7-1 才算得出完工期限
+    expect(typeof byAddr.B8).toBe('number');
+  });
+
+  // 缺的欄位**不產生指令**,不可寫 null 把已經填好的格清成空白——
+  // basicsToOperations 對 undefined 就是跳過,這裡靠 put() 維持那個語意。
+  test('主檔沒有的欄位不下指令,不會清空既有的格', async () => {
+    const { app, token, id } = await makeApp({ award: 1036370 });
+    feed('damei');
+    const res = await confirm(app, token, id, ['大美.xlsm'],
+      [{ file: '大美.xlsm', name: '詳細價目表' }]).expect(200);
+    const addrs = 基本資料ops().map((o) => o.addr);
+    expect(addrs).toContain('B1');        // 工程名稱:NOT NULL,一定有
+    expect(addrs).toContain('B6');        // 契約金額:makeApp 給了
+    expect(addrs).not.toContain('B7');    // 契約工期:沒設過
+    expect(addrs).not.toContain('B8');    // 開工日期:沒設過
+    expect(addrs).not.toContain('B10');   // 工程編號:沒設過
+    // 回應要講清楚寫了幾欄、缺幾欄——不講的話承辦人無從得知那頁是不是滿的
+    expect(res.body.基本資料).toEqual({ 已寫入: addrs.length, 缺: 9 - addrs.length });
+  });
+});

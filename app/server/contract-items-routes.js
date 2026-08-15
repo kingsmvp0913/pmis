@@ -27,6 +27,7 @@ const { ensureWorkbook } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
+const { basicsToOperations } = require('./project-basics');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -119,6 +120,61 @@ async function loadAward(projectId) {
   if (!rows[0]) return { found: false, amount: null };
   const a = rows[0].award_amount;
   return { found: true, amount: a == null || a === '' ? null : Number(a) };
+}
+
+/**
+ * DATE → 'YYYY-MM-DD'。
+ * **不可用 `toISOString()`**:pg 把 DATE 解析成本地時區午夜的 Date,轉 UTC 會讓
+ * 台北時間整批日期倒退一天(沿用 daily-log-routes 的同名函式)。
+ */
+function toISODate(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  const d = new Date(v);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * 工程主檔現有的值 → 「工程基本資料」分頁的 setCell 指令。
+ *
+ * ## 為什麼價目表寫入時要順便寫基本資料
+ *
+ * 這兩件事在畫面上是兩個獨立按鈕,而承辦人做完價目表就以為報表好了——
+ * 2026-08-14 對帳他手上那三份產出,**工程基本資料 9 欄全空**,正是這樣來的。
+ * 空白的後果不只是那一頁:封面整片印出裸的 `0`(封面是公式參照基本資料)、
+ * 完工期限 `=B8+B7-1` 算成 `-1`、每日施工紀錄的日期軸變成 `0,1,2…`
+ * (日期公式 = 開工日+n-1)。報表看起來像壞掉,但實際上只是少按了一顆按鈕。
+ *
+ * 值一律取自**主檔**,不吃前端送的東西——這支路由的既有立場就是「confirm 不吃
+ * 前端送來的項目」,基本資料同理。缺的欄位不產生指令(basicsToOperations 對
+ * undefined 就是跳過),不會把已經填好的格清成空白。
+ */
+async function basicsOpsFromMaster(projectId) {
+  const { rows } = await query(
+    `SELECT p.name, p.project_no, p.award_amount, p.start_date, p.duration_days,
+            p.supervisor_firm, p.designer_firm,
+            s.name AS school_name, v.name AS vendor_name
+       FROM projects p
+       LEFT JOIN schools s ON s.id = p.school_id
+       LEFT JOIN vendors v ON v.id = p.vendor_id
+      WHERE p.id = $1`,
+    [projectId]
+  );
+  const p = rows[0];
+  if (!p) return [];
+  const values = {};
+  const put = (k, v) => { if (v != null && v !== '') values[k] = v; };
+  put('工程名稱', p.name);
+  put('監造單位', p.supervisor_firm);
+  put('主辦機關', p.school_name);
+  put('設計單位', p.designer_firm);
+  put('承包廠商', p.vendor_name);
+  put('契約金額', p.award_amount == null ? null : Number(p.award_amount));
+  put('契約工期', p.duration_days);
+  put('開工日期', toISODate(p.start_date));
+  put('工程編號', p.project_no);
+  return basicsToOperations(values);
 }
 
 const NO_AWARD_AMOUNT = '此工程尚未填決標金額,無法判斷該用哪一張詳細價目表。' +
@@ -225,14 +281,19 @@ function registerRoutes(app) {
         }
 
         const existing = await loadExisting(req.params.id);
+        // 基本資料與價目表**併成同一批指令**送進去:分開送要開兩次 Excel COM,
+        // 而 COM 是這條線上最慢也最容易失敗的一段(見 xlsm-excel-com-findings)。
+        const basicsOps = await basicsOpsFromMaster(req.params.id);
         const dest = ensureWorkbook(req.params.id);
         // 各分頁現有幾列項目列,一律量實檔(見 itemRowCounts)
         const 現有列數 = itemRowCounts(dest);
         // 先寫暫存再換掉本尊:COM 中途失敗時原檔完好,不會留下半寫的活頁簿
         tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
         await fillTemplate(dest, tmp,
-          applyProtection(dest, itemsToOperations(
-            items, existing ? existing.length : 0, 現有列數)));
+          applyProtection(dest, [
+            ...basicsOps,
+            ...itemsToOperations(items, existing ? existing.length : 0, 現有列數),
+          ]));
         // ⚠️ fillTemplate 與 renameSync 之間不得插入任何 await(同 project-basics-routes.js:152):
         // 並行安全靠 fillTemplate 內部的 _chain 序列化 + renameSync 在同一個 microtask 續行中
         // 同步跑完。中間一 await,另一個請求的 COM job 就會插隊。
@@ -263,7 +324,12 @@ function registerRoutes(app) {
           });
         }
 
-        res.json({ ok: true, count: items.length, 合計, workbookPath: dest });
+        res.json({
+          ok: true, count: items.length, 合計, workbookPath: dest,
+          // 讓承辦人知道基本資料也一起寫了(以及還缺哪幾欄)——不講的話他無從得知
+          // 那一頁是不是滿的,而空著的後果要到印出來才看得見。
+          基本資料: { 已寫入: basicsOps.length, 缺: 9 - basicsOps.length },
+        });
       } catch (err) {
         if (err.code === 'BAD_BUDGET_FILE') return res.status(400).json({ error: err.message });
         if (/projectId 不合法/.test(err.message || '')) {
