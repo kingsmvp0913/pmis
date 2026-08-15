@@ -86,6 +86,20 @@ const PROJECT_NAME_KEYWORDS = ['工程', '整修', '新建', '拆除', '改善',
 // 主辦機關在這批樣本裡永遠是學校。
 const SCHOOL_NAME_MARKERS = ['國小', '國中', '小學', '中學'];
 
+/**
+ * 千分位分組。金額與契約編號兩條把關共用同一條——契約編號那條是靠「不像金額」
+ * 來排除誤收,兩邊的定義一旦不同步,全形逗號的金額就會被當成契約編號收下。
+ *
+ * 兩種寬容都是實測逼出來的,而且**都是大勇那一格**:
+ * - **逗號兩側的空白**:`collapseCjkSpaces` 刻意只清 CJK 之間的空格(數字間的
+ *   空格必須留著,否則 `115 06 16` 會被黏成 `1150616` 讓日期錯位),於是
+ *   Windows OCR 讀出來的是「6 , 319 , 000」。
+ * - **全形逗號**:換 PP-OCRv5 之後同一格變成「6，319，000」(U+FF0C)。
+ *   只認半形的話 `parseMoney` 明明解得出 6319000,卻在型別把關就被判成讀不到
+ *   ——**同一格因為兩個不同的原因掉了兩次**。
+ */
+const 千分位 = /\d{1,3}(\s*[,，]\s*\d{3})+/;
+
 // OCR 對中文會逐字插空格(「1 1 5 年」),比對日期形態前一律先清掉空白,
 // 否則「115 年 03 月 12 日」測不出是日期,型別把關就形同虛設。
 function looksLikeRocDate(s) {
@@ -112,7 +126,7 @@ function isPlausibleValue(fieldKey, s) {
       // 少了這條,契約編號欄空著時右邊的金額會被當成編號收下——無中文、有數字、
       // 長度也在範圍內,前三個條件全都攔不住。
       return !/[一-鿿]/.test(s) && /\d/.test(s) && s.length <= 20
-        && !/元/.test(s) && !/\d{1,3}\s*(,\s*\d{3})+/.test(s);
+        && !/元/.test(s) && !千分位.test(s);
     case '契約金額':
       // 不能只看「有沒有連續數字」——契約編號(如「A1150608」)本身就有一長串
       // 數字。金額一定有「元」、千分位逗號分組,或國字大寫數字這三種標記之一。
@@ -121,7 +135,7 @@ function isPlausibleValue(fieldKey, s) {
       // 於是 OCR 讀到的金額長成「6 , 319 , 000」。不容忍的話 parseMoney 明明解得出
       // 6319000,卻在這一關就被判成讀不到——大勇的契約金額正是這樣掉的。
       return !looksLikeRocDate(s)
-        && (/元/.test(s) || /\d{1,3}(\s*,\s*\d{3})+/.test(s)
+        && (/元/.test(s) || 千分位.test(s)
           || /[零〇一壹二貳兩三叁參四肆五伍六陸七柒八捌九玖十拾百佰千仟萬万億]/.test(s));
     case '主辦機關':
       return SCHOOL_NAME_MARKERS.some((k) => s.includes(k));
@@ -370,6 +384,32 @@ function durationCellFallback(cells) {
   return hits.length === 1 ? hits[0] : null;
 }
 
+/**
+ * 主辦機關的退路:**表單抬頭的機關全銜**。
+ *
+ * 四份樣本(大勇/大美/文安/鹿場)整份沒有「主辦機關」標籤,但第 1 頁最上方
+ * (y 360~390)都印著機關全銜。文安在第 2 頁雖有「工程主辦」/「機關」,卻是
+ * **標籤被拆成上下兩段、中間夾著值**,`mergedBelow` 拼不起來。
+ *
+ * ⚠️ 為什麼這裡不套用「錯比漏危險」而選擇補值:`kickoff-compare` 的 `cmp` 對
+ * **`missing` 也判 hard**(第 51 行),讀不到與讀錯一樣擋住歸檔。既然漏不會比較
+ * 安全,補一個讓承辦人核對的值就是淨改善——大美那份 OCR 把「莿桐」讀成「莉桐」,
+ * 預填出來他改一個字,空著他要打整串。沿用「OCR 只作預填不作裁決」的立場。
+ *
+ * 判準要能把機關全銜與工程名稱分開:兩者都含「國小」,但機關全銜**以縣市開頭、
+ * 以學校結尾**,工程名稱結尾是「工程」。取最上方那一個,避開署名欄裡的同名字串。
+ */
+const 學校結尾 = /(國民小學|國民中學|國小|國中|小學|中學)$/;
+function orgHeaderFallback(cells) {
+  let best = null;
+  for (const c of cells) {
+    const s = String(c.text).replace(/[\s　]/g, '');
+    if (!學校結尾.test(s) || !extractCounty(s)) continue;
+    if (!best || c.y < best.y) best = c;
+  }
+  return best ? String(best.text).replace(/[\s　]/g, '') : null;
+}
+
 // 金額標籤被 OCR 毀掉時的退路(元長的「契約總價」被讀成「丁約總價」,
 // 值「新台幣 1,091,313 元整」卻好端端在旁邊)。**不**改用模糊比對標籤——
 // 「竣工日期」與「開工日期」只差一個字,放寬字元容差會把這兩欄配錯,
@@ -486,6 +526,9 @@ function extractFields(ocrOutput) {
   }
 
   if (!raw.契約金額) raw.契約金額 = moneySentenceFallback(allLines);
+  // 抬頭的機關全銜(見 orgHeaderFallback)。只看第 1 頁:抬頭在那裡,而後續頁的
+  // 署名欄、備註句裡也有同一個機關名,y 沒有跨頁可比性。
+  if (!raw.主辦機關 && pageCells[0]) raw.主辦機關 = orgHeaderFallback(pageCells[0]);
   // 退路的觸發條件是「解不出天數」而非「標籤沒命中」:標籤命中但那格不是工期時,
   // 一個非 null 的垃圾字串會把退路整個擋掉。
   if (parseDuration(raw.契約工期).天數 == null) {
@@ -509,8 +552,10 @@ function extractFields(ocrOutput) {
     決標日期: rocToISO(raw.決標日期),
     契約工期: parseDuration(raw.契約工期),
     主辦機關: raw.主辦機關,
-    // 工程地點有街道與校名兩種寫法,只能抽開頭縣市(spec §5.2)
-    縣市: extractCounty(raw.工程地點),
+    // 工程地點有街道與校名兩種寫法,只能抽開頭縣市(spec §5.2)。
+    // 臺中市格式**整份沒有「工程地點」欄**,改由主辦機關的全銜推——機關全銜
+    // 本來就以縣市開頭(「臺中市西區大勇國民小學」),而且只在工程地點抽不到時才用。
+    縣市: extractCounty(raw.工程地點) || extractCounty(raw.主辦機關),
     契約規定開工日: 開工日,
     契約規定竣工日: rocToISO(raw.契約規定竣工日),
   };
