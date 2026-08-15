@@ -134,8 +134,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 /* 開工報告表的九欄比對表與價目表差異清單塞不進 440px。內容高度不可預期,
    故限制在視窗高度內並讓內容自己捲,否則長表格會把彈窗撐出畫面外、
    按鈕點不到。 */
-.modal-wide { width: 960px; }
-.modal-wide .modal-body { max-height: 70vh; overflow-y: auto; padding-bottom: var(--space-6); }
+/* 高度改用 flex 讓 body 吃掉剩餘空間,不再寫死 `max-height: 70vh`。
+   70vh 是猜的:標題列與(可能存在的).modal-actions 各佔多少,三個彈窗都不一樣
+   ——開工報告表的按鈕在 .card 內部,根本沒有 .modal-actions。猜小了浪費空間
+   (實測 568px 高的視窗下 70vh 只給 398px,而可用是 480px),猜大了就溢出畫面。
+   讓 flex 自己算,兩種情況都對。 */
+.modal-wide { width: 960px; display: flex; flex-direction: column; max-height: 100%; }
+/* `min-height: 0` 是關鍵:flex 子項預設 min-height:auto,會拒絕縮到內容高度以下,
+   於是 overflow-y 永遠不生效、modal 被內容整個撐出畫面外。 */
+.modal-wide .modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: var(--space-6); }
 .modal-title { font-size: var(--fs-lg); font-weight: var(--fw-semibold); color: var(--text); padding: var(--space-5) var(--space-6) var(--space-3); }
 .modal-body { padding: 0 var(--space-6); font-size: var(--fs-md); color: var(--text-secondary); line-height: 1.7; }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-5) var(--space-6) var(--space-6); }
@@ -144,7 +151,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
    等於兩層框疊在一起(實測 backgroundColor/borderRadius/border 三者完全相同)。
    在彈窗情境把最外層 .card 的視覺樣式清空,只保留它當版面容器——不動
    ContractItems.card/DailyLogs.card/KickoffReport.card 內部,詳細頁的外觀不受影響。 */
-.modal-body > .card { background: none; border: none; border-radius: 0; padding: 0; box-shadow: none; }
+/* max-width 也要清掉,而且它才是「彈窗好大一片空白」的原因:.card 在詳細頁限寬
+   720px(那是表單的合理閱讀寬度),但彈窗裡的內容**就是** .card,於是 960px 的
+   彈窗只用得到 720px。開工報告表的比對表要 754px,結果既留下 238px 空白、
+   右邊的「結果」欄還被 .table-wrap 的 overflow-x 裁掉——空白與被裁同時發生,
+   看起來像兩個 bug,其實是同一條 max-width。清掉後表格撐滿 895px、
+   決標公告那串長工程名稱一行放得下(原本折行,連帶把整份表撐高)。 */
+.modal-body > .card { background: none; border: none; border-radius: 0; padding: 0; box-shadow: none; max-width: none; }
 /* 同一個道理:.modal-title 已經印過一次「OO—工程名」,元件自己的 .card-title
    在彈窗裡是第二次「OO」。用 > 子選擇器只命中彈窗最外層 card 的標題,不會誤傷
    元件內部若有的次級標題(如契約價目表若有「差異確認」這類小標,那些不是
