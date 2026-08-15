@@ -271,6 +271,10 @@ async function migrate() {
     // 判不出是哪一種(見 kickoff-values.parseDuration)。判不出時交給承辦人選,
     // 選了要存得住——不然每次進畫面又變回未知。
     ['projects', 'duration_basis', 'TEXT'],
+    // 契約工期天數。**開工報告表是唯一來源**(決標公告不含這一欄),歸檔時回寫,
+    // 「監造報表基本資料」表單再由此帶入 B7——不存的話承辦人得把剛核對完的
+    // 同一個數字再打一次。與 duration_basis 拆兩欄:基準判不出來時天數仍要存得住。
+    ['projects', 'duration_days', 'INTEGER'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"

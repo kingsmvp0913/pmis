@@ -379,6 +379,9 @@
         el('option', { value: '工作天' }, '工作天'),
       ]);
       if (p.duration_basis) 基準I.value = p.duration_basis;
+      // 契約工期由開工報告表歸檔時回寫主檔(kickoff-routes 的 MASTER_FIELDS)。
+      // 不帶入的話,承辦人得把剛剛在開工報告表彈窗上逐欄核對過的同一個數字再打一次。
+      if (p.duration_days != null) 工期I.value = p.duration_days;
       // 「開工日」不再自建:原本這裡與「工程基本資料」的 startI 是兩個外觀相同、
       // 值卻可能不同步的欄位(開工報告表解析只同步到這格,startI 依然是空的,
       // 承辦人按「儲存」時 start_date 照樣送 null)。合併後一律用 startI。
@@ -449,8 +452,8 @@
       into('basics').appendChild(el('div', { class: 'card' }, [
         el('div', { class: 'card-title' }, '監造報表基本資料'),
         el('div', { class: 'hint', style: 'margin-top:0' },
-          '契約工期須對照開工報告表填寫,系統不會自動帶入;開工日與「工程基本資料」' +
-          '的「開工日」是同一欄。完工期限由範本公式算出。'),
+          '契約工期由開工報告表歸檔時自動帶入(沒歸檔或表上讀不到才要自己填);' +
+          '開工日與「工程基本資料」的「開工日」是同一欄。完工期限由範本公式算出。'),
         // 清單是空的(還沒建過任何事務所)不能讓承辦人卡死在這裡——給明確提示與去新增的動線。
         firmList.length ? null : el('div', { class: 'hint' }, [
           '尚未建立任何事務所,監造/設計單位請先',

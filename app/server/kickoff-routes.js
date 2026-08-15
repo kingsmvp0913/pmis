@@ -148,6 +148,11 @@ const MASTER_FIELDS = [
   ['契約金額', 'award_amount'],
   ['契約規定開工日', 'start_date'], // 卡住施工日誌關卡(daily-log-routes 的 NO_START)的關鍵欄位
   ['契約規定竣工日', 'contract_completion_date'],
+  // 契約工期:開工報告表是**唯一**的來源(決標公告不含這一欄,見 award-notice.js 檔頭),
+  // 承辦人也已經在這個彈窗上逐欄核對過了。不回寫的話「監造報表基本資料」那張表單
+  // 會要他把剛剛才核對完的同一個數字再打一次,而畫面上還寫著「系統不會自動帶入」。
+  ['契約工期天數', 'duration_days'],
+  ['契約工期基準', 'duration_basis'],
 ];
 
 const isEmptyMasterValue = (v) => v == null || v === '';
@@ -165,26 +170,35 @@ const isEmptyMasterValue = (v) => v == null || v === '';
  *
  * @param {string|number} projectId
  * @param {object} values 承辦人確認後的開工報告表值(confirm 已通過驗證的那份)
- * @param {object} before UPDATE 之前的主檔四欄快照(confirm handler 一開始查詢時取得)
+ * @param {object} before UPDATE 之前的主檔快照(confirm handler 一開始查詢時取得)
  * @returns {Promise<string[]>} 這次實際補上的 projects 欄位名
  */
 async function fillProjectMasterFromKickoff(projectId, values, before) {
   const v = values || {};
+  // 契約工期在開工報告表的值是 {天數, 基準} 物件,主檔拆成兩欄存。
+  // 天數要能寫進監造報表 B7(那格是數值),故只收有限數字,字串一律當沒有。
+  const 工期 = v.契約工期 || {};
+  const 天數 = Number(工期.天數);
   const candidates = {
     project_no: isEmptyMasterValue(v.契約編號) ? null : String(v.契約編號).trim(),
     award_amount: v.契約金額 != null ? v.契約金額 : null,
     start_date: v.契約規定開工日 || null,
     contract_completion_date: v.契約規定竣工日 || null,
+    duration_days: Number.isFinite(天數) && 天數 > 0 ? 天數 : null,
+    duration_basis: isEmptyMasterValue(工期.基準) ? null : String(工期.基準),
   };
   await query(
     `UPDATE projects
         SET project_no = CASE WHEN project_no IS NULL OR project_no = '' THEN $1 ELSE project_no END,
             award_amount = COALESCE(award_amount, $2),
             start_date = COALESCE(start_date, $3),
-            contract_completion_date = COALESCE(contract_completion_date, $4)
-      WHERE id = $5`,
+            contract_completion_date = COALESCE(contract_completion_date, $4),
+            duration_days = COALESCE(duration_days, $5),
+            duration_basis = COALESCE(duration_basis, $6)
+      WHERE id = $7`,
     [candidates.project_no, candidates.award_amount, candidates.start_date,
-      candidates.contract_completion_date, projectId]
+      candidates.contract_completion_date, candidates.duration_days,
+      candidates.duration_basis, projectId]
   );
   return MASTER_FIELDS
     .map(([, col]) => col)
@@ -235,10 +249,12 @@ function registerRoutes(app) {
           return res.status(400).json({ error: '請上傳開工報告表(PDF、Word 或 .odt)' });
         }
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
-        // 多選四欄當「補寫前快照」:confirm 成功後若要補寫主檔,靠這份判斷哪些欄位
+        // 多選這幾欄當「補寫前快照」:confirm 成功後若要補寫主檔,靠這份判斷哪些欄位
         // 目前是空的——不必為此再多一次往返(見 fillProjectMasterFromKickoff)。
         const { rows } = await query(
-          'SELECT id, project_no, award_amount, start_date, contract_completion_date FROM projects WHERE id = $1',
+          `SELECT id, project_no, award_amount, start_date, contract_completion_date,
+                  duration_days, duration_basis
+             FROM projects WHERE id = $1`,
           [req.params.id]
         );
         if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
@@ -307,7 +323,7 @@ function registerRoutes(app) {
           updated = await fillProjectMasterFromKickoff(req.params.id, values, project);
         } catch (err) {
           console.error('[kickoff] 補寫工程主檔失敗:', err);
-          masterUpdateWarning = '開工報告表已歸檔,但補寫工程主檔(契約編號/金額/開工竣工日)失敗,' +
+          masterUpdateWarning = '開工報告表已歸檔,但補寫工程主檔(契約編號/金額/開工竣工日/契約工期)失敗,' +
             '請至「工程基本資料」頁籤手動確認並補填。';
         }
 

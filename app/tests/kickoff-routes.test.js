@@ -338,7 +338,7 @@ test('values 非合法 JSON 回 400', async () => {
 // 2026-08-05 補強:歸檔成功卻不寫工程主檔,承辦人核對完九欄仍卡在下一關
 // (施工日誌要求 start_date 非空)。規則與決標公告的 seed 同一條鐵則:只補空缺。
 describe('confirm 歸檔後補寫工程主檔(只補空缺)', () => {
-  test('主檔四欄皆空時,歸檔後四欄都被補上且值正確', async () => {
+  test('主檔諸欄皆空時,歸檔後都被補上且值正確', async () => {
     readAwardNotice.mockResolvedValue(AWARD);
     const { app, token, id } = await makeApp();
     const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
@@ -347,14 +347,49 @@ describe('confirm 歸檔後補寫工程主檔(只補空缺)', () => {
       .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
     // 回應的 updated 要與實際寫入的欄位一致
     expect(res.body.updated.sort()).toEqual(
-      ['award_amount', 'contract_completion_date', 'project_no', 'start_date'].sort());
+      ['award_amount', 'contract_completion_date', 'duration_basis', 'duration_days',
+        'project_no', 'start_date'].sort());
     const { rows } = await db.query(
-      `SELECT project_no, award_amount, start_date, contract_completion_date
+      `SELECT project_no, award_amount, start_date, contract_completion_date,
+              duration_days, duration_basis
          FROM projects WHERE id = $1`, [id]);
     expect(rows[0].project_no).toBe('1150113');
     expect(Number(rows[0].award_amount)).toBe(3122168);
     expect(rows[0].start_date.toISOString().slice(0, 10)).toBe('2026-03-18');
     expect(rows[0].contract_completion_date.toISOString().slice(0, 10)).toBe('2026-08-14');
+    // 契約工期是**開工報告表獨有**的欄位(決標公告不含),不回寫的話承辦人要在
+    // 「監造報表基本資料」把剛核對完的同一個數字再打一次
+    expect(rows[0].duration_days).toBe(150);
+    expect(rows[0].duration_basis).toBe('日曆天');
+  });
+
+  // 天數與基準是分開的兩欄:OCR 判不出基準時(24 份有 17 份兩個詞同時出現)
+  // 天數仍要存得住,不可因為基準是 null 就整組不寫。
+  test('基準判不出來時,天數照樣回寫', async () => {
+    const { id } = await makeApp();
+    const before = { project_no: null, award_amount: null, start_date: null,
+      contract_completion_date: null, duration_days: null, duration_basis: null };
+    const updated = await fillProjectMasterFromKickoff(id, {
+      契約工期: { 天數: 90, 基準: null },
+    }, before);
+    expect(updated).toEqual(['duration_days']);
+    const { rows } = await db.query(
+      'SELECT duration_days, duration_basis FROM projects WHERE id = $1', [id]);
+    expect(rows[0].duration_days).toBe(90);
+    expect(rows[0].duration_basis).toBeNull();
+  });
+
+  // 讀壞的工期(kickoff-values 對 '_J50_'、'一』一一' 一律回 null)不可寫成 0 或 NaN
+  test('工期天數不是有限正數時存 null,不寫進主檔', async () => {
+    const { id } = await makeApp();
+    const before = { project_no: null, award_amount: null, start_date: null,
+      contract_completion_date: null, duration_days: null, duration_basis: null };
+    const updated = await fillProjectMasterFromKickoff(id, {
+      契約工期: { 天數: null, 基準: '日曆天' },
+    }, before);
+    expect(updated).toEqual(['duration_basis']);
+    const { rows } = await db.query('SELECT duration_days FROM projects WHERE id = $1', [id]);
+    expect(rows[0].duration_days).toBeNull();
   });
 
   // 承辦人可能已透過「寫入監造報表」填過 award_amount——那個值權威性高於開工
@@ -369,7 +404,8 @@ describe('confirm 歸檔後補寫工程主檔(只補空缺)', () => {
       .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
     expect(res.body.updated).not.toContain('award_amount');
     expect(res.body.updated.sort()).toEqual(
-      ['contract_completion_date', 'project_no', 'start_date'].sort());
+      ['contract_completion_date', 'duration_basis', 'duration_days',
+        'project_no', 'start_date'].sort());
     const { rows } = await db.query('SELECT award_amount FROM projects WHERE id = $1', [id]);
     expect(Number(rows[0].award_amount)).toBe(9999999);
   });

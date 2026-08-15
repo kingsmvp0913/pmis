@@ -189,14 +189,20 @@ function registerRoutes(app) {
       //
       // 用 CASE 併進同一句 UPDATE 而不是先查再決定:兩次往返之間有 race。
       const 覆蓋竣工日 = 基準 !== '工作天';
+      // 天數與基準同樣要存得住:基準當初加欄位的理由是「選了不存,每次進畫面又變回
+      // 未知」,天數完全一樣——承辦人在這裡改了工期,值只進了報表 B7,下次進畫面
+      // 又被主檔的舊值(或空白)蓋回去。只收有限正數,其餘存 null。
+      const 天數raw = Number(values.契約工期);
+      const 天數 = Number.isFinite(天數raw) && 天數raw > 0 ? 天數raw : null;
       await query(
         `UPDATE projects
             SET project_no = $1, name = $2, award_amount = $3, start_date = $4,
                 contract_completion_date = CASE WHEN $5 THEN $6 ELSE contract_completion_date END,
-                supervisor_firm = $7, designer_firm = $8, duration_basis = $9
-          WHERE id = $10`,
+                supervisor_firm = $7, designer_firm = $8, duration_basis = $9,
+                duration_days = $10
+          WHERE id = $11`,
         [values.工程編號, values.工程名稱, values.契約金額, values.開工日期,
-          覆蓋竣工日, 完工期限, values.監造單位, values.設計單位, 基準, req.params.id]
+          覆蓋竣工日, 完工期限, values.監造單位, values.設計單位, 基準, 天數, req.params.id]
       );
 
       res.json({
