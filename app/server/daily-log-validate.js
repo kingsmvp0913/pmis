@@ -624,7 +624,18 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     const cur = 月末.get(月);
     if (!cur || 日 > cur.日) 月末.set(月, { 日, d });
   }
-  for (const { 日, d } of 月末.values()) {
+  // 只驗**已經收完**的月份。月中上傳是常態(廠商 7 月的檔裡常多印幾天,或整月
+  // 表格預先列印到下個月),那時「這批的最後一天」不是月結點,拿它要求完整清單
+  // 就是硬擋一份沒有錯的日誌——2026-08-17 實測元長鋪面被判 8/7、橋頭許厝分校
+  // 被判 9/12,承辦人歸檔不了。判準二選一:那天就是該月最後一天(廠商真的做到
+  // 月底),或後面還有別的月份的資料(有後續就代表這個月收完了)。
+  const 月末的月 = [...月末.keys()].sort();
+  const 是月底 = (iso) => {
+    const [y, m, dd] = String(iso).split('-').map(Number);
+    return dd === new Date(Date.UTC(y, m, 0)).getUTCDate();
+  };
+  for (const [月, { 日, d }] of 月末) {
+    if (!是月底(日) && 月 === 月末的月[月末的月.length - 1]) continue;
     const 有 = 當日契約項次.get(d) || new Set();
     const 缺 = 應有項次.filter((n) => !有.has(normNo(n)));
     if (缺.length) {
