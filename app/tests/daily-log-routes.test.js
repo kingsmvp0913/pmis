@@ -311,6 +311,22 @@ describe('掃描件(OCR 預填 → 逐格確認)', () => {
     expect(rows[0].n).toBe(0);                  // scan 唯讀
   });
 
+  // 橋美那份**有文字層**,禾結讀取器 11 天 374 列零缺漏,承辦人卻按了「辨識掃描件」:
+  // OCR 跑了好幾分鐘,結果 0 天 0 格,再按確認就得到「沒有收到要寫入的日誌內容」。
+  // 這條路只該給沒有文字層的檔——讀取器讀得動就直接說,別讓他等。
+  test('有文字層而且讀取器讀得動時,不跑 OCR,直接指路到「驗證施工日誌」', async () => {
+    const { app, token, id } = await makeApp();
+    feed([day('2026-04-08', [r('1', 3)])]);
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/scan`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+      .expect(400);
+    expect(res.body.error).toMatch(/驗證施工日誌/);
+    expect(scanCoverage).not.toHaveBeenCalled();
+    expect(scanDays).not.toHaveBeenCalled();
+  });
+
   // 實測 8 份裡有 2 份會這樣(表頭錨點 OCR 認錯)。這時仍要答得出涵蓋範圍,
   // 讓承辦人知道這份涵蓋幾天要人工補,而不是丟一個 500 給他。
   test('讀取器整份 throw 時仍回涵蓋範圍,不是 500', async () => {
@@ -324,6 +340,22 @@ describe('掃描件(OCR 預填 → 逐格確認)', () => {
     expect(res.body.可預填).toBe(false);
     expect(res.body.涵蓋範圍.日期).toEqual(['2026-04-08', '2026-04-09']);
     expect(res.body.讀取器錯誤).toMatch(/表頭/);
+  });
+
+  // ⚠️ 讀取器讀出**空陣列**時原本會走「可預填」那條:畫面出現逐格核對的表格與
+  // 「確認並寫入」按鈕,但一列都沒有(僑美實測「共 0 天,已有數字 0 格」)。
+  // 承辦人勾了確認、按下去,才收到「沒有收到要寫入的日誌內容」。0 天等於認不出來。
+  test('讀取器回 0 天時當成認不出來,不要給一個按了會失敗的按鈕', async () => {
+    const { app, token, id } = await makeApp();
+    feed([]);
+    registry.getParser.mockReturnValue({ parseAll: async () => { throw new Error('無文字層'); } });
+    scanDays.mockResolvedValueOnce([]);
+    scanCoverage.mockResolvedValueOnce({
+      pages: [], days: 3, 日期: ['2026-04-08'], 缺日期頁: [],
+    });
+    const res = await post(app, token, id, 'scan').expect(200);
+    expect(res.body.可預填).toBe(false);
+    expect(res.body.涵蓋範圍.days).toBe(3);
   });
 
   // 少了這一關,這條路就只是個「繞過驗證直接寫 DB」的 API

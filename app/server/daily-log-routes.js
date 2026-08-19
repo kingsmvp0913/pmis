@@ -522,6 +522,15 @@ function registerRoutes(app) {
         if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
 
         const out = await withTempFile(req.file, async (p) => {
+          // 這條路只該給**沒有文字層**的檔。橋美那份有文字層(讀取器 11 天 374 列
+          // 零缺漏),承辦人卻按了這顆按鈕:OCR 跑好幾分鐘、結果 0 天 0 格,再按確認
+          // 得到「沒有收到要寫入的日誌內容」。讀取器讀得動就先講,別讓他等。
+          // 讀不動才是這條路的用途,所以 throw 一律吞掉繼續走 OCR。
+          try {
+            const 文字層 = await ctx.parser.parseAll(p);
+            const 天 = (文字層 || []).filter((d) => (d.dailyRows || []).length).length;
+            if (天) return { 有文字層: 天 };
+          } catch { /* 讀不動 → 往下走 OCR */ }
           // 涵蓋範圍先算:讀取器整份 throw 時(實測 8 份裡有 2 份會),這是唯一
           // 還答得出來的東西——至少告訴承辦人這份涵蓋哪些日期、要人工補幾天。
           const coverage = await scanCoverage(p, { ocr, extractItemsOcr });
@@ -535,7 +544,18 @@ function registerRoutes(app) {
           return { coverage, days, 讀取器錯誤 };
         });
 
-        if (!out.days) {
+        if (out.有文字層) {
+          return res.status(400).json({
+            error: `這份有文字層,讀取器直接讀得到 ${out.有文字層} 天——請改按「驗證施工日誌」。`
+              + 'OCR 只用在沒有文字層的掃描件:它慢(每頁數秒),而且讀出來的數字要你逐格核對。',
+          });
+        }
+
+        // ⚠️ `[]` 在 JS 是 truthy。讀取器回空陣列時原本會走「可預填」那條,畫面
+        // 給出逐格核對的表格與「確認並寫入」按鈕,卻一列都沒有(僑美實測
+        // 「共 0 天,已有數字 0 格」);承辦人勾了確認按下去,才收到
+        // 「沒有收到要寫入的日誌內容」。0 天就是認不出來,當場講。
+        if (!out.days || !out.days.length) {
           return res.json({
             掃描件: true,
             可預填: false,
