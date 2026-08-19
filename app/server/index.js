@@ -42,6 +42,16 @@ function createApp() {
   app.use('/api/', (req, res) => res.status(404).json({ error: 'Not found' }));
   // 其餘一律回 SPA 進入點
   app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+  // 路由沒接住的錯(multer 的 multipart 解析失敗最常見)原本會掉進 Express 的
+  // 預設處理器,回一頁 HTML —— 前端讀不到 `error` 欄位,畫面上只剩「HTTP 500」,
+  // 承辦人與我們都不知道發生什麼事。一律轉成 JSON,並把原因寫進 server log。
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    console.error('[unhandled]', req.method, req.originalUrl, err && err.stack ? err.stack : err);
+    if (res.headersSent) return;
+    res.status(err && err.status ? err.status : 500)
+      .json({ error: `伺服器處理這個請求時發生錯誤:${(err && err.message) || '未知錯誤'}` });
+  });
   return app;
 }
 

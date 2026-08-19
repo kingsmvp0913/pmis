@@ -214,6 +214,39 @@ test('parse 對已寫入的日期回報逐項變更', async () => {
   ]);
 });
 
+// 讀取器讀不動這份檔,跟「伺服器壞掉」是兩回事。原本兩者都回
+// 「施工日誌解析失敗,請稍後重試;若持續失敗請聯絡系統管理員」——而讀取器的錯
+// **重試一萬次也不會成功**,承辦人只能一直重試然後打電話。讀取器自己丟的訊息
+// (「PDF 沒有文字層(掃描件)」「找不到第一聯/第二聯」)才是他要看的。
+test('讀取器讀不動時回 400 並轉述讀取器的原因與檔名', async () => {
+  const { app, token, id } = await makeApp();
+  registry.getParser.mockReturnValue({
+    parseAll: async () => { throw new Error('PDF 沒有文字層(掃描件),無法解析'); },
+  });
+  const res = await post(app, token, id, 'parse').expect(400);
+  expect(res.body.error).toMatch(/施工日誌\.pdf/);
+  expect(res.body.error).toMatch(/沒有文字層/);
+  expect(res.body.error).not.toMatch(/稍後重試/);
+});
+
+// 掃描件另有一條路(辨識掃描件),但錯誤訊息不講的話承辦人不會知道要去按它。
+test('讀不到文字層時指路到「辨識掃描件」', async () => {
+  const { app, token, id } = await makeApp();
+  registry.getParser.mockReturnValue({
+    parseAll: async () => { throw new Error('PDF 沒有文字層(掃描件),無法解析'); },
+  });
+  const res = await post(app, token, id, 'parse').expect(400);
+  expect(res.body.error).toMatch(/辨識掃描件/);
+});
+
+// 真的是伺服器壞掉時仍要 500,不能被上面那條吃掉
+test('非讀取器的錯仍回 500', async () => {
+  const { app, token, id } = await makeApp();
+  feed([day('2026-04-08', [r('1', 3)])]);
+  fillTemplate.mockRejectedValueOnce(new Error('Excel 驅動重試 3 次仍失敗'));
+  await post(app, token, id, 'confirm').expect(500);
+});
+
 // Excel COM 失敗時不得留下「DB 說有、報表沒有」的紀錄
 test('寫入報表失敗時不落庫', async () => {
   const { app, token, id } = await makeApp();

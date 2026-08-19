@@ -50,3 +50,17 @@ describe('createApp 端對端', () => {
     expect(res.text).toContain('<!doctype html>');
   });
 });
+
+// 路由沒接住的錯(express.json() 解析失敗、multer 的 multipart 解析失敗)原本掉進
+// Express 預設處理器回一頁 HTML,前端讀不到 `error`,畫面上只剩「HTTP 500」——
+// 承辦人回報的就是那個,而我們連是哪裡壞的都看不出來。
+test('中介層丟的錯回 JSON 而不是 HTML', async () => {
+  db._setPoolForTesting(freshPool());
+  const app = createApp();
+  const res = await request(app)
+    .post('/api/auth/login')
+    .set('Content-Type', 'application/json')
+    .send('{壞掉的 JSON');
+  expect(res.headers['content-type']).toMatch(/json/);
+  expect(res.body.error).toBeTruthy();
+});

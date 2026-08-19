@@ -79,8 +79,33 @@ async function withTempFile(file, fn) {
  */
 async function parseFiles(files, parser) {
   const lists = [];
-  for (const f of files) lists.push(await withTempFile(f, (p) => parser.parseAll(p)));
+  for (const f of files) {
+    try {
+      lists.push(await withTempFile(f, (p) => parser.parseAll(p)));
+    } catch (err) {
+      throw 讀取失敗(realName(f), err);
+    }
+  }
   return mergeDays(lists);
+}
+
+/**
+ * 「讀取器讀不動這份檔」與「伺服器壞掉」是兩回事,而原本兩者都回同一句
+ * 「施工日誌解析失敗,請稍後重試;若持續失敗請聯絡系統管理員」。讀取器的錯
+ * **重試一萬次也不會成功**——承辦人只能一直重試然後打電話,而畫面上完全看不出
+ * 是哪一個檔、為什麼。讀取器自己丟的訊息才是他要的(「PDF 沒有文字層(掃描件)」、
+ * 「找不到第一聯/第二聯(此檔非明德日誌)」)。
+ *
+ * 多檔上傳時**一定要講是哪一個檔**:兩聯分開的案子一次送兩個檔,只說「讀不動」
+ * 等於要他自己一個一個試。
+ */
+function 讀取失敗(檔名, err) {
+  let msg = `讀不到「${檔名}」:${err.message}`;
+  // 掃描件另有一條路,不指路的話承辦人不會知道要去按它
+  if (/文字層|掃描件/.test(err.message)) msg += '。請改按「辨識掃描件」,系統會用 OCR 預填讓你逐格核對。';
+  const e = new Error(msg);
+  e.讀取失敗 = true;
+  return e;
 }
 
 // multer 的 .array 在只送一個檔時 req.files 仍是陣列;.single 的 req.file 則是物件。
@@ -420,6 +445,7 @@ function registerRoutes(app) {
           diff,
         });
       } catch (err) {
+        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
         console.error('[daily-log] 施工日誌解析失敗:', err);
         res.status(500).json({ error: '施工日誌解析失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
       }
@@ -470,6 +496,7 @@ function registerRoutes(app) {
           費用推算: { 工期天數: plan.工期天數, 項目: plan.items.map((f) => f.項目) },
         });
       } catch (err) {
+        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
         if (/projectId 不合法/.test(err.message || '')) {
           return res.status(400).json({ error: '網址中的工程 id 不合法' });
         }
