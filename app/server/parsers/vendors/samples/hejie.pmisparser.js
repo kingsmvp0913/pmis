@@ -22,6 +22,12 @@
  *    (`114`、`年`、`6`、`月`、`1`、`日`)。所有標籤比對一律先去空白,日期則整段接起來再 regex。
  * ④ **表格尾端有一整片「-」的空白列**(範本印好的列)。`-` 一律當 null,整列皆 null 就跳過;
  *    不跳的話每天會多出十幾列沒有名稱的假項目。
+ * ⑤ **長名稱會折行,一列佔兩到三個 y 帶**,而且項次與數值不一定落在同一帶:
+ *    有時數值在下面那帶(項次 3「測量與放樣」),有時項次在上面那帶而數值在下面
+ *    (項次 27 求救按鈕),契約數量甚至會自己單獨一帶。一帶當一列的話,每天會多出
+ *    一批沒有項次的假列(SP3 的 A4 硬錯)、真列的名稱只剩半截(E3 警告),還會漏掉
+ *    契約數量(A7 硬錯)。實測明禮 30 天:1050 列裡 30 個 A4、21 個 A7,全是這個。
+ *    見 `mergeWrapped`。
  *
  * ── 進度取哪一組 ──
  * 表頭同時有「本日預定/實際進度」與「累計預定/實際進度」。**取累計那一組**:
@@ -157,6 +163,52 @@ function parseCover(items) {
 }
 
 /** 第二聯:完整明細 + 當日累計金額。 */
+/**
+ * 名稱折行時,一列會佔兩到三個 y 帶。把不含項次的帶併回**最近的項次帶**。
+ *
+ * ⚠️ 不可以用「間距小於某個值就併」——那會連鎖。實測明禮 30 天:項次 3 的
+ * 契約數量「1」自己單獨一帶(離項次帶 5.4),而項次 4 的名稱首行離它只有 7.7,
+ * 照間距併會把 3 和 4 併成一列。改成算「到最近項次帶的距離」就分得開:
+ * 5.4 vs 12.9、5.2 vs 13.1。
+ *
+ * 門檻取 8.5:同一列各帶的距離實測 5.0~7.7,不同列的項次帶最小 9.5(n=1050)。
+ * 併不到的帶(範本印好的整列「-」)維持原樣自成一列,由既有的整列 null 規則濾掉。
+ */
+const MAX_WRAP_GAP = 8.5;
+
+function mergeWrapped(bands) {
+  const 有項次 = (b) => {
+    const left = b.items.flatMap(tokensOf).filter((t) => t.cx < 62).sort((a, c) => a.x - c.x);
+    return left.length > 0 && NO_RE.test(despace(left[0].s));
+  };
+  const anchors = bands.filter(有項次);
+  if (!anchors.length) return bands;
+  const out = new Map(anchors.map((b) => [b, { y: b.y, items: b.items.slice() }]));
+  const loose = [];
+  for (const b of bands) {
+    if (out.has(b)) continue;
+    let best = null;
+    for (const a of anchors) {
+      const d = Math.abs(a.y - b.y);
+      if (d <= MAX_WRAP_GAP && (best == null || d < Math.abs(best.y - b.y))) best = a;
+    }
+    if (best) out.get(best).items.push(...b.items);
+    else loose.push({ y: b.y, items: b.items.slice() });
+  }
+  return [...out.values(), ...loose].sort((a, b) => b.y - a.y);
+}
+
+/** 同一列內先分行(y 容差 4,同一行的基線本來就差到 3.2),行內再由左到右。 */
+function 依閱讀序(tokens) {
+  const lines = [];
+  for (const t of tokens.slice().sort((a, b) => b.y - a.y)) {
+    const last = lines[lines.length - 1];
+    if (last && last.y - t.y <= 4) last.ts.push(t);
+    else lines.push({ y: t.y, ts: [t] });
+  }
+  return lines.flatMap((l) => l.ts.sort((a, b) => a.x - b.x));
+}
+
 function parseDetail(items) {
   const all = bands(items);
   const flat = items.flatMap(tokensOf);
@@ -182,10 +234,10 @@ function parseDetail(items) {
       .map((t) => t.s).join(''))
     : null;
 
+  const 明細帶 = all.filter((b) => b.y < hNo.y - 0.5
+    && !(stop && b.y <= stop.y + 2));
   const dailyRows = [];
-  for (const b of all) {
-    if (b.y >= hNo.y - 0.5) continue;                      // 表頭與抬頭
-    if (stop && b.y <= stop.y + 2) break;                  // 明細到「累計(本日完成金額)」為止
+  for (const b of mergeWrapped(明細帶)) {
     const cells = xs.map(() => []);
     for (const t of b.items.flatMap(tokensOf)) {
       let k = 0;
@@ -194,12 +246,15 @@ function parseDetail(items) {
     }
     const left = cells[0].sort((a, c) => a.x - c.x);
     let 項次 = null;
-    let name = left.map((t) => t.s).join('');
+    let rest = left;
     // 項次與名稱都在「工程項目」表頭左邊,只能靠形狀分(見檔頭②)
     if (left.length && NO_RE.test(despace(left[0].s))) {
       項次 = despace(left[0].s);
-      name = left.slice(1).map((t) => t.s).join('');
+      rest = left.slice(1);
     }
+    // 名稱片段跨行時要照「上到下、左到右」接回去,不能照 x 排——兩行的起點 x
+    // 幾乎相同(69.1 vs 69.0),靠 sort 的穩定性接對只是碰巧(見檔頭⑤)
+    const name = 依閱讀序(rest).map((t) => t.s).join('');
     const join = (k) => cells[k].map((t) => t.s).join('');
     const row = {
       項次,
