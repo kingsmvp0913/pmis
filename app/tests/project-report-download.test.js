@@ -107,3 +107,42 @@ test('工程名含檔名非法字元時清掉再當檔名', async () => {
   expect(res.status).toBe(200);
   expect(filenameStar(res)).toBe('竹崎圍牆改善工程_監造報表.xlsm');
 });
+
+
+// ── 存到本機(繞開 Excel 的巨集封鎖)────────────────────────────
+// 監造報表是 .xlsm。經瀏覽器下載時 Windows 會寫入 Zone.Identifier(ZoneId=3,
+// 實測使用者回傳的 5 份全帶著),Excel 因此封鎖整份活頁簿的巨集——範本上的
+// 「列印PDF」按鈕按下去只會得到「無法執行巨集…或者已停用所有巨集」。
+// 由**伺服器在本機寫檔**就沒有這個標記(標記是瀏覽器加的,不是檔案內容)。
+test('存到本機:寫出檔案並回絕對路徑', async () => {
+  const { app, token, id } = await makeApp();
+  putWorkbook(id, 'xlsm-bytes');
+  const res = await request(app).post(`/api/projects/${id}/report/save-local`)
+    .set('Authorization', `Bearer ${token}`).expect(200);
+  expect(res.body.ok).toBe(true);
+  expect(fs.existsSync(res.body.path)).toBe(true);
+  expect(fs.readFileSync(res.body.path, 'utf8')).toBe('xlsm-bytes');
+  expect(path.basename(res.body.path)).toBe('竹崎圍牆工程_監造報表.xlsm');
+});
+
+test('存到本機:報表還沒建立時回 409 並說要先做什麼', async () => {
+  const { app, token, id } = await makeApp();
+  // ⚠️ 本檔共用同一個 PMIS_DATA_DIR,而 pg-mem 每支測試都從 id 1 重新發號——
+  // 前一支測試造的常駐報表還在原地,不清掉這一支永遠測不到「還沒建立」。
+  fs.rmSync(workbookPath(id), { force: true });
+  const res = await request(app).post(`/api/projects/${id}/report/save-local`)
+    .set('Authorization', `Bearer ${token}`).expect(409);
+  expect(res.body.error).toMatch(/尚未建立/);
+});
+
+// ⚠️ 從別台電腦連進來時,「存到本機」存的是**伺服器那台**的硬碟,不是他的。
+// 靜靜地寫下去等於跟他說存好了卻哪裡都找不到——一定要擋,而且要講原因。
+test('存到本機:非本機連線要擋下並說明,不能存到伺服器那台', async () => {
+  const { app, token, id } = await makeApp();
+  putWorkbook(id);
+  const res = await request(app).post(`/api/projects/${id}/report/save-local`)
+    .set('Authorization', `Bearer ${token}`)
+    .set('X-Forwarded-For', '192.168.1.50')
+    .expect(400);
+  expect(res.body.error).toMatch(/這台|本機/);
+});

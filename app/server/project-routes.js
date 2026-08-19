@@ -63,6 +63,39 @@ function isBlank(v) {
 
 // 工程名稱是承辦人自由輸入的,直接拿來當下載檔名的話,`/` `:` 這類字元會讓
 // Content-Disposition 被解成路徑或整個下載失敗。只清字元、不截斷長度。
+// 資料根:相對本檔求出(app/server → repo/data),禁止寫死絕對路徑。
+// 測試以 PMIS_DATA_DIR 覆寫(同 report-workbook / history-routes)。
+const DATA_DIR = process.env.PMIS_DATA_DIR
+  ? path.resolve(process.env.PMIS_DATA_DIR)
+  : path.resolve(__dirname, '../../data');
+
+/**
+ * 這個請求是不是「執行 PMIS 的那台電腦上的瀏覽器」發的。
+ *
+ * 前面有 proxy(帶了 X-Forwarded-For)就一定不是直連,直接判否——那個標頭是
+ * 對方可以偽造的,但偽造只會讓他被擋下,不會讓檔案跑到錯的機器上。
+ */
+function 本機請求(req) {
+  if (req.headers['x-forwarded-for']) return false;
+  const a = String((req.socket && req.socket.remoteAddress) || '');
+  return a === '::1' || a === '127.0.0.1' || a === '::ffff:127.0.0.1';
+}
+
+/**
+ * 用檔案總管開啟資料夾。best-effort:開不起來不影響「檔案已經存好了」這件事,
+ * 所以吞掉例外,只是承辦人要自己照畫面上的路徑去找。
+ * 作法同 scripts/start.js 開瀏覽器那一段(這是本機執行的桌面型工具)。
+ */
+function 開啟資料夾(dir) {
+  if (process.platform !== 'win32') return;
+  try {
+    require('child_process')
+      .spawn('explorer', [dir], { detached: true, stdio: 'ignore' })
+      .on('error', () => {})
+      .unref();
+  } catch { /* 開不起來就算了 */ }
+}
+
 function safeFileName(name) {
   // eslint-disable-next-line no-control-regex
   return String(name || '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').trim() || '監造報表';
@@ -650,6 +683,46 @@ function registerRoutes(app) {
         return res.status(409).json({ error: '監造報表尚未建立,請先送出工程基本資料' });
       }
       res.download(abs, `${safeFileName(rows[0].name)}_監造報表.xlsm`);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * 存到本機資料夾——**繞開 Excel 的巨集封鎖**。
+   *
+   * 監造報表是 .xlsm。經瀏覽器下載時 Windows 會在檔案上寫一段 Zone.Identifier
+   * (`ZoneId=3`,實測承辦人回傳的 5 份全帶著),Excel 因此封鎖整份活頁簿的巨集,
+   * 範本上的「列印PDF」按下去只會得到「無法執行巨集…或者已停用所有巨集」。
+   * 那段標記是**瀏覽器加的,不是檔案內容**——由伺服器直接寫檔就沒有,承辦人也就
+   * 不必每次下載都去右鍵解除封鎖。PMIS 是用「啟動.bat」在本機跑的,伺服器與瀏覽器
+   * 同一台,這條路才成立。
+   *
+   * ⚠️ 從別台電腦連進來時**一定要擋**:那樣存的是伺服器那台的硬碟,不是他的。
+   * 靜靜地寫下去等於跟他說存好了、他卻哪裡都找不到。
+   */
+  app.post('/api/projects/:id/report/save-local', verifyToken, async (req, res) => {
+    try {
+      if (!本機請求(req)) {
+        return res.status(400).json({
+          error: '你不是從執行 PMIS 的那台電腦連進來的,「存到本機」會把檔案存在'
+            + '伺服器那台而不是你這台。請改用「下載監造報表」,下載後對檔案按右鍵→'
+            + '內容→勾選「解除封鎖」,Excel 才不會擋掉「列印PDF」的巨集。',
+        });
+      }
+      const { rows } = await query('SELECT name FROM projects WHERE id = $1', [req.params.id]);
+      if (!rows[0]) return res.status(404).json({ error: '工程不存在' });
+
+      const abs = workbookPath(req.params.id);
+      if (!fs.existsSync(abs)) {
+        return res.status(409).json({ error: '監造報表尚未建立,請先送出工程基本資料' });
+      }
+      const dir = path.join(DATA_DIR, 'output', `proj_${req.params.id}`);
+      fs.mkdirSync(dir, { recursive: true });
+      const dest = path.join(dir, `${safeFileName(rows[0].name)}_監造報表.xlsm`);
+      fs.copyFileSync(abs, dest);
+      開啟資料夾(dir);
+      res.json({ ok: true, path: dest });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

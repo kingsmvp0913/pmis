@@ -491,25 +491,39 @@ const DailyLogs = (() => {
       }
     });
 
-    // 下載成功後才顯示。報表是 .xlsm(巨集活頁簿),瀏覽器下載時 Windows 會標上
-    // 「來自網際網路」,Excel 因此**封鎖整份活頁簿的巨集**——「列印PDF」那顆按鈕
-    // 按下去只會得到「無法執行巨集…該巨集可能無法在此活頁簿中使用,或者已停用
-    // 所有巨集」。巨集本身在檔案裡完好,是 Windows 擋的,所以只能在這裡講怎麼解。
-    const 巨集提示 = el('div', { class: 'hint', style: 'display:none' },
-      '已下載。⚠️ Excel 開啟後若出現「已封鎖巨集執行」或按「列印PDF」時說「無法執行巨集」,'
-      + '那是 Windows 給下載檔案加的封鎖,不是報表壞掉:'
-      + '在檔案總管對這個檔按右鍵→內容→勾選最下面的「解除封鎖」→確定,再重開一次即可。');
+    const 取報表提示 = el('div', { class: 'hint', style: 'display:none' });
 
+    // 報表是 .xlsm(巨集活頁簿)。**經瀏覽器下載**時 Windows 會在檔案上寫一段
+    // 「來自網際網路」的標記(Zone.Identifier / ZoneId=3),Excel 因此封鎖整份
+    // 活頁簿的巨集——範本上的「列印PDF」按下去只會得到「無法執行巨集…或者已停用
+    // 所有巨集」,承辦人會以為報表壞了。
+    //
+    // 那段標記是瀏覽器加的,不是檔案內容,所以**先讓伺服器直接寫到本機資料夾**
+    // (PMIS 是用「啟動.bat」在本機跑的,伺服器與瀏覽器同一台),這樣就沒有標記、
+    // 也不必每次去右鍵解除封鎖。從別台電腦連進來時後端會擋(存下去是存到伺服器
+    // 那台),那時才退回原本的瀏覽器下載,並告訴他要怎麼解除封鎖。
     downloadBtn.addEventListener('click', async () => {
       err.style.display = 'none';
-      巨集提示.style.display = 'none';
+      取報表提示.style.display = 'none';
       downloadBtn.disabled = true;
       try {
-        await Api.download(`projects/${projectId}/report/download`);
-        巨集提示.style.display = '';
+        const r = await Api.post(`projects/${projectId}/report/save-local`);
+        取報表提示.textContent = `已存到 ${r.path}(已幫你開啟資料夾)。`
+          + '這條路不經瀏覽器,所以 Excel 不會擋巨集,「列印PDF」可以直接用。';
+        取報表提示.style.display = '';
       } catch (e) {
-        // 尚未建立(409)的訊息本身就寫了該先做什麼,直接照顯示
-        showErr(e.message);
+        // 409(報表尚未建立)的訊息本身就寫了該先做什麼,不要退回下載
+        if (/尚未建立/.test(e.message)) { showErr(e.message); return; }
+        try {
+          await Api.download(`projects/${projectId}/report/download`);
+          取報表提示.textContent = '已下載。⚠️ Excel 開啟後若出現「已封鎖巨集執行」,'
+            + '或按「列印PDF」時說「無法執行巨集」,那是 Windows 給下載檔案加的封鎖,'
+            + '不是報表壞掉:在檔案總管對這個檔按右鍵→內容→勾選最下面的'
+            + '「解除封鎖」→確定,再重開一次即可。';
+          取報表提示.style.display = '';
+        } catch (e2) {
+          showErr(e2.message);
+        }
       } finally {
         downloadBtn.disabled = false;
       }
@@ -520,7 +534,7 @@ const DailyLogs = (() => {
       hint,
       el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案(可多選:兩聯分開的檔、逐月的檔一次全選)'), fileI]),
       el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn, uploadBtn]),
-      巨集提示,
+      取報表提示,
       reportFileI,
       uploadBox,
       err,
