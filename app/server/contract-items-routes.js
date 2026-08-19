@@ -15,15 +15,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const multer = require('multer');
-const x = require('xlsx');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { readSheets, findCandidates } = require('./budget-sheet');
-const {
-  selectSheets, validateItems, diffItems, itemsToOperations,
-  supervisionItemRowCount, formulaItemRowCount, INDEX_ROWS,
-} = require('./contract-items');
-const { ensureWorkbook } = require('./report-workbook');
+const { selectSheets, validateItems, diffItems, itemsToOperations } = require('./contract-items');
+const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
@@ -78,38 +74,6 @@ async function loadExisting(projectId) {
        FROM contract_items WHERE project_id = $1 ORDER BY seq`, [projectId]);
   if (!rows.length) return null;
   return rows.map((r) => ({ ...r, 數量: Number(r.數量), 單價: Number(r.單價) }));
-}
-
-/**
- * 各分頁目前有幾列項目列,由**實檔**量出——報表是常駐檔,可能已被前一次寫入刪過列,
- * 也可能是承辦人自己上傳的那份。用範本常數推會刪到報表正文,而刪掉的正文不會有
- * 任何錯誤訊息。
- *
- * 監造報表看得到正文錨點(項目區正下方就是正文);另兩個分頁下方是空白,只能數
- * 「從第 2 列起連續有公式的列」。讀不到就回 null → 那個分頁只擴不刪。
- */
-function itemRowCounts(xlsmPath) {
-  const 空 = { 監造報表: null, 每日施工紀錄: null, 契約詳細價目表: null };
-  let wb;
-  try { wb = x.readFile(xlsmPath, { sheets: ['監造報表', '每日施工紀錄', '契約詳細價目表'] }); }
-  catch { return 空; }
-  const 逐列 = (sheet, col, pick) => {
-    const ws = wb.Sheets[sheet];
-    if (!ws || !ws['!ref']) return [];
-    const { e } = x.utils.decode_range(ws['!ref']);
-    return Array.from({ length: e.r + 1 }, (_, i) => pick(ws[`${col}${i + 1}`]));
-  };
-  const 值 = (c) => (c == null || c.v == null ? '' : String(c.v));
-  const 是公式 = (c) => !!(c && c.f);
-  try {
-    return {
-      監造報表: supervisionItemRowCount(逐列('監造報表', 'A', 值)),
-      每日施工紀錄: formulaItemRowCount(逐列('每日施工紀錄', 'A', 是公式),
-        INDEX_ROWS.每日施工紀錄.first),
-      契約詳細價目表: formulaItemRowCount(逐列('契約詳細價目表', 'F', 是公式),
-        INDEX_ROWS.契約詳細價目表.first),
-    };
-  } catch { return 空; }
 }
 
 /**

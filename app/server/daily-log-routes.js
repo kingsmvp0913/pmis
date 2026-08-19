@@ -42,7 +42,8 @@ const {
   daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
 } = require('./daily-log-write');
 const { scanDays, scanCoverage } = require('./daily-log-scan');
-const { ensureWorkbook } = require('./report-workbook');
+const { resizeOperations } = require('./contract-items');
+const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
@@ -233,6 +234,11 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
     // 竣工日期是費用項目推算的分母(見 daily-log-write.js)。承辦人還沒填時
     // 傳 null,那幾列就維持照日誌的原行為,不會擋住這份日誌寫入。
     await fillTemplate(dest, tmp, applyProtection(dest, [
+      // 先把項目列數對齊這份契約(見 resizeOperations)。SP2 寫價目表時已經做過一次,
+      // 這裡再做是為了**修舊報表**:刪列是後來才加的,在那之前建的常駐檔還留著範本
+      // 自己的費用公式列,會在每日施工紀錄印出一整排 #N/A 並把合計與進度算爆。
+      // 承辦人日常只上傳日誌,不會重跑 SP2——不在這裡修就永遠修不好。
+      ...resizeOperations(ctx.contract, itemRowCounts(dest)),
       ...daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期),
       ...weatherToOperations(days, ctx.開工日),
     ]));

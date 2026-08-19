@@ -440,12 +440,25 @@ function formulaItemRowCount(hasFormula, first) {
  * @returns {Array} operations(擴列/刪列排在寫值之前)
  * @throws {Error} items 為空
  */
-function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
+/**
+ * 把三個分頁的項目列數調成剛好容納這批項目——多的刪掉、少的補上。
+ *
+ * 由 itemsToOperations 抽出來獨立成一支,是因為**寫價目表(SP2)不是唯一需要它的地方**:
+ * 刪列是 2026-08-11 才加的,在那之前建好的常駐報表都還留著範本自己的五列費用公式
+ * (`ROUND(SUM($F$2:$F$32)*7%,0)` 那種)。那些列沒有項次/名稱/單位,卻**算得出單價**,
+ * 於是「每日施工紀錄」照拉過去就是一整列 `#N/A` 配一個看起來合理的金額,再往下
+ * 汙染合計與完成百分比(實測 9092.78%、189054.83%)。承辦人日常只上傳日誌、不會
+ * 重跑 SP2,舊報表就永遠修不好——所以 SP3 寫入前也要跑一次。
+ *
+ * @param {Array} items 這份報表應有的全部項目(施工 + 費用)
+ * @param {object|null} 現有列數 由實檔量出的各分頁項目列數,鍵同 INDEX_ROWS;
+ *   量不到的分頁(null/未給)只擴不刪——**寧可多印幾列,也不猜著刪**
+ * @returns {Array} operations
+ */
+function resizeOperations(items, 現有列數 = null) {
   const list = items || [];
-  if (!list.length) throw new Error('沒有任何項目,不組寫入指令');
-
   const ops = [];
-  // 擴列/刪列先做:公式列不存在的話,寫進去的項目在那些分頁上看不到。
+  if (!list.length) return ops;
   for (const [sheet, { first, last, op, 只算施工項目 }] of Object.entries(INDEX_ROWS)) {
     const 量到的 = 現有列數 && Number.isInteger(現有列數[sheet]) ? 現有列數[sheet] : null;
     // 常駐檔的實際列數可能已被刪過(或承辦人上傳的那份本來就不同),量得到就以實檔為準
@@ -460,6 +473,15 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
       ops.push({ type: 'deleteRows', sheet, startRow: first + needed, count: capacity - needed });
     }
   }
+  return ops;
+}
+
+function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
+  const list = items || [];
+  if (!list.length) throw new Error('沒有任何項目,不組寫入指令');
+
+  // 擴列/刪列先做:公式列不存在的話,寫進去的項目在那些分頁上看不到。
+  const ops = resizeOperations(list, 現有列數);
 
   const rows = Math.max(list.length, Number(previousCount) || 0);
   const 公式 = 費用項目單價公式(list);
@@ -482,5 +504,6 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
 
 module.exports = {
   selectSheets, validateItems, diffItems, roundHalfUp, constructionCost,
-  itemsToOperations, supervisionItemRowCount, formulaItemRowCount, SHEET, INDEX_ROWS,
+  itemsToOperations, resizeOperations, supervisionItemRowCount, formulaItemRowCount,
+  SHEET, INDEX_ROWS,
 };

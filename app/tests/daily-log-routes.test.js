@@ -25,6 +25,7 @@ jest.mock('../server/daily-log-scan', () => ({
 const registry = require('../server/parsers/registry');
 const { fillTemplate } = require('../server/template-engine');
 const { scanDays, scanCoverage } = require('../server/daily-log-scan');
+const { TEMPLATE_PATH, workbookPath } = require('../server/report-workbook');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
 const { registerRoutes: registerDailyLogRoutes } = require('../server/daily-log-routes');
 
@@ -151,6 +152,28 @@ test('無硬錯時寫入報表並落庫', async () => {
     `SELECT log_date, item_no, qty FROM daily_records
       WHERE project_id = $1 ORDER BY log_date`, [id]);
   expect(rows.map((x) => iso(x.log_date))).toEqual(['2026-04-08', '2026-04-09']);
+});
+
+// 刪列是 2026-08-11 才加進 SP2 的,在那之前建好的常駐報表還留著範本自己的五列
+// 費用公式(`ROUND(SUM($F$2:$F$32)*7%,0)`)。那些列沒有項次/名稱/單位卻算得出單價,
+// 「每日施工紀錄」照拉就是一整排 #N/A 配一個看起來合理的金額,合計與完成百分比
+// 跟著爆(實測 9092.78%、189054.83%)。承辦人日常只上傳日誌不會重跑 SP2——
+// 所以寫日誌時也要把列數對齊,否則舊報表永遠是壞的。
+test('寫日誌時順手把多出來的範本殘留列刪掉', async () => {
+  const { app, token, id } = await makeApp();
+  // ⚠️ 本檔共用同一個 PMIS_DATA_DIR,而 pg-mem 每支測試重新發 id ——前面測試的
+  // fillTemplate mock 已經把 project_1 的報表寫成純文字了。列數要量得出來,
+  // 這裡得先還原成真的公版範本(量不到列數就只擴不刪,測不到要測的東西)。
+  fs.mkdirSync(path.dirname(workbookPath(id)), { recursive: true });
+  fs.copyFileSync(TEMPLATE_PATH, workbookPath(id));
+  feed([day('2026-04-08', [r('1', 3)])]);
+  await post(app, token, id, 'confirm').expect(200);
+  const ops = fillTemplate.mock.calls[0][2];
+  const 刪 = ops.filter((o) => o.type === 'deleteRows');
+  // 契約只有 1 項,而公版範本三個分頁分別預留 31/36/36 列
+  expect(刪.map((o) => `${o.sheet}:${o.startRow}+${o.count}`).sort()).toEqual([
+    '契約詳細價目表:3+35', '每日施工紀錄:3+35', '監造報表:11+30',
+  ]);
 });
 
 // 「後面才發現前面錯了」是真實流程:同一天重送修正版要能蓋掉舊值
