@@ -301,6 +301,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     contractByName.set(key, contractByName.has(key) ? null : c); // 撞名則標記為不可用
   }
   const seenItemNos = new Set();
+  // 這一天實際涵蓋到的契約項次(已套用 normNo 與名稱對應的結果)。
+  // D5 要用它而不是原始項次:見下面 D5 的說明。
+  const 當日契約項次 = new Map();
   const seenDates = new Set();
 
   for (const d of days) {
@@ -317,6 +320,8 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     // D1 同一份出現兩個相同填報日期:那是同一天被送了兩次,累計會被算兩遍
     if (seenDates.has(日期)) hard('D1', 日期, null, '這一天在同一份日誌裡出現兩次');
     seenDates.add(日期);
+    const 本日項次 = new Set();
+    當日契約項次.set(d, 本日項次);
 
     // D3 填報日期落在工期外
     const 這天 = dayNum(日期);
@@ -377,6 +382,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         const byName = contractByName.get(squash(r.工程項目));
         if (byName) { c = byName; 依名稱對應 = true; }
       }
+      // 這一列到底涵蓋到哪個契約項次:對得上契約就記契約的編號,對不上就記自己的。
+      // D5 靠這個集合判斷月末清單完不完整。
+      if (c) 本日項次.add(normNo(c.項次));
+      else if (項次 != null) 本日項次.add(normNo(項次));
+
       if (項次 != null && contract.length && !c) {
         hard('E1', 日期, 項次, '此項次在契約詳細價目表中不存在');
       } else if (c) {
@@ -600,6 +610,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 但這樣就沒有任何一天可以拿來對「到這個月為止總共做了多少」。
   // 折衷:平日照舊,**當月最後一天必須是完整清單**,承辦人才有月結的對帳點。
   // 基準優先用真實契約表;沒有契約表時(自我基準)用這批日誌出現過的全部項次。
+  // ⚠️ 比對一律走 normNo,而且用**已對應到契約的項次**(當日契約項次),不是原始項次。
+  // 廠商把費用項目編成接續的阿拉伯數字(南陽 32~36)或異體中文數字(参),E1 早就
+  // 依項目名稱對回契約的「貳~陸」並放行;D5 若還逐字比原始項次,同一批項目每個
+  // 月末都會被判成「缺 5 項」——2026-08-17 實測元長鋪面、橋頭許厝分校、鹿場
+  // 三案全中,而 D5 是硬錯,整份日誌卡住且訊息完全指不到真正原因。
   const 應有項次 = contract.length ? contract.map((c) => String(c.項次)) : [...seenItemNos];
   const 月末 = new Map();
   for (const d of days) {
@@ -610,8 +625,8 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     if (!cur || 日 > cur.日) 月末.set(月, { 日, d });
   }
   for (const { 日, d } of 月末.values()) {
-    const 有 = new Set((d.dailyRows || []).filter((r) => !isCategoryRow(r)).map((r) => String(r.項次)));
-    const 缺 = 應有項次.filter((n) => !有.has(n));
+    const 有 = 當日契約項次.get(d) || new Set();
+    const 缺 = 應有項次.filter((n) => !有.has(normNo(n)));
     if (缺.length) {
       hard('D5', 日, null,
         `當月最後一天只列了 ${有.size} 項,缺 ${缺.length} 項(${缺.slice(0, 5).join('、')}`
