@@ -101,7 +101,8 @@ const SCAN_WIDTH = 2200;
  * 掃描件的明細解析:OCR 的 items 餵給**該廠商既有的讀取器**,吐出與文字層同形的 days。
  *
  * 讀取器一行都不用改——`extractItemsOcr` 產出的就是 `extractItems` 的形狀,
- * 這裡只是把 `ctx.filetypes.extractItems` 換掉。其餘檔型工具(readWorkbook 等)
+ * 這裡只是把 `ctx.filetypes.extractItems` 換掉(掃描件專用的讀取器直接要
+ * `extractItemsOcr`,同一份也一併給它)。其餘檔型工具(readWorkbook 等)
  * 必須原樣保留:整包換掉的話,讀取器裡任何一支非 PDF 分支都會炸。
  *
  * ⚠️ 讀取器**可能整份 throw**(表頭錨點 OCR 認錯就找不到,實測 8 份裡有 2 份)。
@@ -119,7 +120,15 @@ async function scanDays(pdfPath, deps = {}) {
   if (!parser || typeof parser.parseAll !== 'function') throw new Error('scanDays 需要注入 parser.parseAll');
   const pages = await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
   return parser.parseAll(pdfPath, {
-    filetypes: { ...(filetypes || {}), extractItems: async () => pages },
+    filetypes: {
+      ...(filetypes || {}),
+      extractItems: async () => pages,
+      // 掃描件專用的讀取器(銘佑)沒有文字層可讀,它的唯一入口就是 extractItemsOcr。
+      // 少注入這個鍵,「辨識掃描件」對那家永遠回「缺少注入的 filetypes.extractItemsOcr」,
+      // 一列都預填不出來(龍井實測)。回**上面剛算好的那份**而不是再跑一次:
+      // 同一份檔 OCR 一次要數十秒,跑兩次等於把承辦人的等待時間加倍。
+      extractItemsOcr: async () => pages,
+    },
   });
 }
 
