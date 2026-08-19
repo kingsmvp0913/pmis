@@ -25,8 +25,16 @@
  *    出工那張表同理:工別名稱每天都印滿,人數欄只有 17 天有值。
  *    「還沒填」與「讀不到」要分得清楚,所以空的就留 null,不要塞 0。
  *
+ * ── 續頁(第 2 頁)──
+ * 有些天在日誌頁後面**多印一頁「第 2 頁,共 2 頁」**:同一個表單編號、沒有填表日期,
+ * 但帶著**完整的合約明細**(全部項次)外加日誌頁沒有的單價、本日完成金額、
+ * 累計完成金額。日誌頁只列當天施作的那幾項,所以續頁是嚴格的超集——有續頁就用它。
+ * 不讀的話:那一天看起來只做了 4 項,月結時 SP3 的 D5 判「缺 10 項」硬錯
+ * (新光球場 2026-07-31 實測),而且整份日誌的單價與金額永遠是 null。
+ * 續頁的長名稱也會折行(項次 1、5、7、9、参),併法同 mergeWrapped。
+ *
  * ── 此格式沒有的東西 ──
- * 沒有契約單價、沒有任何金額,一律 null 不回推。
+ * 日誌頁沒有契約單價、沒有任何金額,一律 null 不回推(續頁有的話由續頁補)。
  * 「二、工地材料管理概況」那張表實測 84 天全空(而且它是左右兩個並排的區塊,
  * 真的有資料時要當兩塊處理)——目前不收,收了也只會是空陣列。
  */
@@ -235,6 +243,105 @@ function parsePage(items, 寬鬆) {
   };
 }
 
+/**
+ * 續頁的明細列會折行:一列佔兩到三個 y 帶(項次 1「假設工程…」佔三帶)。
+ * 把沒有項次的帶歸給**最近的項次帶**——實測同一列各帶距離 4.9~5.2,
+ * 不同列之間 17.7 以上,分得很開。照間距連鎖併會把相鄰列黏在一起。
+ */
+function mergeWrappedBands(bands, 項次界) {
+  const 有項次 = (b) => {
+    const left = b.items.filter((i) => i.x < 項次界).sort((a, c) => a.x - c.x);
+    return left.length > 0 && NO_RE.test(despace(left[0].s));
+  };
+  const anchors = bands.filter(有項次);
+  if (!anchors.length) return bands;
+  const out = new Map(anchors.map((b) => [b, { y: b.y, items: b.items.slice() }]));
+  const loose = [];
+  for (const b of bands) {
+    if (out.has(b)) continue;
+    let best = null;
+    for (const a of anchors) {
+      const d = Math.abs(a.y - b.y);
+      if (d <= 9 && (best == null || d < Math.abs(best.y - b.y))) best = a;
+    }
+    if (best) out.get(best).items.push(...b.items);
+    else loose.push({ y: b.y, items: b.items.slice() });
+  }
+  return [...out.values(), ...loose].sort((a, b) => b.y - a.y);
+}
+
+/** 同一列內先分行(y 容差 3),行內再由左到右——名稱片段要照閱讀序接。 */
+function 依閱讀序(items) {
+  const lines = [];
+  for (const t of items.slice().sort((a, b) => b.y - a.y)) {
+    const last = lines[lines.length - 1];
+    if (last && last.y - t.y <= 3) last.ts.push(t);
+    else lines.push({ y: t.y, ts: [t] });
+  }
+  return lines.flatMap((l) => l.ts.sort((a, b) => a.x - b.x));
+}
+
+/**
+ * 續頁(第 2 頁)→ { dailyRows, 本日累計金額 }。認不出這個版面就回 null。
+ * 判準用「累計完成金額」這個表頭:日誌頁那張表沒有它,不會誤判。
+ */
+function parseContinuation(items) {
+  const all = bands(items);
+  const find = (re) => items.find((it) => re.test(despace(it.s)));
+  const hNo = find(/^合約項次$/);
+  const hUnit = find(/^單位$/);
+  const hQty = find(/^契約數量$/);
+  const hPrice = find(/^單價$/);
+  const hToday = find(/^本日完成數量$/);
+  const hAmt = find(/^本日完成金額$/);
+  const hCum = find(/^累計完成數量$/);
+  const hCumAmt = find(/^累計完成金額$/);
+  if (!hNo || !hUnit || !hQty || !hPrice || !hToday || !hAmt || !hCum || !hCumAmt) return null;
+
+  // 值靠右印,會落在自己表頭起點的左邊(單價 29,975.00 起點 300、表頭 308),
+  // 故一律用**中心點**歸欄(同日誌頁那張表的作法)。
+  const xs = [-Infinity, hUnit.x, hQty.x, hPrice.x, hToday.x, hAmt.x, hCum.x, hCumAmt.x];
+  const 明細 = all.filter((b) => b.y < hNo.y - 0.5);
+  const dailyRows = [];
+  let 本日累計金額 = null;
+  for (const b of mergeWrappedBands(明細, hUnit.x)) {
+    const cells = xs.map(() => []);
+    for (const t of b.items) {
+      const cx = t.x + (t.w || 0) / 2;
+      let k = 0;
+      while (k + 1 < xs.length && cx >= xs[k + 1]) k++;
+      cells[k].push(t);
+    }
+    const join = (k) => cells[k].map((t) => t.s).join('');
+    const left = cells[0].slice().sort((a, c) => a.x - c.x);
+    // 表尾的「完成金額 41,427.00 212,003.00」:本日合計與累計合計。
+    // 它以下都是註腳(「本日完成進度=…」),再往下讀會生出沒有項次的假列。
+    if (/^完成金額$/.test(despace(join(0)))) {
+      本日累計金額 = num(join(7));
+      break;
+    }
+    let 項次 = null;
+    let rest = left;
+    if (left.length && NO_RE.test(despace(left[0].s))) {
+      項次 = despace(left[0].s);
+      rest = left.slice(1);
+    }
+    const name = text(依閱讀序(rest).map((t) => t.s).join(''));
+    if (項次 == null && name == null) continue;
+    dailyRows.push({
+      項次,
+      工程項目: name,
+      單位: unitOf(join(1)),
+      契約單價: num(join(3)),
+      契約數量: num(join(2)),
+      本日完成數量: num(join(4)),
+      本日完成金額: num(join(5)),
+      累計完成數量: num(join(6)),
+    });
+  }
+  return dailyRows.length ? { dailyRows, 本日累計金額 } : null;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
   if (!ft || typeof ft.extractItems !== 'function') throw new Error('缺少注入的 filetypes.extractItems');
@@ -248,10 +355,37 @@ async function parseAll(filePath, ctx) {
   // 嚴格比對就一頁都選不到、整份 throw。
   const 嚴格 = (items) => items.some((it) => /^表單編號[:：]?$/.test(despace(it.s)));
   const 放寬 = (items) => items.some((it) => /^表單編號[:：]?/.test(despace(it.s)));
-  let 日誌頁 = pages.filter((p) => 嚴格(p.items || []));
+  // 續頁也帶「表單編號:」,先挑出來,免得被當成「沒有日期的一天」丟掉
+  const 續頁 = new Map();                                  // 表單編號 → 續頁明細
+  // ⚠️ 不可以取「陣列裡的下一個 item」:抽出來的順序不保證是閱讀序,續頁實測
+  // 標籤的下一個 item 是「合約項次」而不是編號。改成取同一帶、右邊最近的那個。
+  const 編號 = (items) => {
+    const lab = items.find((it) => /^表單編號[:：]?$/.test(despace(it.s)));
+    if (!lab) return null;
+    const 右 = items.filter((it) => it !== lab && Math.abs(it.y - lab.y) <= 3 && it.x > lab.x)
+      .sort((a, b) => a.x - b.x)[0];
+    return 右 ? despace(右.s) : null;
+  };
+  const 一般頁 = [];
+  for (const p of pages) {
+    const items = p.items || [];
+    const cont = 嚴格(items) ? parseContinuation(items) : null;
+    if (cont) 續頁.set(編號(items), cont);
+    else 一般頁.push(p);
+  }
+  let 日誌頁 = 一般頁.filter((p) => 嚴格(p.items || []));
   const 寬鬆 = !日誌頁.length;
-  if (寬鬆) 日誌頁 = pages.filter((p) => 放寬(p.items || []));
-  const days = 日誌頁.map((p) => parsePage(p.items || [], 寬鬆));
+  if (寬鬆) 日誌頁 = 一般頁.filter((p) => 放寬(p.items || []));
+  const days = 日誌頁.map((p) => {
+    const d = parsePage(p.items || [], 寬鬆);
+    // 續頁是日誌頁的嚴格超集(全部項次 + 單價 + 金額),有就用它整批取代
+    const c = 續頁.get(編號(p.items || []));
+    if (c) {
+      d.dailyRows = c.dailyRows;
+      if (c.本日累計金額 != null) d.header.本日累計金額 = c.本日累計金額;
+    }
+    return d;
+  });
   if (!days.length) throw new Error('找不到「表單編號」頁(此檔非嘉原格式)');
   return days.filter((d) => d.header.填報日期 != null
     || (d.dailyRows || []).some((r) => r.本日完成數量));

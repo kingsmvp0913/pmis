@@ -91,14 +91,40 @@ describe('parseAll(民生球場 4 月)', () => {
     expect(d.extras.出工明細).toEqual([{ 工別: '一般工', 人數: 3 }]);
   });
 
-  test('此格式沒有單價與金額,一律 null 不回推', () => {
+  // 日誌頁那張表沒有單價也沒有金額,不回推。
+  test('日誌頁沒有單價與金額,一律 null 不回推', () => {
     for (const d of days) {
-      expect(d.header.本日累計金額).toBeNull();
+      if (d.header.本日累計金額 != null) continue;          // 有續頁的那天由續頁補,見下
       for (const r of d.dailyRows) {
         expect(r.契約單價).toBeNull();
         expect(r.本日完成金額).toBeNull();
       }
     }
+  });
+
+  // ── 續頁(第 2 頁)──
+  // 有些天在日誌頁後面多印一頁「第 2 頁,共 2 頁」:同一個表單編號、沒有填表日期,
+  // 帶著**全部項次**外加日誌頁沒有的單價與金額。日誌頁只列當天施作的那幾項,
+  // 所以續頁是嚴格的超集。不讀的話那天看起來只做了幾項,月結時 D5 判「缺 N 項」
+  // 硬錯(新光球場 2026-07-31 實測 4 項 vs 14 項),而且單價與金額永遠是 null。
+  test('有續頁的那天改用續頁的完整明細,並補上單價與金額', () => {
+    const d = days.find((x) => x.header.填報日期 === '2025-04-30');
+    expect(d.dailyRows).toHaveLength(18);                   // 施工 13 + 費用 5
+    expect(d.header.本日累計金額).toBe(588824);
+    expect(d.dailyRows[0]).toMatchObject({
+      項次: '1', 單位: '式', 契約數量: 1, 契約單價: 30000, 累計完成數量: 1,
+      工程項目: '工程告示牌、職安衛告示牌、施工圍籬與交通管制設施(租用)',
+    });
+    expect(d.dailyRows[15]).toMatchObject({
+      項次: '肆', 契約單價: 59727, 本日完成數量: 0.2, 本日完成金額: 11945,
+    });
+  });
+
+  // 續頁表尾是「完成金額 …」,再往下是註腳「本日完成進度=(…)%=」。
+  // 不停在那裡就會多出一列沒有項次也沒有數值的假明細。
+  test('續頁的註腳不會變成一列明細', () => {
+    const d = days.find((x) => x.header.填報日期 === '2025-04-30');
+    expect(d.dailyRows.some((r) => /本日完成進度/.test(String(r.工程項目)))).toBe(false);
   });
 });
 
