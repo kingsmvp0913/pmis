@@ -148,6 +148,9 @@ const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 // **刻意不自行統一「、」與「,」**:那兩個在中文裡語意不同(頓號列舉 vs 逗號分句),
 // 硬統一是把一種誤判換成另一種。實測也顯示多做這層沒有額外效益。
 const squash = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[\s　]/g, '');
+// D5 的目的在於確認「是否有這一項」，不是審核標點。PDF 文字層常把全半形
+// 標點、括號與換行轉成不同字元；只移除標點後仍須是唯一名稱才允許對應。
+const looseName = (s) => squash(s).replace(/[、，,;；:：()（）\[\]【】]/g, '');
 
 // 項次比對用的正規化。除了 squash,還要把**中文數字大寫的異體字**折成同一個字:
 // 同一個工程的兩份文件會各寫各的(實測宜謙:發包後經費總表寫「参」U+53C2、
@@ -160,6 +163,7 @@ const NO_VARIANTS = {
   参: '參', 貮: '貳', 弍: '貳', 弐: '貳', 叁: '參', 佰: '百', 仟: '千', 萬: '万',
 };
 const normNo = (s) => squash(s).replace(/[二三四五六参貮弍弐叁佰仟萬]/g, (c) => NO_VARIANTS[c]);
+const tailNo = (s) => normNo(s).split('.').pop();
 
 // 費用項目也要認名字,不能只看「項次不是阿拉伯數字」。
 // 有一整類格式**沒有項次欄**,讀取器只能用出現序補(德信 14~18、以勒 5~9),
@@ -301,6 +305,15 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 日誌自己填的契約數量/單價只是待驗資料,不能拿來當基準。
   // 鍵一律走 normNo:兩份文件常把同一個中文數字寫成異體字(参/參),逐字相等對不上。
   const contractByNo = new Map(contract.map((c) => [normNo(c.項次), c]));
+  // 部分日誌省略契約項次的大類前綴(契約「壹.1」、日誌「1」)。前綴最後一段
+  // 只有在整份契約中唯一時才可當別名；若「一.1／二.1」同時存在，猜測會把
+  // 月底完整清單誤算成已齊，必須維持原本的明確比對。
+  const contractByTailNo = new Map();
+  for (const c of contract) {
+    const key = tailNo(c.項次);
+    contractByTailNo.set(key, contractByTailNo.has(key) ? null : c);
+  }
+  const contractOfNo = (no) => contractByNo.get(normNo(no)) || contractByTailNo.get(tailNo(no));
   // 項次對不上時的後備索引:項目名稱 → 契約項目。**只收名稱唯一的**——
   // 同名兩筆以上就無從判斷對到哪一筆,寧可維持 E1 硬錯也不猜,猜錯會把
   // 單位/數量/單價比到別的項目上,錯得比報 E1 更隱蔽。
@@ -310,10 +323,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 只比項次的話,同一批項目每天都被判成「契約表中不存在」——105 天 × 5 項
   // = 525 個假硬錯,而硬錯整份擋下,承辦人被永久卡住且看不出真正原因。
   const contractByName = new Map();
+  const contractByLooseName = new Map();
   for (const c of contract) {
     const key = squash(c.項目);
     if (!key) continue;
     contractByName.set(key, contractByName.has(key) ? null : c); // 撞名則標記為不可用
+    const loose = looseName(c.項目);
+    if (loose) contractByLooseName.set(loose, contractByLooseName.has(loose) ? null : c);
   }
   const seenItemNos = new Set();
   // 這一天實際涵蓋到的契約項次(已套用 normNo 與名稱對應的結果)。
@@ -390,14 +406,15 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       }
 
       // E 類:與 SP2 建好的契約詳細價目表逐項核對
-      let c = 項次 == null ? null : contractByNo.get(normNo(項次));
+      let c = 項次 == null ? null : contractOfNo(項次);
       // 項次查無 → 退而以項目名稱對應(見 contractByName 的說明)。
       // 項次查無，或項次雖撞到但名稱指向另一個唯一項目時，皆以名稱對應。
       // 橋頭實檔的契約把「直接工程費」算作第二項、施工日誌則略過它；兩邊從費用
       // 項目開始便整體差一格。若先相信撞到的項次，會把品質管制費拿去比職安費。
       let 依名稱對應 = false;
       if (項次 != null && contract.length && !isBlank(r.工程項目)) {
-        const byName = contractByName.get(squash(r.工程項目));
+        const byName = contractByName.get(squash(r.工程項目))
+          || contractByLooseName.get(looseName(r.工程項目));
         if (byName && (!c || squash(r.工程項目) !== squash(c.項目))) {
           c = byName;
           依名稱對應 = true;
@@ -504,18 +521,31 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       }
     }
 
-    // B4 header 的本日累計金額 vs 各項推導累計金額的總和。
-    // header 值是廠商自己填的日層級權威值,與逐項加總對不上就是兩邊兜不起來。
+    // B4 header 的本日累計金額 vs 各項「累計數量 × 單價」的總和。
+    //
+    // 不能用 cumAmount(本次匯入的本日金額累加)做這個比對:使用者可以只匯入
+    // 某一段日期,但表尾的累計金額包含更早已施工的天數。這時本次本日金額合計
+    // 會小於真正的各項累計金額,把正確資料誤判為 B4 錯誤。累計數量是每一天
+    // 明細列本身提供的完整累計,乘上單價才是同一時間點、可直接與表尾相比的值。
     if (!skippedCodes.has('B4') && h.本日累計金額 != null) {
-      const 總和 = [...cumAmount.values()].reduce((s, v) => s + v, 0);
+      const 累計金額列 = (d.dailyRows || []).filter((r) => !isCategoryRow(r))
+        .map((r) => {
+          const 累計量 = num(r.累計完成數量);
+          const 單價 = num(r.契約單價);
+          return 累計量 != null && 單價 != null ? 累計量 * 單價 : null;
+        });
+      // 有任何一個明細缺少推導所需數字時不能只拿部分列相加,否則會把「讀不到」
+      // 誤報成「金額不符」。這種情況仍由 A7/E6/B3 等各自的規則指出原因。
+      const 可比對 = 累計金額列.length > 0 && 累計金額列.every((v) => v != null);
+      const 總和 = 可比對 ? 累計金額列.reduce((s, v) => s + v, 0) : null;
       // 容差隨累加的項目數放寬(同 B3 隨筆數放寬的理由)。header 這個值是廠商把
       // M 個「各自四捨五入成整數」的累計金額相加,與真值的距離上界就是 0.5 × M。
       // 固定 0.5 元的話,賜利發實測 33 項 21 天裡有 19 天被判硬錯(最大差 4 元)——
       // 整份日誌永遠歸不了檔,而承辦人怎麼查都查不出哪裡錯,因為根本沒錯。
       // 放寬到 0.5 × M(33 項 = 16.5 元)不會藏住真問題:漏一個項目的金額是
       // 幾千到幾十萬,遠在這個上界之外。
-      const 容差 = Math.max(0.5, 0.5 * cumAmount.size);
-      if (Math.abs(Number(h.本日累計金額) - 總和) >= 容差) {
+      const 容差 = Math.max(0.5, 0.5 * 累計金額列.length);
+      if (總和 != null && Math.abs(Number(h.本日累計金額) - 總和) >= 容差) {
         hard('B4', 日期, null,
           `本日累計金額 ${顯示數(h.本日累計金額)} 與各項累計金額總和 ${顯示數(總和)} 不符`);
       }
