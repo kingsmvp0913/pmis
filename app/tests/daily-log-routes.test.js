@@ -229,6 +229,14 @@ test('讀取器讀不動時回 400 並轉述讀取器的原因與檔名', async 
   expect(res.body.error).not.toMatch(/稍後重試/);
 });
 
+test('讀取器回傳 0 天時回 400，不讓使用者確認後才寫入失敗', async () => {
+  const { app, token, id } = await makeApp();
+  feed([]);
+  const res = await post(app, token, id, 'parse').expect(400);
+  expect(res.body.error).toMatch(/施工日誌\.pdf/);
+  expect(res.body.error).toMatch(/沒有解析出任何施工日誌日期/);
+});
+
 // 掃描件另有一條路(辨識掃描件),但錯誤訊息不講的話承辦人不會知道要去按它。
 test('讀不到文字層時指路到「辨識掃描件」', async () => {
   const { app, token, id } = await makeApp();

@@ -81,7 +81,11 @@ async function parseFiles(files, parser) {
   const lists = [];
   for (const f of files) {
     try {
-      lists.push(await withTempFile(f, (p) => parser.parseAll(p)));
+      const days = await withTempFile(f, (p) => parser.parseAll(p));
+      if (!Array.isArray(days) || !days.length) {
+        throw new Error('讀取器沒有解析出任何施工日誌日期');
+      }
+      lists.push(days);
     } catch (err) {
       throw 讀取失敗(realName(f), err);
     }

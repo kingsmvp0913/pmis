@@ -184,6 +184,14 @@ function parseFirstSheet(rows) {
   };
 }
 
+/** PDF 匯出時「第 二 聯」可能在字間插入空白，聯別判定不可要求字元緊連。 */
+function pageKind(rows) {
+  const all = rows.flatMap((r) => r.items.map((i) => String(i.s || ''))).join('');
+  if (/第?\s*二\s*聯/.test(all)) return 'second';
+  if (/第?\s*一\s*聯/.test(all)) return 'first';
+  return null;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
   if (!ft) throw new Error('缺少 ctx.filetypes(檔型工具需由 registry 注入)');
@@ -193,13 +201,15 @@ async function parseAll(filePath, ctx) {
   const seconds = [];
   for (const p of pages) {
     const rows = groupRows(p.items);
-    const kind = rows.some((r) => r.items.some((i) => /第二聯/.test(i.s))) ? 'second'
-      : (rows.some((r) => r.items.some((i) => /第一聯/.test(i.s))) ? 'first' : null);
+    const kind = pageKind(rows);
     if (kind === 'first') firsts.push(rows);
     else if (kind === 'second') seconds.push(rows);
   }
 
-  const n = Math.min(firsts.length, seconds.length);
+  if (!firsts.length || !seconds.length || firsts.length !== seconds.length) {
+    throw new Error(`施工日誌第一聯/第二聯數量不一致(第一聯 ${firsts.length} 頁、第二聯 ${seconds.length} 頁)`);
+  }
+  const n = firsts.length;
   const out = [];
   for (let k = 0; k < n; k++) {
     const dailyRows = collectRows(seconds[k]);
@@ -262,5 +272,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { groupRows, parseItemRow, parseFirstSheet, rocToISO },
+  _internal: { groupRows, parseItemRow, parseFirstSheet, pageKind, rocToISO },
 };

@@ -13,6 +13,11 @@ test('selfTest 以內建座標樣本通過,不需注入', () => {
   expect(mod.selfTest()).toBe(true);
 });
 
+test('第二聯字間有空白仍可辨識聯別', () => {
+  const rows = [{ items: [{ s: '第 二 聯' }] }];
+  expect(mod._internal.pageKind(rows)).toBe('second');
+});
+
 describe('chenhongjun 明細列解析(純函式)', () => {
   const { parseItemRow } = mod._internal;
   const row = (items) => ({ y: 100, items: items.map(([x, s]) => ({ x, y: 100, s })) });

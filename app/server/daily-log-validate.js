@@ -392,10 +392,16 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // E 類:與 SP2 建好的契約詳細價目表逐項核對
       let c = 項次 == null ? null : contractByNo.get(normNo(項次));
       // 項次查無 → 退而以項目名稱對應(見 contractByName 的說明)。
+      // 項次查無，或項次雖撞到但名稱指向另一個唯一項目時，皆以名稱對應。
+      // 橋頭實檔的契約把「直接工程費」算作第二項、施工日誌則略過它；兩邊從費用
+      // 項目開始便整體差一格。若先相信撞到的項次，會把品質管制費拿去比職安費。
       let 依名稱對應 = false;
-      if (!c && 項次 != null && contract.length && !isBlank(r.工程項目)) {
+      if (項次 != null && contract.length && !isBlank(r.工程項目)) {
         const byName = contractByName.get(squash(r.工程項目));
-        if (byName) { c = byName; 依名稱對應 = true; }
+        if (byName && (!c || squash(r.工程項目) !== squash(c.項目))) {
+          c = byName;
+          依名稱對應 = true;
+        }
       }
       // 這一列到底涵蓋到哪個契約項次:對得上契約就記契約的編號,對不上就記自己的。
       // D5 靠這個集合判斷月末清單完不完整。
