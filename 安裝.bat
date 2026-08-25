@@ -1,4 +1,9 @@
 @echo off
+if /i not "%~1"=="__pmis_install" (
+  start "PMIS 安裝" cmd.exe /k call "%~f0" __pmis_install
+  exit /b
+)
+shift
 cd /d "%~dp0"
 echo ============================================
 echo    PMIS 安裝(第一次使用執行這個就好)
