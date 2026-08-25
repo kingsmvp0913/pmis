@@ -256,7 +256,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 每一筆的捨入本來就最多差半元,固定半元容差在第二天就爆掉。
   const amountTerms = new Map(Object.entries(prior).map(([k]) => [k, 1]));
   const prevUnit = new Map();
-  const dailySum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
+  // F4 的期初累計優先用已寫入報表的前期資料；單獨上傳某一個月的日誌時，資料庫
+  // 還沒有前期紀錄，則由該項第一筆「累計－本日」推回期初。不能把期末累計直接
+  // 與本次檔案的本日加總相比，否則 8 月檔會把 7 月以前已完成的量誤判為錯誤。
+  const f4Base = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
+  const f4BaseKnown = new Set(f4Base.keys());
+  const dailySum = new Map();
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
 
@@ -479,7 +484,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         else hard('F1', 日期, 項次, m);
       }
       if (累計量 != null) prevCum.set(項次, 累計量);
-      // F4 用的:各日本日完成的總和,最後與期末累計對照
+      // F4 用的:期初累計 + 各日本日完成的總和 = 期末累計。
+      // 若沒有資料庫的前期紀錄，第一筆同時有累計／本日數量的資料可以反推期初。
+      // 缺任一欄便不做 F4 部分加總比對，避免把「讀不到」誤報為「不相符」。
+      if (!f4BaseKnown.has(項次) && 累計量 != null && 本日量 != null) {
+        f4Base.set(項次, 累計量 - 本日量);
+        f4BaseKnown.add(項次);
+      }
       if (本日量 != null) dailySum.set(項次, (dailySum.get(項次) || 0) + 本日量);
       if (累計量 != null) lastCum.set(項次, 累計量);
 
@@ -618,12 +629,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     }
   }
 
-  // F4 期末累計 = 各日本日完成的總和。**期末指這批日誌的最後一天**,不是竣工日:
-  // 跨批次提交時等竣工才驗會太晚,而每一批自己都該兜得起來。
+  // F4 期末累計 = 期初累計 + 各日本日完成的總和。**期末指這批日誌的最後一天**,
+  // 不是竣工日；分批上傳時仍能核對本批增量，而不會把前期已完成的量算成錯。
   for (const [項次, 累計] of lastCum) {
     const 總和 = dailySum.get(項次);
-    if (總和 != null && !approx(累計, 總和)) {
-      const m = `期末累計 ${顯示數(累計)} 與各日本日完成的總和 ${顯示數(總和)} 不符`;
+    const 期初 = f4Base.get(項次);
+    if (總和 != null && f4BaseKnown.has(項次) && !approx(累計, 期初 + 總和)) {
+      const m = `期末累計 ${顯示數(累計)} 不等於期初累計 ${顯示數(期初)} 加各日本日完成總和 ${顯示數(總和)}`;
       if (!/^[0-9]+$/.test(項次)) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
       else hard('F4', null, 項次, m);
     }

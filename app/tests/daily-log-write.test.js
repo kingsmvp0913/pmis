@@ -167,6 +167,14 @@ test('舊報表的項目列公式升級為空白與除以零防呆', () => {
     type: 'setFormula', sheet: '監造報表', addr: 'B7',
     formula: '=IFERROR(INDEX(每日施工紀錄!$1:$1048576,MATCH("預定進度",每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!1:1,0)),"")',
   });
+  expect(ops).toContainEqual({
+    type: 'setFormula', sheet: '監造報表', addr: 'I12',
+    formula: '=IFERROR(INDEX(每日施工紀錄!$1:$1048576,MATCH($A12,每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!$1:$1,0)),"")',
+  });
+  expect(ops).toContainEqual({
+    type: 'setFormula', sheet: '監造報表', addr: 'A14',
+    formula: '=IFERROR(INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),6),"")',
+  });
 });
 
 test('完全相同時無差異', () => {

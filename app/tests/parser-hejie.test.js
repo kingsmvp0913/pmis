@@ -23,6 +23,15 @@ test('vendorKey 是決標公告上的得標廠商名', () => {
   expect(mod.meta.vendorKey).toBe('禾結土木包工業');
 });
 
+test('表尾金額依日期倒退時視為本日金額，不拿去做 B4 累計比對', () => {
+  const days = [
+    { header: { 填報日期: '2026-07-21', 本日累計金額: 73671.89 } },
+    { header: { 填報日期: '2026-07-22', 本日累計金額: 64757.02 } },
+  ];
+  expect(mod._internal.clearNonCumulativeHeaders(days)).toBe(true);
+  expect(days.map((d) => d.header.本日累計金額)).toEqual([null, null]);
+});
+
 describe('parseAll(元長 6/1-6/20)', () => {
   let days;
   beforeAll(async () => { days = await mod.parseAll(FIXTURE, ctx); }, 180000);

@@ -98,6 +98,20 @@ function legacyFormulaOperations(contract) {
   for (const [addr, formula] of Object.entries(guarded)) {
     ops.push({ type: 'setFormula', sheet: '監造報表', addr, formula: `=IFERROR(${formula},"")` });
   }
+
+  // 監造報表的工項列數會隨契約而變。舊版只補了固定位置的查表公式，沒有補這一段
+  // 動態區域，日期尚未寫入或舊報表列數不一致時便整排 #N/A。列號以契約項目數推導，
+  // 不綁定某一份報表：I10 起每項一列，最後一項後的監造內容欄位隔一列排放。
+  ops.push({ type: 'setFormula', sheet: '監造報表', addr: 'G6',
+    formula: '=IFERROR(SUM(INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),12),INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),13)),"")' });
+  for (let row = 10; row < 10 + count; row++) {
+    ops.push({ type: 'setFormula', sheet: '監造報表', addr: `I${row}`,
+      formula: `=IFERROR(INDEX(每日施工紀錄!$1:$1048576,MATCH($A${row},每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!$1:$1,0)),"")` });
+  }
+  for (let index = 6, row = count + 11; index <= 9; index++, row += 2) {
+    ops.push({ type: 'setFormula', sheet: '監造報表', addr: `A${row}`,
+      formula: `=IFERROR(INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),${index}),"")` });
+  }
   return ops;
 }
 

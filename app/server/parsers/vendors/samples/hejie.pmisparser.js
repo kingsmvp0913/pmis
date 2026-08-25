@@ -282,6 +282,27 @@ const pageKind = (items) => {
   return null;
 };
 
+/**
+ * 第二聯表尾的文字雖寫「累計(本日完成金額)」，但有些禾結版面實際填的是**本日**
+ * 合計。累計值依日期不可能倒退；一旦發現倒退，該欄便不是 schema 所需的日累計
+ * 金額，必須整批留 null，不能拿本日金額去觸發 B4 假錯。
+ */
+function clearNonCumulativeHeaders(days) {
+  const values = days
+    .map((d) => ({ date: d.header.填報日期, amount: d.header.本日累計金額 }))
+    .filter((x) => x.date != null && x.amount != null)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  let prev = null;
+  for (const { amount } of values) {
+    if (prev != null && Number(amount) < Number(prev) - 0.01) {
+      for (const d of days) d.header.本日累計金額 = null;
+      return true;
+    }
+    prev = amount;
+  }
+  return false;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
   if (!ft || typeof ft.extractItems !== 'function') throw new Error('缺少注入的 filetypes.extractItems');
@@ -330,8 +351,10 @@ async function parseAll(filePath, ctx) {
       extras: {},
     };
   });
-  return days.filter((d) => d.header.填報日期 != null
+  const filled = days.filter((d) => d.header.填報日期 != null
     || d.dailyRows.some((r) => r.本日完成數量));
+  clearNonCumulativeHeaders(filled);
+  return filled;
 }
 
 async function parse(filePath, ctx) {
@@ -432,7 +455,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '本日累計金額', '承包廠商', '開工日期',
@@ -443,5 +466,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parseCover, parseDetail, tokensOf, bands },
+  _internal: { parseCover, parseDetail, tokensOf, bands, clearNonCumulativeHeaders },
 };
