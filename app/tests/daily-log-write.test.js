@@ -1,5 +1,5 @@
 const {
-  colName, daysToOperations, weatherToOperations, diffDays,
+  colName, daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('../server/daily-log-write');
 
 const CONTRACT = [
@@ -146,10 +146,27 @@ test('同一天同項次數量變了算修改', () => {
   const d = diffDays(
     [{ 日期: '2026-04-08', 項次: '1', 本日完成數量: 5 }],
     [{ 日期: '2026-04-08', 項次: '1', 本日完成數量: 8 }],
-  );
+);
+
   expect(d.changed).toEqual([
     { 日期: '2026-04-08', 項次: '1', 舊: 5, 新: 8 },
   ]);
+});
+
+test('舊報表的項目列公式升級為空白與除以零防呆', () => {
+  const ops = legacyFormulaOperations(CONTRACT);
+  expect(ops).toContainEqual({
+    type: 'setFormula', sheet: '每日施工紀錄', addr: 'B2',
+    formula: '=IF(契約詳細價目表!B2="","",契約詳細價目表!B2)',
+  });
+  expect(ops).toContainEqual({
+    type: 'setFormula', sheet: '每日施工紀錄', addr: 'I4',
+    formula: '=IF(OR($F4="",$F4=0),"",ROUND($H4/$F4,5))',
+  });
+  expect(ops).toContainEqual({
+    type: 'setFormula', sheet: '監造報表', addr: 'B7',
+    formula: '=IFERROR(INDEX(每日施工紀錄!$1:$1048576,MATCH("預定進度",每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!1:1,0)),"")',
+  });
 });
 
 test('完全相同時無差異', () => {

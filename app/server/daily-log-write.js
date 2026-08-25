@@ -71,6 +71,36 @@ function colName(n) {
   return s;
 }
 
+/** 舊常駐報表仍有 NA() 與除以零公式；寫入日誌時同步升級既有項目列。 */
+function legacyFormulaOperations(contract) {
+  const count = (contract || []).length;
+  const ops = [];
+  for (let row = FIRST_ITEM_ROW; row < FIRST_ITEM_ROW + count; row++) {
+    for (const col of ['A', 'B', 'C', 'D', 'E', 'F']) {
+      ops.push({ type: 'setFormula', sheet: SHEET, addr: `${col}${row}`,
+        formula: `=IF(契約詳細價目表!${col}${row}=\"\",\"\",契約詳細價目表!${col}${row})` });
+    }
+    ops.push({ type: 'setFormula', sheet: SHEET, addr: `H${row}`,
+      formula: `=IF($E${row}=\"\",\"\",ROUND($G${row}*$E${row},0))` });
+    ops.push({ type: 'setFormula', sheet: SHEET, addr: `I${row}`,
+      formula: `=IF(OR($F${row}=\"\",$F${row}=0),\"\",ROUND($H${row}/$F${row},5))` });
+  }
+  const guarded = {
+    B3: '"上午 : "&INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),3)&"      下午:"&INDEX(監造內容!A:O,MATCH($H3,監造內容!B:B,0),4)',
+    B7: 'INDEX(每日施工紀錄!$1:$1048576,MATCH("預定進度",每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!1:1,0))',
+    C6: 'INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),14)',
+    F7: 'INDEX(每日施工紀錄!$1:$1048576,MATCH("實際進度",每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!$1:$1,0))',
+    G5: 'INDEX(監造內容!$1:$1048576,MATCH($H3,監造內容!B:B,0),16)',
+    I5: 'IF(INDEX(每日施工紀錄!$1:$1048576,MATCH("實際進度",每日施工紀錄!A:A,0),MATCH($H$3,每日施工紀錄!$1:$1,0))>=1,$H$3," ")',
+    I7: 'INDEX(監造內容!A:O,MATCH($H3,監造內容!B:B,0),15)',
+    O8: 'ROUND(F7-B7,5)',
+  };
+  for (const [addr, formula] of Object.entries(guarded)) {
+    ops.push({ type: 'setFormula', sheet: '監造報表', addr, formula: `=IFERROR(${formula},"")` });
+  }
+  return ops;
+}
+
 /**
  * 哪些項目會由系統推算、每天推算成多少。
  *
@@ -284,5 +314,5 @@ function weatherToOperations(days, 開工日) {
 
 module.exports = {
   colName, daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
-  SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
+  legacyFormulaOperations, SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };

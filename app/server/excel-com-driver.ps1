@@ -78,6 +78,10 @@ try {
         if ($null -eq $ws) { throw "Worksheets.Item returned null at operation #$i (sheet count=$($wb.Worksheets.Count))" }
         $i++
         switch ($op.type) {
+            'setFormula' {
+                $cell = $ws.Range($op.addr)
+                [void]$cell.GetType().InvokeMember('Formula', 'SetProperty', $null, $cell, @([string]$op.formula))
+            }
             'setCell' {
                 $cell = $ws.Range($op.addr)
                 if ($null -eq $op.value) { $cell.ClearContents() | Out-Null }

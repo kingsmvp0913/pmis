@@ -91,6 +91,13 @@ describe('setRowFill 參數驗證', () => {
   test('合法參數通過', () => {
     expect(() => buildJob('t.xlsm', 'o.xlsm', [ok])).not.toThrow();
   });
+
+  test('setFormula 只接受以 = 開頭的公式', () => {
+    expect(() => buildJob('t.xlsm', 'o.xlsm', [{ type: 'setFormula', sheet: 'x', addr: 'A1', formula: 'SUM(A1:A2)' }]))
+      .toThrow(/formula/);
+    expect(buildJob('t.xlsm', 'o.xlsm', [{ type: 'setFormula', sheet: 'x', addr: 'A1', formula: '=SUM(A1:A2)' }])
+      .operations).toHaveLength(1);
+  });
   test('fill 為 null 代表清除,合法', () => {
     expect(() => buildJob('t.xlsm', 'o.xlsm', [{ ...ok, fill: null }])).not.toThrow();
   });

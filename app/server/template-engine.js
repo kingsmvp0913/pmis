@@ -41,7 +41,7 @@ function buildJob(templatePath, outPath, operations) {
 
   const KNOWN = new Set([
     'setCell', 'setRange', 'copyRowDown', 'insertRowsBelow', 'deleteRows', 'autoFitColumns',
-    'setRowFill', 'setNumberFormat',
+    'setRowFill', 'setNumberFormat', 'setFormula',
   ]);
   const isPosInt = (n) => Number.isInteger(n) && n >= 1;
   for (const op of operations) {
@@ -51,6 +51,11 @@ function buildJob(templatePath, outPath, operations) {
     if (!op.sheet) throw new Error(`${op.type} 缺 sheet`);
     if (op.type === 'setCell') {
       if (!op.addr) throw new Error('setCell 缺 addr');
+    } else if (op.type === 'setFormula') {
+      if (!op.addr) throw new Error('setFormula 缺 addr');
+      if (typeof op.formula !== 'string' || !op.formula.startsWith('=')) {
+        throw new Error('setFormula 的 formula 須為以 = 開頭的公式字串');
+      }
     } else if (op.type === 'setRange') {
       if (!op.startAddr) throw new Error('setRange 缺 startAddr');
       if (!Array.isArray(op.values) || op.values.length === 0 || !op.values.every(Array.isArray)) {

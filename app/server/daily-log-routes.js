@@ -39,7 +39,7 @@ const ocr = require('./ocr');
 const { validateDailyLog } = require('./daily-log-validate');
 const { mergeDays } = require('./daily-log-merge');
 const {
-  daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
+  daysToOperations, weatherToOperations, diffDays, feeItemsPlan, legacyFormulaOperations,
 } = require('./daily-log-write');
 const { scanDays, scanCoverage } = require('./daily-log-scan');
 const { resizeOperations } = require('./contract-items');
@@ -268,6 +268,7 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
       // 自己的費用公式列,會在每日施工紀錄印出一整排 #N/A 並把合計與進度算爆。
       // 承辦人日常只上傳日誌,不會重跑 SP2——不在這裡修就永遠修不好。
       ...resizeOperations(ctx.contract, itemRowCounts(dest)),
+      ...legacyFormulaOperations(ctx.contract),
       ...daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期),
       ...weatherToOperations(days, ctx.開工日),
     ]));
