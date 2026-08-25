@@ -1,0 +1,3 @@
+# PMIS 的互動式 Codex 設定。平台執行期 Claude pipeline 保留在 .claude/。
+approval_policy = "never"
+developer_instructions = "請一律以繁體中文（臺灣）回覆，除非使用者明確要求其他語言。開始修改前閱讀根目錄 AGENTS.md；不得自行修改 PMIS 的 .claude pipeline 設定。"
