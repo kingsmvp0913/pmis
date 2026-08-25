@@ -34,7 +34,7 @@ if not defined GIT (
 call :refreshpath
 call :resolvegit
 
-if not defined GIT echo    (Git 需重新開啟視窗才生效,不影響安裝;下次啟動就會自動更新)
+if not defined GIT goto :gitfail
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -48,23 +48,26 @@ if errorlevel 1 (
 
 echo [4/6] 確認可以自動更新 ...
 if not defined GIT goto :gitfail
-if exist ".git" goto :gitok
+if exist ".git\\" goto :gitok
 "%GIT%" remote get-url origin >nul 2>nul || goto :gitbootstrap
 "%GIT%" rev-parse --verify HEAD >nul 2>nul || goto :gitbootstrap
 :gitbootstrap
-echo       這份是直接下載的,缺少自動更新需要的資料,正在補上 ...
-if not exist ".git" "%GIT%" init || goto :gitfail
+echo       這份是直接下載的，補上自動更新需要的資料，請稍候 ...
+if not exist ".git\\" "%GIT%" init || goto :gitfail
 "%GIT%" remote get-url origin >nul 2>nul || "%GIT%" remote add origin https://github.com/kingsmvp0913/pmis.git
 "%GIT%" fetch origin main || goto :gitfail
 "%GIT%" checkout -f -B main origin/main || goto :gitfail
 "%GIT%" rev-parse --verify HEAD >nul 2>nul || goto :gitfail
-echo       補好了,以後雙擊「啟動.bat」就會自動更新到最新版
+echo       補好了，以後雙擊「啟動.bat」就會自動更新到最新版本
 goto :gitdone
 :gitfail
-echo       沒辦法補上,可能是沒有網路,或 Git 剛裝好還需要重開視窗。
-echo       系統仍然可以正常使用,只是不會自動更新;
-echo       有網路的時候再執行一次本檔就好。
-goto :gitdone
+echo.
+echo [ERROR] Git 尚未可用，沒有建立自動更新功能。
+echo         安裝程式會停在這裡，不會把失敗誤當成完成。
+echo         請確認網路與 Git 安裝完成後，再重新雙擊「安裝.bat」。
+echo.
+pause
+exit /b 1
 :gitok
 "%GIT%" remote get-url origin >nul 2>nul || goto :gitbootstrap
 "%GIT%" rev-parse --verify HEAD >nul 2>nul || goto :gitbootstrap
