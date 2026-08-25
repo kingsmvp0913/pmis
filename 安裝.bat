@@ -1,9 +1,17 @@
 @echo off
-if /i not "%~1"=="__pmis_install" (
-  start "PMIS 安裝" cmd.exe /k call "%~f0" __pmis_install
-  exit /b
+if /i "%~1"=="__pmis_install" goto :install
+if defined PMIS_INSTALL_WINDOW (
+  echo [ERROR] Recursive installation window launch detected; aborting.
+  pause
+  exit /b 1
 )
-shift
+set "PMIS_INSTALL_WINDOW=1"
+start "PMIS 安裝" "%ComSpec%" /d /k ""%~f0" __pmis_install"
+set "PMIS_INSTALL_WINDOW="
+exit /b
+
+:install
+title PMIS 安裝
 cd /d "%~dp0"
 echo ============================================
 echo    PMIS 安裝(第一次使用執行這個就好)
@@ -15,7 +23,7 @@ if errorlevel 1 (
   echo [1/6] 安裝 Node.js ...
   winget install -e --id OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [1/6] Node.js 已安裝,略過
+  echo [1/6] Node.js 已安裝，無須安裝
 )
 
 set "PGOK="
@@ -25,12 +33,12 @@ if not defined PGOK (
   echo [2/6] 安裝 PostgreSQL 17 ...
   winget install -e --id PostgreSQL.PostgreSQL.17 --silent --accept-package-agreements --accept-source-agreements
 ) else (
-  echo [2/6] PostgreSQL 已安裝,略過
+  echo [2/6] PostgreSQL 已安裝，無須安裝
 )
 
 call :resolvegit
 if not defined GIT (
-  echo [3/6] 安裝 Git(啟動時自動更新讀取器要用) ...
+  echo [3/6] 安裝 Git（啟動時自動更新讀取器要用）...
   winget install -e --id Git.Git --silent --accept-package-agreements --accept-source-agreements
 ) else (
   echo [3/6] Git 已安裝,略過
