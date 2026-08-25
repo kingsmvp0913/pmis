@@ -106,8 +106,7 @@ const DailyLogs = (() => {
     const fileI = el('input', {
       class: 'form-control', type: 'file', multiple: true, accept: '.pdf,.xls,.xlsx,.xlsm,.docx',
     });
-    const parseBtn = el('button', { class: 'btn', type: 'button' }, '驗證施工日誌');
-    const scanBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '辨識掃描件');
+    const parseBtn = el('button', { class: 'btn', type: 'button' }, '處理施工日誌');
     const confirmBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'display:none' },
       '確認並寫入監造報表');
     // 常駐 .xlsm 是 SP1/SP2/SP3 一路寫進去的同一份,不是「這次上傳」的產物,
@@ -127,9 +126,9 @@ const DailyLogs = (() => {
     const diffBox = el('div', { class: 'table-wrap' });
     const scanBox = el('div', {});
     const hint = el('div', { class: 'hint' },
-      '上傳廠商提供的施工日誌,系統依 42 條規則檢查後才寫入監造報表。' +
+      '上傳廠商提供的施工日誌,系統會自動判斷文字層或掃描件,再依 42 條規則檢查後才寫入監造報表。' +
       '有硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。' +
-      '沒有文字層的掃描件按「辨識掃描件」,系統會用 OCR 預填讓你逐格核對。');
+      '掃描件會以 OCR 預填,仍須逐格核對才可寫入。');
 
     const showErr = (m) => { err.textContent = m; err.style.display = ''; };
 
@@ -373,33 +372,6 @@ const DailyLogs = (() => {
       ]));
     }
 
-    scanBtn.addEventListener('click', async () => {
-      err.style.display = 'none';
-      summary.style.display = 'none';
-      confirmBtn.style.display = 'none';
-      listBox.innerHTML = '';
-      diffBox.innerHTML = '';
-      skipBox.style.display = 'none';
-      clearScan();
-      if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
-      files = [...fileI.files];
-      scanBtn.disabled = true;
-      scanBtn.textContent = '辨識中(每頁約數秒)…';
-      try {
-        const d = await Api.upload(`projects/${projectId}/daily-logs/scan`, fd());
-        renderScan(d);
-        if (d.可預填) {
-          renderFindings(d.errors, d.warnings);
-          renderSkipped(d.skipped);
-        }
-      } catch (e) {
-        showErr(e.message);
-      } finally {
-        scanBtn.disabled = false;
-        scanBtn.textContent = '辨識掃描件';
-      }
-    });
-
     parseBtn.addEventListener('click', async () => {
       err.style.display = 'none';
       summary.style.display = 'none';
@@ -411,9 +383,26 @@ const DailyLogs = (() => {
       if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
       files = [...fileI.files];
       parseBtn.disabled = true;
-      parseBtn.textContent = '驗證中…';
+      parseBtn.textContent = '判斷檔案中…';
       try {
-        const d = await Api.upload(`projects/${projectId}/daily-logs/parse`, fd());
+        let d;
+        try {
+          d = await Api.upload(`projects/${projectId}/daily-logs/parse`, fd());
+        } catch (e) {
+          // 只有讀取器明確判定為無文字層時才改走 OCR;其他格式或資料錯誤不可掩蓋。
+          if (!/文字層|掃描件/.test(e.message || '')) throw e;
+          if (files.length !== 1) {
+            throw new Error('一次選了多份檔案,無法自動辨識掃描件。請改為一次選一份掃描件處理。');
+          }
+          parseBtn.textContent = '辨識掃描件中(每頁約數秒)…';
+          d = await Api.upload(`projects/${projectId}/daily-logs/scan`, fd());
+          renderScan(d);
+          if (d.可預填) {
+            renderFindings(d.errors, d.warnings);
+            renderSkipped(d.skipped);
+          }
+          return;
+        }
         const 範圍 = d.日期範圍 && d.日期範圍[0] ? `${d.日期範圍[0]} ~ ${d.日期範圍[1]}` : '';
         const 檔 = d.檔數 > 1 ? `${d.檔數} 個檔合併後` : '';
         // 同一天同一欄兩個檔給了不同的值 = 這兩份檔可能不是同一案。合併時保留
@@ -436,7 +425,7 @@ const DailyLogs = (() => {
         showErr(e.message);
       } finally {
         parseBtn.disabled = false;
-        parseBtn.textContent = '驗證施工日誌';
+        parseBtn.textContent = '處理施工日誌';
       }
     });
 
@@ -533,7 +522,7 @@ const DailyLogs = (() => {
       el('div', { class: 'card-title' }, '施工日誌'),
       hint,
       el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔案(可多選:兩聯分開的檔、逐月的檔一次全選)'), fileI]),
-      el('div', { class: 'form-actions' }, [parseBtn, scanBtn, confirmBtn, downloadBtn, uploadBtn]),
+      el('div', { class: 'form-actions' }, [parseBtn, confirmBtn, downloadBtn, uploadBtn]),
       取報表提示,
       reportFileI,
       uploadBox,
