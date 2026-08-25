@@ -70,10 +70,10 @@ const first = (s) => {
  * 完整性關卡完全看不到(見 scripts/check-parser.js 的名稱形狀健檢)。
  */
 // 把名稱欄的 items 依原始 y 收成片段(同一個 y 的多個 item 併成一段)。
-function nameSegments(items) {
+function nameSegments(items, x) {
   const byY = new Map();
   for (const i of items) {
-    if (i.x < X.項次 || i.x >= X.名稱) continue;
+    if (i.x < x.項次 || i.x >= x.名稱) continue;
     const s = text(i.s);
     if (!s) continue;
     byY.set(i.y, (byY.get(i.y) || '') + s);
@@ -84,6 +84,12 @@ function nameSegments(items) {
 function collectRows(rows) {
   const anchors = [];   // 項次列
   const frags = [];     // 待歸屬的名稱片段
+  // 公誠國小版型的左半表格整體右移約 25pt；依表頭位置選欄界，避免影響既有四湖格式。
+  const shifted = rows.some((r) => r.items.some((i) => (
+    (String(i.s || '').trim() === '項次' && i.x >= 90)
+    || (i.x >= 95 && i.x < 115 && ITEM_NO_RE.test(String(i.s || '').trim()))
+  )));
+  const x = shifted ? { 項次: 110, 名稱: 245, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 } : X;
 
   // 資料區從表頭列(項次/施工項目/單位…)之下開始。**頁首的校名、天氣、工程名稱、
   // 工期、進度等文字也落在名稱欄的 x 範圍內**,不設這條界線就會被當成名稱片段
@@ -99,22 +105,24 @@ function collectRows(rows) {
   // ⚠️ 標籤比對**只能看最上面那個項次列以上的列**:表尾註記寫著
   // 「…預定進度及實際進度應填變更設計後計算之進度。」也會命中,取全頁最低的一條
   // 會把上界壓到 y=161.9,整頁明細一列不剩(實測會掉掉每天的貳~陸)。
-  const 是項次 = (i) => i.x < X.項次 && ITEM_NO_RE.test(String(i.s || '').trim());
+  const 是項次 = (i) => i.x < x.項次 && ITEM_NO_RE.test(String(i.s || '').trim());
   const 項次Ys = rows.filter((r) => r.items.some(是項次)).map((r) => r.y);
   const 最上項次 = 項次Ys.length ? Math.max(...項次Ys) : -Infinity;
   const 頁首標籤 = /表報編號|本日天氣|工程名稱|核定工期|開工日期|預定進度|承攬廠商名稱/;
   let 資料區上界 = Infinity;
+  let 資料區下界 = -Infinity;
   for (const r of rows) {
-    if (r.y <= 最上項次) continue;
     const t = r.items.map((i) => i.s).join('');
+    if (/二、工地材料管理概況|材料名稱/.test(t)) 資料區下界 = Math.max(資料區下界, r.y);
+    if (r.y <= 最上項次) continue;
     const 是表頭 = /項次/.test(t) && /施工項目/.test(t);
     if (是表頭 || 頁首標籤.test(t)) 資料區上界 = Math.min(資料區上界, r.y);
   }
 
   for (const row of rows) {
-    if (row.y >= 資料區上界) continue;
-    const 項次item = row.items.find((i) => i.x < X.項次 && ITEM_NO_RE.test(String(i.s || '').trim()));
-    const segs = nameSegments(row.items);
+    if (row.y >= 資料區上界 || row.y <= 資料區下界) continue;
+    const 項次item = row.items.find((i) => i.x < x.項次 && ITEM_NO_RE.test(String(i.s || '').trim()));
+    const segs = nameSegments(row.items, x);
     if (!項次item) { frags.push(...segs); continue; }
 
     // 名稱 item 與項次 item 幾乎同高**不代表同一列**:這個版面把數值垂直置中於
@@ -125,12 +133,12 @@ function collectRows(rows) {
     anchors.push({
       y: row.y,
       項次: String(項次item.s).trim(),
-      單位: text(between(row, X.名稱, X.單位)),
+      單位: text(between(row, x.名稱, x.單位)),
       契約單價: null,        // 此格式不提供
-      契約數量: first(between(row, X.單位, X.契約數量)),
-      本日完成數量: first(between(row, X.契約數量, X.本日)),
+      契約數量: first(between(row, x.單位, x.契約數量)),
+      本日完成數量: first(between(row, x.契約數量, x.本日)),
       本日完成金額: null,    // 此格式不提供
-      累計完成數量: first(between(row, X.本日, X.累計)),
+      累計完成數量: first(between(row, x.本日, x.累計)),
       frags: [],
     });
   }
@@ -245,16 +253,23 @@ async function parseAll(filePath, ctx) {
   // 只有一半的項目,與契約表逐項比對時整份都判不一致。
   const byDate = new Map();
   const order = [];
+  let currentKey = null;
   for (const p of pages) {
     const rows = groupRows(p.items);
-    if (!isLogPage(rows)) continue;
-    const header = parseHeader(rows);
-    const key = header.填報日期 || `page-${p.page}`;
-    if (!byDate.has(key)) {
-      byDate.set(key, { header, dailyRows: [], extras: {} });
-      order.push(key);
+    const dailyRows = collectRows(rows);
+    if (isLogPage(rows)) {
+      const header = parseHeader(rows);
+      const key = header.填報日期 || `page-${p.page}`;
+      if (!byDate.has(key)) {
+        byDate.set(key, { header, dailyRows: [], extras: {} });
+        order.push(key);
+      }
+      byDate.get(key).dailyRows.push(...dailyRows);
+      currentKey = key;
+    } else if (currentKey && dailyRows.length) {
+      // 公誠國小的第二頁只續列工程費,沒有表報編號/填報日期；併到緊接的日誌頁。
+      byDate.get(currentKey).dailyRows.push(...dailyRows);
     }
-    byDate.get(key).dailyRows.push(...collectRows(rows));
   }
   return order.map((k) => byDate.get(k));
 }
@@ -302,7 +317,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',

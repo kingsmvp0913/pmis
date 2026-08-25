@@ -1,0 +1,41 @@
+{
+  "count": 3,
+  "days": [
+    {
+      "date": "2026-07-29",
+      "vendor": "銘佑營造有限公司",
+      "rows": 35,
+      "first": {
+        "no": "1",
+        "qty": 1,
+        "daily": 0.5,
+        "cumulative": 0.5
+      },
+      "last": "陸"
+    },
+    {
+      "date": "2026-07-30",
+      "vendor": "銘佑營造有限公司",
+      "rows": 35,
+      "first": {
+        "no": "1",
+        "qty": 1,
+        "daily": null,
+        "cumulative": 0.5
+      },
+      "last": "陸"
+    },
+    {
+      "date": "2026-07-31",
+      "vendor": "銘佑營造有限公司",
+      "rows": 35,
+      "first": {
+        "no": "1",
+        "qty": 1,
+        "daily": null,
+        "cumulative": 0.5
+      },
+      "last": "陸"
+    }
+  ]
+}
