@@ -122,6 +122,24 @@ test.each([
   expect(codes(r)).toContain(code);
 });
 
+test('同一項目跨多天都沒有契約數量時，標示來源未提供而非逐日 A7 硬錯', () => {
+  const days = [
+    day('2026-04-08', [row('1', { 契約數量: null })]),
+    day('2026-04-09', [row('1', { 契約數量: null })]),
+  ];
+  const r = run(days);
+  expect(codes(r)).not.toContain('A7');
+  expect(r.skipped).toContainEqual(expect.objectContaining({ code: 'A7', 項次: '1' }));
+});
+
+test('同一項目只有部分天數缺契約數量時，仍要判 A7 硬錯', () => {
+  const days = [
+    day('2026-04-08'),
+    day('2026-04-09', [row('1', { 契約數量: null })]),
+  ];
+  expect(codes(run(days))).toContain('A7');
+});
+
 // 「壹 直接工程費」是大類標題,單位/數量/單價本來就都是空的(金大實測第 1 列)。
 // 不排除的話,每一天都會生出 A5/A6/A7 三個假硬錯,承辦人幾天之後就學會忽略警告。
 test('大類列不套用明細必填', () => {
@@ -870,6 +888,15 @@ test('項次是出現序時,費用項目仍要靠名稱認出來', () => {
   ])]);
   expect(codes(r)).not.toContain('C1');
   expect(wcodes(r)).toContain('C1');
+});
+
+test('明確列名的環境清潔保護費採費用項目計價語意', () => {
+  const r = run([day('2026-04-08', [
+    row('13', { 工程項目: '營造廢棄物清運證明與環境清潔保護費', 契約數量: 1,
+      契約單價: 146758, 本日完成數量: 0.2, 本日完成金額: 29351.6, 累計完成數量: 1 }),
+  ])]);
+  expect(codes(r)).not.toContain('B3');
+  expect(wcodes(r)).toContain('B3');
 });
 
 test('名稱像施工項目的列不會被誤判成費用項目', () => {

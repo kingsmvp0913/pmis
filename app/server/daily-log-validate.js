@@ -115,6 +115,27 @@ const ROW_FIELD_RULES = [
   { field: '本日完成金額', codes: ['B3', 'B4', 'C2'], label: '本日完成金額' },
 ];
 
+/**
+ * 找出同一項目在多天資料中始終缺少契約數量的情況。
+ *
+ * 施工日誌的契約欄通常是固定版面；同一項連續多天都空白，代表來源格式沒有
+ * 提供該值，不能逐日重複當成 A7 硬錯。只缺部分天數仍是實際漏填，照原規則擋下。
+ */
+function absentContractQtyItems(days) {
+  const seen = new Map();
+  for (const d of days) {
+    for (const r of d.dailyRows || []) {
+      if (isCategoryRow(r) || isBlank(r.項次)) continue;
+      const key = String(r.項次);
+      const state = seen.get(key) || { count: 0, allBlank: true };
+      state.count++;
+      if (r.契約數量 != null) state.allBlank = false;
+      seen.set(key, state);
+    }
+  }
+  return new Set([...seen].filter(([, s]) => s.count >= 2 && s.allBlank).map(([key]) => key));
+}
+
 // 讀取器**從來沒有**提供過的欄位。三家的 dailyRows 都只有 8 欄,沒有「完成百分比」,
 // 故 B5 恆驗不了。不能靜默當作通過——沒驗到什麼一定要講。
 const NEVER_AVAILABLE = [
@@ -171,7 +192,7 @@ const tailNo = (s) => normNo(s).split('.').pop();
 // 以勒實測:廠商把費用項的累計填成 1.028(契約數量 1),生出 5 個假硬錯。
 // 名稱刻意只收工程會標準表單那幾個固定費用名目,不含「環境保護與清潔」這種
 // 可能是真施工項目的字眼。
-const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費)/;
+const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費|營造廢棄物清運證明與環境清潔保護費)/;
 
 const MS_PER_DAY = 86400000;
 const dayNum = (iso) => {
@@ -242,6 +263,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         skipped.push({ code, 原因: `此廠商的日誌格式不提供「${label}」欄位(整份皆空),已跳過此項檢查` });
       }
     }
+  }
+  const 無契約數量項次 = absentContractQtyItems(days);
+  for (const 項次 of 無契約數量項次) {
+    skipped.push({ code: 'A7', 項次,
+      原因: `項次「${項次}」在本批日誌每次出現時契約數量皆空白，來源格式未提供此值，已跳過 A7` });
   }
   skipped.push(...NEVER_AVAILABLE);
   const skippedCodes = new Set(skipped.map((s) => s.code));
@@ -394,7 +420,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       if (isBlank(r.項次)) hard('A4', 日期, null, '項次未填');
       if (isBlank(r.工程項目)) hard('A5', 日期, 項次, '工程項目名稱未填');
       if (isBlank(r.單位)) hard('A6', 日期, 項次, '單位未填');
-      if (r.契約數量 == null) hard('A7', 日期, 項次, '契約數量未填');
+      if (r.契約數量 == null && !無契約數量項次.has(項次)) {
+        hard('A7', 日期, 項次, '契約數量未填');
+      }
 
       if (項次 != null) seenItemNos.add(項次);
 

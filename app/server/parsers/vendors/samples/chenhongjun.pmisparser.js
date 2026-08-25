@@ -10,8 +10,9 @@
  *
  * ── 版面事實(實測第 2 頁)──
  * y 需以容差分組(同一列的 item 會落在 y=722/721,差 1~4)。分組後依 x:
- *   項次 <65 / 工程項目 65~200 / 單位 200~232 / 契約單價 232~305 /
- *   契約數量 305~340 / 本日完成數量·金額·累計完成數量 ≥340(三值黏在一起)
+ *   項次 <65 / 工程項目 65~200 / 單位、單價、契約數量 200~330 /
+ *   本日完成數量 330~380 / 本日完成金額 380~435 / 累計完成數量 ≥435。
+ * 新版把中間三欄整體左移；舊版則會把末三值黏在 x≈345，故仍須相容。
  * 末三欄無施工時是「-」,語意為無資料 → null,不可當 0。
  *
  * 第一聯提供 header(日期/天氣/進度/開工日),第二聯提供明細;兩者依頁序配對。
@@ -20,8 +21,9 @@
 const META_VENDOR_KEY = '陳宏鈞土木包工業';
 
 const Y_TOL = 6;
-const X = { 項次: 65, 名稱: 200, 單位: 232, 單價: 305, 契約數量: 340, 本日金額: 390, 累計: 450 };
+const X = { 項次: 65, 名稱: 200, 本日數量: 330, 本日金額: 380, 累計: 435 };
 const ITEM_NO_RE = /^(\d+|[壹貳參参肆伍陸柒捌玖拾])$/;
+const UNIT_RE = /^(M2|M3|M|式|組|才|片|支|個|面|座|間|處|扇|樘|KG|kg|只|台)(?=\s|$)/;
 // 金額與數量一律兩位以上小數或帶千分位,用這個形態切黏連字串
 const NUM_RE = /-?\d{1,3}(?:,\d{3})*(?:\.\d+)?/g;
 
@@ -33,6 +35,12 @@ const text = (v) => {
   const s = v == null ? '' : String(v).trim();
   return s === '' || DASH_RE.test(s) ? null : s;
 };
+
+function unitOf(v) {
+  const s = text(v);
+  const m = s && UNIT_RE.exec(s);
+  return m ? m[1] : null;
+}
 
 /** 「-」「－」是無資料標記,語意為 null 而非 0。 */
 function numOf(v) {
@@ -91,18 +99,15 @@ function parseItemRow(row) {
   const 項次 = text(between(row, 0, X.項次));
   if (項次 == null || !ITEM_NO_RE.test(項次)) return null;
 
-  const 單價文字 = between(row, X.單位, X.單價);
-  const 數量文字 = between(row, X.單價, X.契約數量);
-  // 單價欄的數字若太長會蓋掉契約數量欄(如 393,773.00),此時兩個值會一起落在
-  // 單價區間——切出來的第二個數字才是契約數量。
-  const 單價數字 = 單價文字.match(NUM_RE) || [];
-  const 數量數字 = 數量文字.match(NUM_RE) || [];
+  const 契約文字 = between(row, X.名稱, X.本日數量);
+  // 單價欄的長數字與契約數量皆由數字順序辨識(如 393,773.00、1.00)。
+  const 契約數字 = 契約文字.replace(UNIT_RE, '').match(NUM_RE) || [];
 
   // 末三欄(本日數量/本日金額/累計數量)的落點會因天而異:有施工那天三個值黏成
   // 一格(「1.00    9,500.00        1.000」落在 x≈345),沒施工那天則分散成
   // x≈397「-」與 x≈454「1.000」。只看接合後的數字序列會把「-」那格漏掉,
   // 於是金額被當成累計、累計變 null——數字看起來都在,對到的欄位卻錯了。
-  const 本日量文字 = between(row, X.契約數量, X.本日金額);
+  const 本日量文字 = between(row, X.本日數量, X.本日金額);
   const 本日金額文字 = between(row, X.本日金額, X.累計);
   const 累計文字 = between(row, X.累計, Infinity);
   const 黏連 = 本日量文字.match(NUM_RE) || [];
@@ -110,12 +115,13 @@ function parseItemRow(row) {
     ? 黏連                                   // 三值黏在第一格
     : [黏連[0], (本日金額文字.match(NUM_RE) || [])[0], (累計文字.match(NUM_RE) || [])[0]];
 
+  const 單位 = unitOf(契約文字);
   return {
     項次,
     工程項目: text(between(row, X.項次, X.名稱)),
-    單位: text(between(row, X.名稱, X.單位)),
-    契約單價: numOf(單價數字[0]),
-    契約數量: numOf(數量數字[0] != null ? 數量數字[0] : 單價數字[1]),
+    單位,
+    契約單價: 單位 ? numOf(契約數字[0]) : null,
+    契約數量: 單位 ? numOf(契約數字[1]) : null,
     本日完成數量: numOf(尾數字[0]),
     本日完成金額: numOf(尾數字[1]),
     累計完成數量: numOf(尾數字[2]),
@@ -261,7 +267,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '契約金額', '開工日期',

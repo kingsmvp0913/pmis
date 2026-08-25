@@ -90,6 +90,23 @@ async function main() {
   const absentFields = REQUIRED_ROW_FIELDS.filter(
     (f) => allRows.length && allRows.every((r) => r[f] == null || r[f] === '')
   );
+  // 與產線 A7 的判準一致：同一項跨多天每次都沒有契約數量，是來源格式未提供，
+  // 不是讀取器偶發漏讀。只排除該項的該欄，其他項目或部分天數缺值仍列為缺漏。
+  const absentQtyItems = new Set();
+  if (days.length >= 2) {
+    const states = new Map();
+    for (const r of allRows) {
+      if (r.項次 == null) continue;
+      const key = String(r.項次);
+      const state = states.get(key) || { count: 0, allBlank: true };
+      state.count++;
+      if (r.契約數量 != null && r.契約數量 !== '') state.allBlank = false;
+      states.set(key, state);
+    }
+    for (const [key, state] of states) {
+      if (state.count >= 2 && state.allBlank) absentQtyItems.add(key);
+    }
+  }
   const checkFields = REQUIRED_ROW_FIELDS.filter((f) => !absentFields.includes(f));
   for (const d of days) {
     const h = d.header || {};
@@ -99,7 +116,8 @@ async function main() {
     for (const r of d.dailyRows || []) {
       if (isCategoryRow(r)) continue;
       totalRows++;
-      const lack = checkFields.filter((f) => r[f] == null || r[f] === '');
+      const lack = checkFields.filter((f) => (r[f] == null || r[f] === '')
+        && !(f === '契約數量' && absentQtyItems.has(String(r.項次))));
       if (lack.length) {
         missing.push({ 日期: h.填報日期, 項次: r.項次, 工程項目: r.工程項目, 缺: lack });
       }
@@ -109,6 +127,9 @@ async function main() {
   console.log('── 關卡 b:解析完整性 ──');
   if (absentFields.length) {
     console.log(`  此格式不提供:${absentFields.join('、')}(整份皆空,已排除於缺漏統計外)`);
+  }
+  if (absentQtyItems.size) {
+    console.log(`  項目未提供契約數量:${[...absentQtyItems].join('、')}(跨多天皆空,已排除於缺漏統計外)`);
   }
   console.log(`明細列 ${totalRows} 列,缺必要欄位 ${missing.length} 列 ` +
     `(${totalRows ? (missing.length / totalRows * 100).toFixed(1) : 0}%)`);
@@ -158,11 +179,11 @@ async function main() {
     for (const d of days) {
       for (const r of d.dailyRows || []) {
         if (isCategoryRow(r) || r.項次 == null || seen.has(String(r.項次))) continue;
-        if (r.單位 == null || r.契約數量 == null) continue;
+        if (r.單位 == null || r.契約單價 == null) continue;
         seen.add(String(r.項次));
         contract.push({
           項次: String(r.項次), 項目: r.工程項目, 單位: r.單位,
-          數量: Number(r.契約數量), 單價: Number(r.契約單價),
+          數量: r.契約數量 == null ? null : Number(r.契約數量), 單價: Number(r.契約單價),
         });
       }
     }
