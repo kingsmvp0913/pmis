@@ -6,7 +6,10 @@
 # MUST be run under Windows PowerShell 5.1 (pwsh 7 COM traversal is unstable).
 # All Chinese text (sheet names, cell values) arrives via the UTF-8 job JSON,
 # so this script itself stays ASCII and needs no BOM.
-param([Parameter(Mandatory = $true)][string]$JobPath)
+param(
+    [Parameter(Mandatory = $true)][string]$JobPath,
+    [string]$PidPath
+)
 $ErrorActionPreference = 'Stop'
 
 # Without this, Chinese in a COM error message comes back to Node as mojibake
@@ -42,6 +45,10 @@ try {
     $xl.EnableEvents = $false
     $xl.AutomationSecurity = 1   # msoAutomationSecurityLow
     [void][Native.Win32Api]::GetWindowThreadProcessId($xl.Hwnd, [ref]$excelPid)
+    if ($PidPath -and $excelPid -gt 0) {
+        [System.IO.File]::WriteAllText($PidPath, [string]$excelPid,
+            (New-Object System.Text.UTF8Encoding $false))
+    }
 
     # Back-to-back runs hit a COM race: Open succeeds and hands back a workbook
     # object, but its .Worksheets is still null (measured — the failure is
@@ -222,4 +229,5 @@ finally {
             if ($p) { if (-not $p.WaitForExit(8000)) { $p.Kill() } }
         } catch {}
     }
+    if ($PidPath) { try { Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue } catch {} }
 }

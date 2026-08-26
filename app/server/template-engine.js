@@ -10,7 +10,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 const DRIVER = path.join(__dirname, 'excel-com-driver.ps1');
 
@@ -112,17 +112,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // 單次 spawn PS 5.1 driver 執行 job。逾時/失敗一律 reject,由上層決定是否重試。
 function spawnDriver(job) {
   const jobPath = path.join(os.tmpdir(), `sp0-job-${process.pid}-${Date.now()}.json`);
+  const pidPath = path.join(os.tmpdir(), `sp0-excel-${process.pid}-${Date.now()}.pid`);
   fs.writeFileSync(jobPath, JSON.stringify(job), 'utf8');
+
+  // execFile 的 timeout 會終止 PowerShell，但不保證 PowerShell 的 finally 有機會
+  // 關掉它剛啟動的 COM server。driver 建立 Excel 後立刻寫 PID；只有錯誤路徑才
+  // 由這裡依該 PID 清理，絕不掃描或終止使用者自己的 EXCEL.EXE。
+  function cleanupOrphanExcel() {
+    let pid = 0;
+    try { pid = Number(fs.readFileSync(pidPath, 'utf8').trim()); } catch { /* driver 尚未啟動 Excel */ }
+    try { fs.unlinkSync(pidPath); } catch { /* ignore */ }
+    if (!Number.isInteger(pid) || pid <= 0) return;
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } catch { /* 程序已由 driver 正常結束 */ }
+  }
 
   return new Promise((resolve, reject) => {
     execFile(
       powershell51(),
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', DRIVER, '-JobPath', jobPath],
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', DRIVER, '-JobPath', jobPath, '-PidPath', pidPath],
       // 不可用 windowsHide/CREATE_NO_WINDOW:Excel COM 需要 window station,
       // 隱藏視窗會讓 $wb.Worksheets 回 null。
       { timeout: ATTEMPT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         try { fs.unlinkSync(jobPath); } catch { /* ignore */ }
+        if (err) cleanupOrphanExcel();
+        else { try { fs.unlinkSync(pidPath); } catch { /* driver 已清理 */ } }
 
         const lines = String(stdout).trim().split(/\r?\n/).filter(Boolean);
         if (err && lines.length === 0) {
