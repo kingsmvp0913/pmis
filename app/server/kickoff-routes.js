@@ -25,6 +25,10 @@ const { compareKickoff, hardErrors, validateValues } = require('./kickoff-compar
 const { saveAttachment } = require('./project-attachments-routes');
 const { isWordFile, convertToPdf } = require('./doc-convert');
 const { safeResolve } = require('./history-routes');
+const { basicsToOperations } = require('./project-basics');
+const { workbookPath } = require('./report-workbook');
+const { fillTemplate } = require('./template-engine');
+const { applyProtection } = require('./report-protect');
 
 // OCR 需要實體檔(WinRT 的 GetFileFromPathAsync 吃路徑),故落暫存檔再刪。
 // 與決標公告的記憶體路徑不同,這是 OCR 的硬需求。
@@ -156,6 +160,56 @@ const MASTER_FIELDS = [
 ];
 
 const isEmptyMasterValue = (v) => v == null || v === '';
+const toISODate = (v) => {
+  if (v == null) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  const d = new Date(v);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/**
+ * 價目表先寫、開工報告表後歸檔時，將已回寫主檔的基本資料同步進既有監造報表。
+ * 報表尚未建立代表仍走舊流程，不能為了同步而提前建立一份空白報表。
+ */
+async function syncExistingWorkbookBasics(projectId) {
+  const dest = workbookPath(projectId);
+  if (!fs.existsSync(dest)) return false;
+  const { rows } = await query(
+    `SELECT p.name, p.project_no, p.award_amount, p.start_date, p.duration_days,
+            p.supervisor_firm, p.designer_firm,
+            s.name AS school_name, v.name AS vendor_name
+       FROM projects p
+       LEFT JOIN schools s ON s.id = p.school_id
+       LEFT JOIN vendors v ON v.id = p.vendor_id
+      WHERE p.id = $1`,
+    [projectId]
+  );
+  const p = rows[0];
+  if (!p) return false;
+  const values = {};
+  const put = (key, value) => { if (value != null && value !== '') values[key] = value; };
+  put('工程名稱', p.name);
+  put('監造單位', p.supervisor_firm);
+  put('主辦機關', p.school_name);
+  put('設計單位', p.designer_firm);
+  put('承包廠商', p.vendor_name);
+  put('契約金額', p.award_amount == null ? null : Number(p.award_amount));
+  put('契約工期', p.duration_days);
+  put('開工日期', p.start_date == null ? null : toISODate(p.start_date));
+  put('工程編號', p.project_no);
+  const ops = basicsToOperations(values);
+  if (!ops.length) return false;
+  const tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
+  try {
+    await fillTemplate(dest, tmp, applyProtection(dest, ops));
+    // fillTemplate 與 renameSync 之間不得插入 await，避免另一個 COM 工作插隊。
+    fs.renameSync(tmp, dest);
+    return true;
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+  }
+}
 
 /**
  * 開工報告表歸檔成功後,把可對應的欄位補進工程主檔——只補「目前是空的」欄位。
@@ -319,12 +373,22 @@ function registerRoutes(app) {
         // 記 log 並在回應裡誠實反映即可,承辦人可回頭至「工程基本資料」手動補。
         let updated = [];
         let masterUpdateWarning = null;
+        let workbookUpdateWarning = null;
         try {
           updated = await fillProjectMasterFromKickoff(req.params.id, values, project);
         } catch (err) {
           console.error('[kickoff] 補寫工程主檔失敗:', err);
           masterUpdateWarning = '開工報告表已歸檔,但補寫工程主檔(契約編號/金額/開工竣工日/契約工期)失敗,' +
             '請至「工程基本資料」頁籤手動確認並補填。';
+        }
+        if (!masterUpdateWarning) {
+          try {
+            await syncExistingWorkbookBasics(req.params.id);
+          } catch (err) {
+            console.error('[kickoff] 同步監造報表基本資料失敗:', err);
+            workbookUpdateWarning = '開工報告表已歸檔且工程主檔已更新，但同步監造報表基本資料失敗，' +
+              '請至「工程基本資料」頁籤手動寫入。';
+          }
         }
 
         // 提示級不擋歸檔,但一定要回:承辦人看不到就等於這條規則沒做。
@@ -336,6 +400,7 @@ function registerRoutes(app) {
           // 這次實際補上的 projects 欄位名(只補空缺,已有值的不列入)。
           updated,
           ...(masterUpdateWarning ? { masterUpdateWarning } : {}),
+          ...(workbookUpdateWarning ? { workbookUpdateWarning } : {}),
         });
       } catch (err) {
         console.error('[kickoff] 開工報告表歸檔失敗:', err);
@@ -344,4 +409,4 @@ function registerRoutes(app) {
     });
 }
 
-module.exports = { registerRoutes, fillProjectMasterFromKickoff };
+module.exports = { registerRoutes, fillProjectMasterFromKickoff, syncExistingWorkbookBasics };

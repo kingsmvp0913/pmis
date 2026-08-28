@@ -4,12 +4,19 @@ const express = require('express');
 const request = require('supertest');
 const { newDb } = require('pg-mem');
 const db = require('../server/db');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 // OCR 不在測試中真的跑(spec §8),以固定輸出當 fixture
 jest.mock('../server/kickoff-report', () => ({ readKickoffReport: jest.fn() }));
 jest.mock('../server/award-notice', () => ({ readAwardNotice: jest.fn() }));
+jest.mock('../server/template-engine', () => ({ fillTemplate: jest.fn() }));
+jest.mock('../server/report-workbook', () => ({ workbookPath: jest.fn() }));
 const { readKickoffReport } = require('../server/kickoff-report');
 const { readAwardNotice } = require('../server/award-notice');
+const { fillTemplate } = require('../server/template-engine');
+const { workbookPath } = require('../server/report-workbook');
 
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
 const { registerRoutes: registerKickoffRoutes, fillProjectMasterFromKickoff } = require('../server/kickoff-routes');
@@ -46,7 +53,13 @@ async function makeApp({ withAward = true } = {}) {
   return { app, token: setup.body.token, id };
 }
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  workbookPath.mockReturnValue(path.join(os.tmpdir(), `pmis-kickoff-missing-${process.pid}.xlsm`));
+  fillTemplate.mockImplementation(async (dest, tmp) => {
+    fs.copyFileSync(dest, tmp);
+  });
+});
 
 test('未帶 token 回 401', async () => {
   const { app, id } = await makeApp();
@@ -338,6 +351,55 @@ test('values 非合法 JSON 回 400', async () => {
 // 2026-08-05 補強:歸檔成功卻不寫工程主檔,承辦人核對完九欄仍卡在下一關
 // (施工日誌要求 start_date 非空)。規則與決標公告的 seed 同一條鐵則:只補空缺。
 describe('confirm 歸檔後補寫工程主檔(只補空缺)', () => {
+  test('價目表已建立的報表會同步開工日與工期', async () => {
+    readAwardNotice.mockResolvedValue(AWARD);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-kickoff-'));
+    const dest = path.join(dir, '監造報表.xlsm');
+    fs.writeFileSync(dest, '已有價目表的報表');
+    workbookPath.mockReturnValue(dest);
+    try {
+      const { app, token, id } = await makeApp();
+      await db.query(
+        `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+         VALUES ($1, 1, '1', '既有施工項目', '式', 1, 100)`, [id]);
+      await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .field('values', JSON.stringify(KICKOFF))
+        .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+      expect(fillTemplate).toHaveBeenCalledTimes(1);
+      const ops = fillTemplate.mock.calls[0][2];
+      expect(ops).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sheet: '工程基本資料', addr: 'B7', value: 150 }),
+        expect.objectContaining({ sheet: '工程基本資料', addr: 'B8' }),
+      ]));
+      expect(ops.some((o) => o.addr === 'B2' || o.addr === 'B3' || o.addr === 'B4' || o.addr === 'B5')).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('報表同步失敗時仍歸檔並明確回警告', async () => {
+    readAwardNotice.mockResolvedValue(AWARD);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-kickoff-'));
+    const dest = path.join(dir, '監造報表.xlsm');
+    fs.writeFileSync(dest, '已有價目表的報表');
+    workbookPath.mockReturnValue(dest);
+    fillTemplate.mockRejectedValueOnce(new Error('Excel 驅動失敗'));
+    try {
+      const { app, token, id } = await makeApp();
+      const res = await request(app).post(`/api/projects/${id}/kickoff-report/confirm`)
+        .set('Authorization', `Bearer ${token}`)
+        .field('values', JSON.stringify(KICKOFF))
+        .attach('kickoff_report', Buffer.from('%PDF-1.4'), 'k.pdf').expect(200);
+      expect(res.body.workbookUpdateWarning).toMatch(/同步監造報表基本資料失敗/);
+      const { rows } = await db.query('SELECT start_date, duration_days FROM projects WHERE id = $1', [id]);
+      expect(rows[0].start_date).not.toBeNull();
+      expect(rows[0].duration_days).toBe(150);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('主檔諸欄皆空時,歸檔後都被補上且值正確', async () => {
     readAwardNotice.mockResolvedValue(AWARD);
     const { app, token, id } = await makeApp();

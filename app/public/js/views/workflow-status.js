@@ -20,9 +20,9 @@ const WorkflowStatus = (() => {
     const has = (kind) => (atts || []).some((a) => a.kind === kind);
     const steps = [
       { 名: '決標公告', 好: has('award_notice'), 缺: '建立工程時上傳' },
-      { 名: '工程基本資料', 好: !!(p.start_date && p.award_amount), 缺: '需開工日期與契約金額' },
-      { 名: '開工報告表', 好: has('kickoff_report'), 缺: '上傳並核對後歸檔' },
       { 名: '契約詳細價目表', 好: itemCount > 0, 缺: '需先有決標金額,再上傳發包經費總表' },
+      { 名: '開工報告表', 好: has('kickoff_report'), 缺: '上傳並核對後歸檔' },
+      { 名: '工程基本資料', 好: !!(p.start_date && p.award_amount), 缺: '需開工日期與契約金額' },
       { 名: '施工日誌', 好: logDays > 0, 缺: '需先建立契約詳細價目表與開工日期' },
     ];
 

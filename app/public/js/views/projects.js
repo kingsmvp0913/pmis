@@ -118,8 +118,8 @@
     // 承辦人未儲存的編輯也會被清掉。全建等於「現狀 + 分堆隱藏」,既有引用完全不動。
     const TABS = [
       { key: 'basics', label: '基本資料' },
-      { key: 'kickoff', label: '開工報告表' },
       { key: 'items', label: '契約價目表' },
+      { key: 'kickoff', label: '開工報告表' },
       { key: 'logs', label: '施工日誌' },
       { key: 'files', label: '附件' },
     ];
@@ -786,8 +786,8 @@
 
     function flowSteps(p) {
       return [
-        { key: 'kickoff', 名: '開工表', 好: !!p.has_kickoff, 缺: '需先建立工程(上傳決標公告)' },
         { key: 'items', 名: '價目表', 好: (p.contract_items || 0) > 0, 缺: '需先有決標金額,再上傳發包經費總表' },
+        { key: 'kickoff', 名: '開工表', 好: !!p.has_kickoff, 缺: '需先建立價目表後，上傳開工報告表' },
         // 日誌這一關的前置條件不只是「前面幾關都好」:後端 daily-log-routes.js
         // 會擋沒有 start_date 的工程(NO_START)。has_kickoff 只代表有上傳附件,
         // 不代表比對表裡的開工日已確認寫回 projects.start_date——兩者可能不同步,
