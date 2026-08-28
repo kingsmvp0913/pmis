@@ -34,8 +34,6 @@ test('開工日隔天寫在 K 欄', () => {
 });
 
 // 項次對應的列 = 契約詳細價目表的順序(每日施工紀錄靠 MATCH 項次拉同一個順序)
-// 刻意用兩個施工項目而不是費用項次:費用項目另有系統推算的規則(見本檔末),
-// 拿它來測排序會讓這條測試同時被兩件事影響。
 test('值依契約表的項次順序排列', () => {
   const ops = daysToOperations([day(開工日, [r('2', 7), r('1', 5)])], CONTRACT, 開工日);
   expect(ops[0].values).toEqual([[5], [7], [null]]);
@@ -76,60 +74,47 @@ test('填報日期早於開工日時丟錯', () => {
     .toThrow(/開工/);
 });
 
-// ── 費用項目由系統推算 ─────────────────────────────────────
-// 職安衛管理費、品管費、保險費、營業稅這幾項不是「做出來的東西」,是隨工程走的錢,
-// 工地日誌上不會有人寫「今天做了 0.5% 的保險費」。承辦人以前是自己在這幾列每天
-// 填一個固定數字,系統則照日誌抄(有的廠商日誌寫金額、有的寫比例,單位還不一致)。
-// 44 案對帳中 87% 的「兩邊都有但不同」就是出在這裡。改由系統統一依契約工期推算。
+// ── 費用項目照施工日誌寫入 ─────────────────────────────────
 
-test('費用項目每天填 契約數量÷工期,鋪滿整個工期', () => {
-  const ops = daysToOperations([day(開工日, [r('1', 5)])], CONTRACT, 開工日, 竣工日);
-  const fee = ops.find((o) => o.startAddr === 'J4'); // 第 3 項(貳)在第 4 列
-  expect(fee.values).toEqual([new Array(10).fill(0.1)]); // 數量 1 ÷ 工期 10 天
+test('費用項目照施工日誌的每日完成數量寫入', () => {
+  const ops = daysToOperations([day(開工日, [r('貳', 0.007)])], CONTRACT, 開工日, 竣工日);
+  expect(ops).toHaveLength(1);
+  expect(ops[0].values).toEqual([[null], [null], [0.007]]);
 });
 
-// 分母固定用**契約工期**而不是「目前收到幾天日誌」:後者會讓每收一批日誌,
-// 先前寫進去的數字全部作廢要重算重寫,而且承辦人看到的數字會一直變。
-test('分批提交時費用項目的值不變(分母是工期,不是已收到的天數)', () => {
+test('費用項目沒有日誌值時保持空白', () => {
   const 第一批 = daysToOperations([day(開工日, [r('1', 5)])], CONTRACT, 開工日, 竣工日);
   const 第二批 = daysToOperations(
     [day('2026-04-09', [r('1', 3)]), day('2026-04-10', [r('1', 4)])], CONTRACT, 開工日, 竣工日);
-  const feeOf = (ops) => ops.find((o) => o.startAddr === 'J4').values[0][0];
-  expect(feeOf(第一批)).toBe(feeOf(第二批));
+  expect(第一批[0].values[2]).toEqual([null]);
+  expect(第二批[0].values[2]).toEqual([null, null]);
 });
 
-// 費用列的 setRange 必須排在主範圍**之後**:主範圍是一整塊矩形,會把它涵蓋到的
-// 費用格寫成 null,順序反了等於白算。
-test('費用項目的寫入排在主範圍之後', () => {
+test('費用項目與其他項目共用同一批寫入範圍', () => {
   const ops = daysToOperations([day(開工日, [r('1', 5)])], CONTRACT, 開工日, 竣工日);
-  expect(ops[0].startAddr).toBe('J2');       // 主範圍(所有項目)
-  expect(ops[ops.length - 1].startAddr).toBe('J4'); // 費用列蓋回去
+  expect(ops).toHaveLength(1);
+  expect(ops[0].startAddr).toBe('J2');
 });
 
-// 日誌真的有寫費用項目時也以系統推算為準——那些值單位並不一致(實測有的廠商
-// 寫金額 56.53、有的寫比例 0.0028),照抄反而讓同一張報表混用兩種單位。
-test('日誌有寫費用項目時,仍以系統推算為準', () => {
+test('日誌有寫費用項目時不覆蓋來源數值', () => {
   const ops = daysToOperations([day(開工日, [r('貳', 999)])], CONTRACT, 開工日, 竣工日);
-  expect(ops[ops.length - 1].values[0][0]).toBe(0.1);
+  expect(ops[0].values[2][0]).toBe(999);
 });
 
-// 竣工日期是承辦人在工程基本資料填的,可能還沒填。沒有工期就算不出每天多少,
-// 這時維持原行為(照日誌),不要用猜的分母硬算。
-test('沒有竣工日期時不推算費用項目', () => {
-  const ops = daysToOperations([day(開工日, [r('1', 5)])], CONTRACT, 開工日, null);
-  expect(ops).toHaveLength(1);
+test('沒有竣工日期不影響費用項目的日誌值', () => {
+  const ops = daysToOperations([day(開工日, [r('貳', 0.007)])], CONTRACT, 開工日, null);
+  expect(ops[0].values[2][0]).toBe(0.007);
 });
 
-test('竣工日期早於開工日時不推算(資料有問題,不要硬算)', () => {
-  const ops = daysToOperations([day(開工日, [r('1', 5)])], CONTRACT, 開工日, '2026-04-01');
-  expect(ops).toHaveLength(1);
+test('竣工日期不影響費用項目的日誌值', () => {
+  const ops = daysToOperations([day(開工日, [r('貳', 0.007)])], CONTRACT, 開工日, '2026-04-01');
+  expect(ops[0].values[2][0]).toBe(0.007);
 });
 
-// 帶子工程前綴的費用項次(A.貳)也要認得——古坑那種一份總表含兩個子工程的案子
-test('帶前綴的費用項次(A.貳)也會被推算', () => {
+test('帶前綴的費用項次(A.貳)也照施工日誌寫入', () => {
   const contract = [{ 項次: 'A.壹.1', 項目: '施工', 數量: 5 }, { 項次: 'A.貳', 項目: '職安衛', 數量: 1 }];
-  const ops = daysToOperations([day(開工日, [r('A.壹.1', 5)])], contract, 開工日, 竣工日);
-  expect(ops.find((o) => o.startAddr === 'J3').values).toEqual([new Array(10).fill(0.1)]);
+  const ops = daysToOperations([day(開工日, [r('A.貳', 0.0026)])], contract, 開工日, 竣工日);
+  expect(ops[0].values).toEqual([[null], [0.0026]]);
 });
 
 // ── 跨批次差異 ─────────────────────────────────────────────

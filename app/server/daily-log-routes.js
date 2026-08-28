@@ -39,7 +39,7 @@ const ocr = require('./ocr');
 const { validateDailyLog } = require('./daily-log-validate');
 const { mergeDays } = require('./daily-log-merge');
 const {
-  daysToOperations, weatherToOperations, diffDays, feeItemsPlan, legacyFormulaOperations,
+  daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('./daily-log-write');
 const { scanDays, scanCoverage } = require('./daily-log-scan');
 const { resizeOperations } = require('./contract-items');
@@ -260,8 +260,6 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
   const dest = ensureWorkbook(projectId);
   let tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
   try {
-    // 竣工日期是費用項目推算的分母(見 daily-log-write.js)。承辦人還沒填時
-    // 傳 null,那幾列就維持照日誌的原行為,不會擋住這份日誌寫入。
     await fillTemplate(dest, tmp, applyProtection(dest, [
       // 先把項目列數對齊這份契約(見 resizeOperations)。SP2 寫價目表時已經做過一次,
       // 這裡再做是為了**修舊報表**:刪列是後來才加的,在那之前建的常駐檔還留著範本
@@ -490,15 +488,11 @@ function registerRoutes(app) {
           userId: req.userId,
         });
 
-        // 承辦人選的是「報表版面不動,改在系統畫面標示」,所以哪幾列是系統推算的
-        // 必須在這裡講清楚——報表本身看不出來。
-        const plan = feeItemsPlan(ctx.contract, ctx.開工日, ctx.project.竣工日期);
         res.json({
           ok: true,
           天數: days.length,
           筆數: rows.length,
           warnings: result.warnings,
-          費用推算: { 工期天數: plan.工期天數, 項目: plan.items.map((f) => f.項目) },
         });
       } catch (err) {
         if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
@@ -641,14 +635,12 @@ function registerRoutes(app) {
           userId: req.userId,
         });
 
-        const plan = feeItemsPlan(ctx.contract, ctx.開工日, ctx.project.竣工日期);
         res.json({
           ok: true,
           天數: days.length,
           筆數: rows.length,
           warnings: result.warnings,
           來源: 'ocr_confirmed',
-          費用推算: { 工期天數: plan.工期天數, 項目: plan.items.map((f) => f.項目) },
         });
       } catch (err) {
         if (/projectId 不合法/.test(err.message || '')) {

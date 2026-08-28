@@ -15,20 +15,8 @@
  * 列則對應契約詳細價目表的項次順序(該分頁靠 MATCH 項次拉同一個順序),
  * 第 2 列起。
  *
- * ## 費用項目的每日進度是系統推算的,不是讀來的
- *
- * 職安衛管理費、品管費、保商管理費、保險費、營業稅這幾項沒有施工實體,工地日誌
- * 不會記。承辦人以前是自己在這幾列每天填一個固定數字,系統則照日誌抄——而日誌
- * 有的寫金額、有的寫比例,單位都不一致。44 案對帳裡 87% 的「兩邊都有但不同」
- * 全出在這裡。故改由系統統一依契約工期平均推算。
- *
- * ⚠️ 這個數字是**算出來的,不是工地量出來的**。報表版面刻意不動(不加註記),
- * 標示放在系統畫面上——這是產品決定,不是因為報表上沒地方放。
- * 承辦人以前用的公式推不出來(文安案工期 56 天,平均應是 0.0179,實際填 0.0109),
- * 所以這裡不是「重現承辦人的算法」,是**另定一個講得清楚的規則**。
+ * 每個項目（包括費用項目）都照施工日誌的每日完成數量寫入；日誌沒有值就留白。
  */
-
-const { isFeeItem } = require('./budget-sheet');
 
 const FIRST_DATE_COL = 10;   // J
 const LAST_DATE_COL = 762;   // ACH,範本鋪到這裡
@@ -40,20 +28,6 @@ const dayNum = (iso) => {
   const t = Date.parse(`${iso}T00:00:00Z`);
   return Number.isFinite(t) ? Math.round(t / MS_PER_DAY) : null;
 };
-
-/**
- * 工期天數(含頭尾)。日期不合法、竣工早於開工、或超出範本鋪好的日期欄時回 0
- * ——回 0 代表「不推算」,讓費用項目維持照日誌的原行為。這裡刻意不丟錯:
- * 推算費用是輔助功能,不該讓一份本來寫得進去的日誌整份卡住。
- * @returns {number} 0 表示無法推算
- */
-function 工期天數(開工日, 竣工日) {
-  const a = dayNum(開工日);
-  const b = dayNum(竣工日);
-  if (a == null || b == null || b < a) return 0;
-  const n = b - a + 1;
-  return FIRST_DATE_COL + n - 1 > LAST_DATE_COL ? 0 : n;
-}
 
 /**
  * 欄序號 → Excel 欄名(1=A)。
@@ -116,36 +90,6 @@ function legacyFormulaOperations(contract) {
 }
 
 /**
- * 哪些項目會由系統推算、每天推算成多少。
- *
- * 抽成獨立函式是為了讓**畫面上的說明**與**實際寫進去的值**同一個來源:承辦人選的
- * 是「報表版面不動,改在系統畫面標示」,所以那句「這幾列是系統算的」必須跟寫入
- * 完全一致,不能是前端另外寫死的一段文案。
- *
- * 分母固定用**契約工期**,不是「目前收到幾天日誌」:後者會讓每收一批日誌,
- * 先前寫進去的數字全部作廢要重算重寫,承辦人看到的數字也會一直變。
- *
- * @param {Array<{項次:string, 項目:string, 數量:number}>} contract
- * @param {string} 開工日 ISO
- * @param {string} [竣工日] ISO
- * @returns {{工期天數:number, items:Array<{row:number,項次:string,項目:string,每日:number}>}}
- *   工期天數 0 代表無法推算(沒填竣工日等),此時 items 必為空
- */
-function feeItemsPlan(contract, 開工日, 竣工日) {
-  const span = 工期天數(開工日, 竣工日);
-  const items = [];
-  if (span) {
-    (contract || []).forEach((c, row) => {
-      if (!isFeeItem(c.項次)) return;
-      const 每日 = Number(c.數量) / span;
-      if (!Number.isFinite(每日)) return;
-      items.push({ row, 項次: c.項次, 項目: c.項目, 每日 });
-    });
-  }
-  return { 工期天數: span, items };
-}
-
-/**
  * 把一批日誌組成寫入指令。
  *
  * 只產生**一個** setRange,範圍是這批日誌的最早日到最晚日:逐格 setCell 的話,
@@ -157,8 +101,7 @@ function feeItemsPlan(contract, 開工日, 竣工日) {
  * @param {Array<{header:object, dailyRows:Array}>} days
  * @param {Array<{項次:string, 數量:number}>} contract 契約詳細價目表(決定列順序)
  * @param {string} 開工日 ISO
- * @param {string} [竣工日] ISO。有給才推算費用項目——沒有工期就算不出每天多少,
- *   這時維持「照日誌」的原行為,不要用猜的分母硬算。
+ * @param {string} [竣工日] ISO（為相容既有呼叫保留，寫入不使用）
  * @returns {Array} operations
  * @throws {Error} 日期早於開工日或超出範本可容納的天數
  */
@@ -206,19 +149,6 @@ function daysToOperations(days, contract, 開工日, 竣工日) {
     startAddr: `${colName(FIRST_DATE_COL + minOff)}${FIRST_ITEM_ROW}`,
     values,
   }];
-
-  // 這幾道一定要排在主範圍**之後**:主範圍是一整塊矩形,會把它涵蓋到的費用格
-  // 寫成 null,順序反了等於白算。一列一道而不是整塊,是因為費用項目未必連在一起,
-  // 而涵蓋到施工項目的矩形會把先前批次寫進去的進度清成 null。
-  const plan = feeItemsPlan(contract, 開工日, 竣工日);
-  for (const f of plan.items) {
-    ops.push({
-      type: 'setRange',
-      sheet: SHEET,
-      startAddr: `${colName(FIRST_DATE_COL)}${FIRST_ITEM_ROW + f.row}`,
-      values: [new Array(plan.工期天數).fill(f.每日)],
-    });
-  }
 
   return ops;
 }
@@ -327,6 +257,6 @@ function weatherToOperations(days, 開工日) {
 }
 
 module.exports = {
-  colName, daysToOperations, weatherToOperations, diffDays, feeItemsPlan,
+  colName, daysToOperations, weatherToOperations, diffDays,
   legacyFormulaOperations, SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };

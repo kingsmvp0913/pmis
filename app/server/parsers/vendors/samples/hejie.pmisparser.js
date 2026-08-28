@@ -178,7 +178,9 @@ const MAX_WRAP_GAP = 8.5;
 
 function mergeWrapped(bands) {
   const 有項次 = (b) => {
-    const left = b.items.flatMap(tokensOf).filter((t) => t.cx < 62).sort((a, c) => a.x - c.x);
+    // 明禮第二聯的項次「3」起點是 x=60.6,字元中心剛好在 62.67。
+    // 用 62 當上界會把它當成名稱列,上一行的折行名稱因而無法併回項次列。
+    const left = b.items.flatMap(tokensOf).filter((t) => t.cx < 64).sort((a, c) => a.x - c.x);
     return left.length > 0 && NO_RE.test(despace(left[0].s));
   };
   const anchors = bands.filter(有項次);
@@ -266,8 +268,14 @@ function parseDetail(items) {
       本日完成金額: num(join(5)),
       累計完成數量: num(join(6)),
     };
+    // 明禮 8/30 的大類「壹 直接工程費」把空白契約單價讀成 0；大類沒有單位、
+    // 數量與任何進度，0 不是實際單價，須還原成空值才不會被當成明細。
+    if (row.單位 == null && row.契約數量 == null && row.契約單價 === 0
+      && row.本日完成數量 == null && row.本日完成金額 == null && row.累計完成數量 == null) {
+      row.契約單價 = null;
+    }
     // 範本印好的空白列:整列都是「-」(見檔頭④)
-    if (row.項次 == null && row.工程項目 == null) continue;
+    if (row.項次 == null && (row.工程項目 == null || /^本日完成進度[＝=]/.test(row.工程項目))) continue;
     dailyRows.push(row);
   }
   return { dailyRows, 本日累計金額 };
@@ -405,7 +413,7 @@ function selfTest() {
     // 大類:甲(天干)與壹,整列只有名稱與「-」
     it(76.3, 712.9, 41.9, '發包工程費'), it(57.5, 712.7, 7.8, '甲'),
     it(380.6, 712.6, 37.8, '        -'), it(435.0, 712.6, 37.7, '        -'),
-    it(268.7, 712.4, 4.1, '-'), it(214.2, 712.1, 4.6, '-'), it(314.8, 711.7, 4.1, '-'),
+    it(268.7, 712.4, 4.1, '0'), it(214.2, 712.1, 4.6, '-'), it(314.8, 711.7, 4.1, '-'),
     // 一般項目:名稱與項次都在「工程項目」表頭左邊
     it(75.6, 686.8, 115.1, '工程告示牌與職業安全告示牌(租用)'),
     it(380.6, 685.9, 37.8, '        -'), it(435.0, 685.9, 46.1, '       1.00'),
@@ -424,6 +432,8 @@ function selfTest() {
     it(380.6, 154.9, 37.8, '        -'), it(435.0, 154.9, 37.7, '        -'),
     it(59.4, 154.8, 4.1, ' '), it(60.6, 154.8, 4.1, '-'),
     it(268.7, 154.8, 4.1, '-'), it(214.2, 154.4, 4.6, '-'), it(314.8, 154.1, 4.1, '-'),
+    // 明禮少數頁面把這一行印在「累計」上方，不能誤收成沒有項次的明細。
+    it(72.1, 105.0, 180.0, '本日完成進度=(本日累計完成金額÷契約金額)%='),
     it(72.1, 102.0, 75.5, '累計(本日完成金額)'), it(380.6, 101.6, 46.1, '  20,105.23'),
     it(88.1, 88.7, 188.9, '本日完成進度=(本日累計完成金額÷契約金額)%='), it(280.3, 88.2, 22.8, '2.48%'),
   ];
@@ -441,7 +451,7 @@ function selfTest() {
   if (det.dailyRows.length !== 3) return false;            // 空白列不算
   const [c0, r1, r7] = det.dailyRows;
   if (c0.項次 !== '甲' || c0.工程項目 !== '發包工程費') return false;
-  if (c0.單位 !== null || c0.契約數量 !== null) return false;   // 大類:「-」一律 null
+  if (c0.單位 !== null || c0.契約數量 !== null || c0.契約單價 !== null) return false;
   if (r1.項次 !== '1' || r1.工程項目 !== '工程告示牌與職業安全告示牌(租用)') return false;
   if (r1.單位 !== '式' || r1.契約單價 !== 6000 || r1.契約數量 !== 1) return false;
   if (r1.本日完成數量 !== null || r1.累計完成數量 !== 1) return false;

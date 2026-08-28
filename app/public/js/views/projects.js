@@ -42,7 +42,7 @@
         el('option', { value: 'supervision' }, '督導')
       ]);
       const periodI = el('input', { class: 'form-control', type: 'month', value: defaultPeriod || '' });
-      const fileI = el('input', { class: 'form-control', type: 'file' });
+      const fileI = el('input', { class: 'form-control', type: 'file', multiple: true });
       const errBox = el('div', { class: 'error-msg', style: 'display:none' });
 
       // 關閉路徑有四條(送出、取消鈕、Escape、點 overlay)。一律由 modalDialog
@@ -52,8 +52,8 @@
       function submit() {
         const period = periodI.value.trim();
         if (!/^\d{4}-\d{2}$/.test(period)) { errBox.textContent = '請選擇週期(年月)'; errBox.style.display = ''; return; }
-        if (!fileI.files || !fileI.files[0]) { errBox.textContent = '請選擇施工日誌檔'; errBox.style.display = ''; return; }
-        result = { type: typeSel.value, period, file: fileI.files[0] };
+        if (!fileI.files || !fileI.files.length) { errBox.textContent = '請選擇施工日誌檔'; errBox.style.display = ''; return; }
+        result = { type: typeSel.value, period, files: [...fileI.files] };
         dlg.close();
       }
 
@@ -61,7 +61,7 @@
         errBox,
         el('div', { class: 'form-group' }, [el('label', {}, '類型'), typeSel]),
         el('div', { class: 'form-group' }, [el('label', {}, '週期'), periodI]),
-        el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔'), fileI]),
+        el('div', { class: 'form-group' }, [el('label', {}, '施工日誌檔(可多選)'), fileI]),
         el('div', { class: 'modal-actions' }, [
           el('button', { class: 'btn btn-outline', onClick: () => dlg.close() }, '取消'),
           el('button', { class: 'btn btn-primary', onClick: submit }, '送出')
@@ -1013,7 +1013,9 @@
           // 這裡曾有一顆「監造報表」——它指向 submission_history.report_path,而那條
           // 產報表的路線 2026-08-05 就退役了,該欄再也沒有寫入端,按下去必定 409。
           // 監造報表是工程層的常駐 .xlsm(非單期產物),下載入口在施工日誌區塊。
-          el('button', { class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'daily_log') }, '施工日誌'),
+          ...(r.daily_log_paths || []).map((_, i) => el('button', {
+            class: 'btn btn-outline', style: 'margin-left:6px', onClick: () => download(r.id, 'daily_log', i),
+          }, `施工日誌${(r.daily_log_paths || []).length > 1 ? ` ${i + 1}` : ''}`)),
           el('button', { class: 'btn btn-danger', style: 'margin-left:6px', onClick: () => removeRec(p, r, cell) }, '刪除')
         ]));
       });
@@ -1028,8 +1030,9 @@
       cell.appendChild(el('div', { class: 'history-panel' }, [head, grid, recWrap]));
     }
 
-    async function download(sid, kind) {
-      try { await Api.download('submissions/' + sid + '/download/' + kind); }
+    async function download(sid, kind, index) {
+      const suffix = index == null ? '' : `?index=${index}`;
+      try { await Api.download('submissions/' + sid + '/download/' + kind + suffix); }
       catch (e) {
         // 409 = 尚未產出/尚未產生 → warn;其餘 error
         const soft = e.message.indexOf('尚未產出') >= 0 || e.message.indexOf('尚未產生') >= 0;
@@ -1117,7 +1120,7 @@
       const fd = new FormData();
       fd.append('type', r.type);
       fd.append('period', r.period);
-      fd.append('daily_log', r.file);
+        r.files.forEach((file) => fd.append('daily_log', file));
       try {
         await Api.upload('projects/' + p.id + '/submissions', fd);
         // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 42 條

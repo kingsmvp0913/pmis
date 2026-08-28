@@ -154,6 +154,24 @@ describe('history routes', () => {
     expect(fs.existsSync(path.join(DATA_DIR, res.body.daily_log_path))).toBe(true);
   });
 
+  test('同一次繳交可上傳多份施工日誌並逐份下載', async () => {
+    const up = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
+      .field('type', 'monthly').field('period', '2026-07')
+      .attach('daily_log', Buffer.from('first'), 'first.txt')
+      .attach('daily_log', Buffer.from('second'), 'second.txt');
+    expect(up.status).toBe(201);
+    expect(up.body.daily_log_paths).toHaveLength(2);
+    expect(up.body.daily_log_path).toMatch(/^\[/);
+
+    const first = await auth(request(app).get(`/api/submissions/${up.body.id}/download/daily_log?index=0`));
+    const second = await auth(request(app).get(`/api/submissions/${up.body.id}/download/daily_log?index=1`));
+    expect(first.text).toBe('first');
+    expect(second.text).toBe('second');
+
+    const hist = await auth(request(app).get(`/api/projects/${projectId}/history`));
+    expect(hist.body.records[0].daily_log_paths).toEqual(up.body.daily_log_paths);
+  });
+
   test('督導 = 額外多插一筆(不覆蓋每月)', async () => {
     await auth(request(app).post(`/api/projects/${projectId}/submissions`))
       .field('type', 'monthly').field('period', '2026-07')
@@ -214,6 +232,17 @@ describe('history routes', () => {
     expect(fs.existsSync(abs)).toBe(false);
     const hist = await auth(request(app).get(`/api/projects/${projectId}/history`));
     expect(hist.body.records).toHaveLength(0);
+  });
+
+  test('刪除多檔繳交紀錄會移除全部施工日誌', async () => {
+    const up = await auth(request(app).post(`/api/projects/${projectId}/submissions`))
+      .field('type', 'monthly').field('period', '2026-07')
+      .attach('daily_log', Buffer.from('first'), 'first.txt')
+      .attach('daily_log', Buffer.from('second'), 'second.txt');
+    const paths = up.body.daily_log_paths.map((p) => path.join(DATA_DIR, p));
+    const del = await auth(request(app).delete(`/api/submissions/${up.body.id}`));
+    expect(del.status).toBe(200);
+    paths.forEach((p) => expect(fs.existsSync(p)).toBe(false));
   });
 
   test('缺工程回 404', async () => {

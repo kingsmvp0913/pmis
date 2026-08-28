@@ -201,33 +201,6 @@ const DailyLogs = (() => {
       ]));
     }
 
-    // 職安衛管理費、營業稅這類費用項目沒有施工實體,施工日誌不會記,每日進度是
-    // 系統依契約工期推算的。報表版面刻意不加註記(承辦人的決定),所以「哪幾列
-    // 不是工地回報的數字」只剩這裡會講——不講的話報表上完全看不出來。
-    function renderFeeNote(fee) {
-      if (!fee) return;
-      if (!fee.工期天數) {
-        diffBox.appendChild(el('div', { class: 'hint' },
-          '※ 尚未填竣工日期,職業安全衛生管理費等費用項目算不出每日進度,這幾列維持依施工日誌寫入。'
-          + '在工程基本資料補上竣工日期後重新寫入即可。'));
-        return;
-      }
-      if (!fee.項目 || !fee.項目.length) return;
-      diffBox.appendChild(el('div', { class: 'hint' },
-        `※ ${fee.項目.join('、')} 共 ${fee.項目.length} 項沒有施工實體,施工日誌不會記載,`
-        + `每日進度由系統依契約工期 ${fee.工期天數} 天平均推算——不是工地回報的數字。`));
-    }
-
-    // 報表上的「預定進度」以前是承辦人依廠商的施工預定進度表逐格填的,系統沒有那份
-    // 資料,改由範本公式依契約工期直線推算(與上面的費用項目同一套規則)。算出來的
-    // 是一條直線,不是真的預定進度曲線——報表版面看不出差別,只有這裡會講。
-    function renderPlanNote(fee) {
-      if (!fee || !fee.工期天數) return;
-      diffBox.appendChild(el('div', { class: 'hint' },
-        `※ 報表的預定進度由系統依契約工期 ${fee.工期天數} 天直線推算`
-        + `(每天 ${(100 / fee.工期天數).toFixed(2)}%),不是廠商施工預定進度表上的曲線。`));
-    }
-
     // 後端收 upload.array('daily_log'),同一個欄名 append 多次即可
     const fd = () => { const f = new FormData(); for (const x of files) f.append('daily_log', x); return f; };
 
@@ -354,8 +327,6 @@ const DailyLogs = (() => {
           const res = await Api.upload(`projects/${projectId}/daily-logs/confirm-scanned`, f);
           showToast(`已寫入 ${res.天數} 天、${res.筆數} 筆逐日資料(來源:OCR + 人工確認)`, 'success');
           clearScan();
-          renderFeeNote(res.費用推算);
-          renderPlanNote(res.費用推算);
         } catch (e) {
           showErr(e.message);
           // 硬錯要跟文字層那條路一樣列全,不然承辦人不知道哪一天卡住
@@ -438,8 +409,6 @@ const DailyLogs = (() => {
         showToast(`已寫入 ${r.天數} 天、${r.筆數} 筆逐日資料`, 'success');
         confirmBtn.style.display = 'none';
         diffBox.innerHTML = '';
-        renderFeeNote(r.費用推算);
-        renderPlanNote(r.費用推算);
       } catch (e) {
         showErr(e.message);
       } finally {

@@ -141,6 +141,20 @@ const KIND_COLUMN = {
   official_doc: 'official_doc_path',
 };
 
+// 舊紀錄存單一路徑；新紀錄在同一個 TEXT 欄存 JSON 陣列，避免變更既有資料表。
+function dailyLogPaths(value) {
+  if (!value) return [];
+  try {
+    const paths = JSON.parse(value);
+    if (Array.isArray(paths) && paths.every((p) => typeof p === 'string')) return paths;
+  } catch { /* 舊格式不是 JSON，視為單一路徑 */ }
+  return [value];
+}
+
+function withDailyLogPaths(record) {
+  return Object.assign({}, record, { daily_log_paths: dailyLogPaths(record.daily_log_path) });
+}
+
 // 兩位數補零過的日期字串 → YYYY-MM(取月份)。填報日期形如 2026-04-08。
 function periodOfDate(iso) {
   const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(String(iso || ''));
@@ -154,7 +168,7 @@ function periodOfDate(iso) {
 
 function registerRoutes(app) {
   // 上傳施工日誌 → 建立 submission_history(督導額外多插一筆)
-  app.post('/api/projects/:id/submissions', verifyToken, upload.single('daily_log'), async (req, res) => {
+  app.post('/api/projects/:id/submissions', verifyToken, upload.array('daily_log'), async (req, res) => {
     try {
       const projectId = req.params.id;
       const { rows: proj } = await query('SELECT * FROM projects WHERE id = $1', [projectId]);
@@ -165,11 +179,13 @@ function registerRoutes(app) {
       if (!/^\d{4}-\d{2}$/.test(period)) {
         return res.status(400).json({ error: '週期格式須為 YYYY-MM' });
       }
-      if (!req.file) return res.status(400).json({ error: '請上傳施工日誌檔' });
+      const files = (req.files || []).filter((f) => f && f.path);
+      if (!files.length) return res.status(400).json({ error: '請上傳施工日誌檔' });
 
       const settlementDay = await getSettlementDay();
       const deadline = computeDeadline(period, settlementDay);
-      const dailyLogPath = relToData(req.file.path);
+      const paths = files.map((f) => relToData(f.path));
+      const dailyLogPath = paths.length === 1 ? paths[0] : JSON.stringify(paths);
 
       const { rows } = await query(
         `INSERT INTO submission_history
@@ -178,7 +194,7 @@ function registerRoutes(app) {
          RETURNING *`,
         [projectId, period, type, dailyLogPath, deadline]
       );
-      const record = rows[0];
+      const record = withDailyLogPaths(rows[0]);
       // 這裡只登錄「這一期繳了施工日誌」。要產監造報表請走工程頁的施工日誌區塊,
       // 那條路徑會跑 42 條驗證並寫進常駐 .xlsm(見本檔上方的退役說明)。
       res.status(201).json(record);
@@ -217,7 +233,7 @@ function registerRoutes(app) {
         startYm, nowYm, settlementDay, now, submittedMonthly,
       });
 
-      res.json({ settlement_day: settlementDay, status, records });
+      res.json({ settlement_day: settlementDay, status, records: records.map(withDailyLogPaths) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -355,7 +371,13 @@ function registerRoutes(app) {
         return res.status(409).json({ error: '公文尚未產出' });
       }
 
-      const rel = rows[0][col];
+      const stored = rows[0][col];
+      const paths = kind === 'daily_log' ? dailyLogPaths(stored) : [stored];
+      const index = Number(req.query.index == null ? 0 : req.query.index);
+      if (!Number.isInteger(index) || index < 0 || index >= paths.length) {
+        return res.status(404).json({ error: '找不到指定的施工日誌檔' });
+      }
+      const rel = paths[index];
       if (!rel) return res.status(404).json({ error: '檔案不存在' });
       const abs = safeResolve(rel);
       if (!abs) return res.status(400).json({ error: '檔案路徑不合法' });
@@ -374,15 +396,17 @@ function registerRoutes(app) {
       const rec = rows[0];
 
       for (const col of ['daily_log_path', 'official_doc_path']) {
-        const rel = rec[col];
-        if (!rel) continue;
-        const abs = safeResolve(rel);
-        if (!abs) continue; // 路徑不合法(逃逸 DATA_DIR)→ 不觸碰檔案系統
-        if (fs.existsSync(abs)) {
-          try {
-            fs.unlinkSync(abs);
-          } catch (e) {
-            return res.status(500).json({ error: `刪除實體檔失敗(${col}):${e.message}` });
+        const paths = col === 'daily_log_path' ? dailyLogPaths(rec[col]) : [rec[col]];
+        for (const rel of paths) {
+          if (!rel) continue;
+          const abs = safeResolve(rel);
+          if (!abs) continue; // 路徑不合法(逃逸 DATA_DIR)→ 不觸碰檔案系統
+          if (fs.existsSync(abs)) {
+            try {
+              fs.unlinkSync(abs);
+            } catch (e) {
+              return res.status(500).json({ error: `刪除實體檔失敗(${col}):${e.message}` });
+            }
           }
         }
       }
@@ -401,6 +425,7 @@ module.exports = {
   buildSubmissionStatus,
   safeResolve,
   relToData,
+  dailyLogPaths,
   DATA_DIR,
   UPLOAD_DIR,
   OUTPUT_DIR,
