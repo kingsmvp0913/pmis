@@ -25,6 +25,7 @@
 
 const isBlank = (v) => v == null || (typeof v === 'string' && v.trim() === '');
 const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const { normalizeItemNo } = require('./item-no');
 
 /**
  * 名稱形狀健檢(J5)。**原本只活在 `scripts/check-parser.js`**——那是開發用腳本,
@@ -179,11 +180,7 @@ const looseName = (s) => squash(s).replace(/[、，,;；:：()（）\[\]【】]/
 // 於是 contractByNo 逐字相等永遠對不上、名稱又剛好也不同 → 名稱後備索引也救不了,
 // 結果是**每天一個 E1 硬錯、86 天整份被擋**。
 // 只折「同一個數字的不同寫法」,不碰語意不同的字。
-const NO_VARIANTS = {
-  二: '貳', 三: '參', 四: '肆', 五: '伍', 六: '陸',
-  参: '參', 貮: '貳', 弍: '貳', 弐: '貳', 叁: '參', 佰: '百', 仟: '千', 萬: '万',
-};
-const normNo = (s) => squash(s).replace(/[二三四五六参貮弍弐叁佰仟萬]/g, (c) => NO_VARIANTS[c]);
+const normNo = normalizeItemNo;
 const tailNo = (s) => normNo(s).split('.').pop();
 
 // 費用項目也要認名字,不能只看「項次不是阿拉伯數字」。
@@ -275,17 +272,17 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 逐項的跨日狀態:上一日累計數量、推導到目前為止的累計金額。
   // 前期累計當起點:施工日誌分批提交,第二批的累計值包含前面批次做過的量。
   // 從 0 起算的話,B3 在每一批的第一天都必然誤判,承辦人送第二批就被擋死。
-  const prevCum = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
-  const cumAmount = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.金額) || 0]));
+  const prevCum = new Map(Object.entries(prior).map(([k, v]) => [normNo(k), Number(v.數量) || 0]));
+  const cumAmount = new Map(Object.entries(prior).map(([k, v]) => [normNo(k), Number(v.金額) || 0]));
   // B3 容差要隨累加筆數放寬:數量是比例時,每日金額各自四捨五入成整數,逐日累加
   // 後誤差會累積(玉森項次4:22003×2=44006,而 0.2×220027=44005.4,差 0.6)。
   // 每一筆的捨入本來就最多差半元,固定半元容差在第二天就爆掉。
-  const amountTerms = new Map(Object.entries(prior).map(([k]) => [k, 1]));
+  const amountTerms = new Map(Object.entries(prior).map(([k]) => [normNo(k), 1]));
   const prevUnit = new Map();
   // F4 的期初累計優先用已寫入報表的前期資料；單獨上傳某一個月的日誌時，資料庫
   // 還沒有前期紀錄，則由該項第一筆「累計－本日」推回期初。不能把期末累計直接
   // 與本次檔案的本日加總相比，否則 8 月檔會把 7 月以前已完成的量誤判為錯誤。
-  const f4Base = new Map(Object.entries(prior).map(([k, v]) => [k, Number(v.數量) || 0]));
+  const f4Base = new Map(Object.entries(prior).map(([k, v]) => [normNo(k), Number(v.數量) || 0]));
   const f4BaseKnown = new Set(f4Base.keys());
   const dailySum = new Map();
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
@@ -335,7 +332,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 契約表以項次為鍵。SP2 建的契約詳細價目表是**唯一權威基準**——
   // 日誌自己填的契約數量/單價只是待驗資料,不能拿來當基準。
   // 鍵一律走 normNo:兩份文件常把同一個中文數字寫成異體字(参/參),逐字相等對不上。
-  const contractByNo = new Map(contract.map((c) => [normNo(c.項次), c]));
+  const contractByNo = new Map();
+  for (const c of contract) {
+    const key = normNo(c.項次);
+    contractByNo.set(key, contractByNo.has(key) ? null : c);
+  }
   // 部分日誌省略契約項次的大類前綴(契約「壹.1」、日誌「1」)。前綴最後一段
   // 只有在整份契約中唯一時才可當別名；若「一.1／二.1」同時存在，猜測會把
   // 月底完整清單誤算成已齊，必須維持原本的明確比對。
@@ -424,7 +425,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         hard('A7', 日期, 項次, '契約數量未填');
       }
 
-      if (項次 != null) seenItemNos.add(項次);
+      if (項次 != null) seenItemNos.add(normNo(項次));
 
       // J2 單位字典;J3 同一項次跨天單位一致(與 E4 互補:E4 比契約表,J3 比自己)
       if (!isBlank(r.單位)) {
@@ -483,6 +484,10 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         }
       }
 
+      // 跨日累計與金額一律使用已對應到的完整契約項次。若兩個大類底下都叫「1」，
+      // 用日誌的裸項次當 key 會讓後一類覆蓋前一類。
+      const 狀態項次 = c ? normNo(c.項次) : normNo(項次);
+
       const 本日量 = num(r.本日完成數量);
       const 本日金額 = num(r.本日完成金額);
       const 累計量 = num(r.累計完成數量);
@@ -497,8 +502,8 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // 費用項目(貳~陸)的數量欄語意各家不一:金大填「完成比例」、玉森的累計欄
       // 填的是本日值(天1 與天2 都是 0.012233,而同一天的施工項目正確累加)。
       // 硬套會生出 238 個假硬錯,把施工項目真正的累計錯誤淹掉。
-      const 是費用項目 = !/^\d+$/.test(項次 || '') || FEE_NAME.test(squash(r.工程項目));
-      const 前一日 = prevCum.get(項次);
+      const 是費用項目 = !/^\d+$/.test(tailNo(狀態項次)) || FEE_NAME.test(squash(r.工程項目));
+      const 前一日 = prevCum.get(狀態項次);
       if (累計量 != null && 本日量 != null && 前一日 != null
         && !approx(累計量, 前一日 + 本日量)) {
         const m = `累計完成數量 ${累計量} 不等於前一日累計 ${前一日} 加本日完成 ${本日量}`;
@@ -511,24 +516,24 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         if (是費用項目) soft('F1', 日期, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
         else hard('F1', 日期, 項次, m);
       }
-      if (累計量 != null) prevCum.set(項次, 累計量);
+      if (累計量 != null) prevCum.set(狀態項次, 累計量);
       // F4 用的:期初累計 + 各日本日完成的總和 = 期末累計。
       // 若沒有資料庫的前期紀錄，第一筆同時有累計／本日數量的資料可以反推期初。
       // 缺任一欄便不做 F4 部分加總比對，避免把「讀不到」誤報為「不相符」。
-      if (!f4BaseKnown.has(項次) && 累計量 != null && 本日量 != null) {
-        f4Base.set(項次, 累計量 - 本日量);
-        f4BaseKnown.add(項次);
+      if (!f4BaseKnown.has(狀態項次) && 累計量 != null && 本日量 != null) {
+        f4Base.set(狀態項次, 累計量 - 本日量);
+        f4BaseKnown.add(狀態項次);
       }
-      if (本日量 != null) dailySum.set(項次, (dailySum.get(項次) || 0) + 本日量);
-      if (累計量 != null) lastCum.set(項次, 累計量);
+      if (本日量 != null) dailySum.set(狀態項次, (dailySum.get(狀態項次) || 0) + 本日量);
+      if (累計量 != null) lastCum.set(狀態項次, 累計量);
 
       // B3 兩種算法交叉核對:逐日累加的本日完成金額 vs 累計完成數量×契約單價。
       // 讀取器不提供「累計完成金額」,故累計金額一律由前者推導(總覽 spec §5)。
       if (!skippedCodes.has('B3') && 本日金額 != null) {
-        const 累計金額 = (cumAmount.get(項次) || 0) + 本日金額;
-        cumAmount.set(項次, 累計金額);
-        const 筆數 = (amountTerms.get(項次) || 0) + 1;
-        amountTerms.set(項次, 筆數);
+        const 累計金額 = (cumAmount.get(狀態項次) || 0) + 本日金額;
+        cumAmount.set(狀態項次, 累計金額);
+        const 筆數 = (amountTerms.get(狀態項次) || 0) + 1;
+        amountTerms.set(狀態項次, 筆數);
         if (累計量 != null && 單價 != null
           && Math.abs(累計金額 - 累計量 * 單價) >= 0.5 * 筆數) {
           // 費用項目(貳~陸)的「完成數量」是**完成比例**而非數量(金大實測:貳的
@@ -664,7 +669,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     const 期初 = f4Base.get(項次);
     if (總和 != null && f4BaseKnown.has(項次) && !approx(累計, 期初 + 總和)) {
       const m = `期末累計 ${顯示數(累計)} 不等於期初累計 ${顯示數(期初)} 加各日本日完成總和 ${顯示數(總和)}`;
-      if (!/^[0-9]+$/.test(項次)) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
+      if (!/^[0-9]+$/.test(tailNo(項次))) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
       else hard('F4', null, 項次, m);
     }
   }
@@ -672,7 +677,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // E2 契約表有、日誌整期都沒出現過。可能是漏做也可能是還沒做到那一項,
   // 故軟警告——判硬錯會讓工程做到一半時每次都被擋。
   for (const c of contract) {
-    if (!seenItemNos.has(String(c.項次))) {
+    if (!seenItemNos.has(normNo(c.項次))) {
       soft('E2', null, String(c.項次), `契約項目「${c.項目}」在這批日誌裡整期都沒出現過`);
     }
   }

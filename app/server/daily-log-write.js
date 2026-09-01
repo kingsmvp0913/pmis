@@ -22,6 +22,7 @@ const FIRST_DATE_COL = 10;   // J
 const LAST_DATE_COL = 762;   // ACH,範本鋪到這裡
 const FIRST_ITEM_ROW = 2;    // 第 1 列是標題
 const SHEET = '每日施工紀錄';
+const { contractItemIndex, resolveContractItem } = require('./item-no');
 
 const MS_PER_DAY = 86400000;
 const dayNum = (iso) => {
@@ -127,13 +128,14 @@ function daysToOperations(days, contract, 開工日, 竣工日) {
   const width = maxOff - minOff + 1;
 
   // 列順序完全依契約表:每日施工紀錄的項目列就是靠 MATCH 契約表項次拉出來的。
-  const rowOf = new Map(contract.map((c, i) => [String(c.項次), i]));
+  const rowOf = new Map(contract.map((c, i) => [c, i]));
+  const itemIndex = contractItemIndex(contract);
   const values = contract.map(() => new Array(width).fill(null));
 
   for (let i = 0; i < list.length; i++) {
     const col = offsets[i] - minOff;
     for (const row of list[i].dailyRows || []) {
-      const idx = rowOf.get(String(row.項次));
+      const idx = rowOf.get(resolveContractItem(row, itemIndex));
       // 契約表沒有的項次直接忽略:那是 E1 硬錯,驗證層已經擋下來了,
       // 走到寫入還在的話也沒有欄可以放。
       if (idx == null) continue;

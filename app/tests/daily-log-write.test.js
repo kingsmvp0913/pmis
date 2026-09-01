@@ -138,6 +138,19 @@ test('同一天同項次數量變了算修改', () => {
   ]);
 });
 
+test('不同大類的同尾碼依唯一項目名稱寫入各自契約列', () => {
+  const contract = [
+    { 項次: '壹.一.1', 項目: '跑道整地', 數量: 5 },
+    { 項次: '壹.貳.1', 項目: '球場整地', 數量: 8 },
+  ];
+  const rows = [
+    { 項次: '1', 工程項目: '球場整地', 本日完成數量: 3 },
+    { 項次: '1', 工程項目: '跑道整地', 本日完成數量: 2 },
+  ];
+  const ops = daysToOperations([day(開工日, rows)], contract, 開工日);
+  expect(ops[0].values).toEqual([[2], [3]]);
+});
+
 test('舊報表的項目列公式升級為空白與除以零防呆', () => {
   const ops = legacyFormulaOperations(CONTRACT);
   expect(ops).toContainEqual({

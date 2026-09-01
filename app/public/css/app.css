@@ -344,6 +344,7 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
 /* 數量輸入格。表格裡的 input 用 form-control 的全寬會把欄撐爆,故單獨限寬;
    數字右對齊才對得起來(這一欄是拿來跟紙本逐格比的)。 */
 .cell-num { width: 100%; padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.issue-owner { min-width: 104px; padding: 4px 8px; }
 /* OCR 沒讀到的格子。**這是這條路最重要的一個視覺訊號**——「少一格」看得見、
    「多一個錯的數字」看不見,所以至少要讓看得見的那一半無法被忽略。
    底色與文字色一起用變數,深色模式下 input 是白底黑字(見上面

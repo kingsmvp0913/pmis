@@ -18,7 +18,7 @@ const multer = require('multer');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const { readSheets, findCandidates } = require('./budget-sheet');
-const { selectSheets, validateItems, diffItems, itemsToOperations } = require('./contract-items');
+const { selectSheets, validateItems, diffItems, itemsToOperations, fullItemNo } = require('./contract-items');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
@@ -298,7 +298,7 @@ function registerRoutes(app) {
           await query(
             `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [req.params.id, i + 1, it.項次, it.項目, it.單位, it.數量, it.單價]
+            [req.params.id, i + 1, fullItemNo(it), it.項目, it.單位, it.數量, it.單價]
           );
         }
 

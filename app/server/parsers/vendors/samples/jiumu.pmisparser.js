@@ -46,7 +46,7 @@ const META_VENDOR_KEY = '久木營造有限公司';
 const KNOWN_UNITS = new Set(['式', 'M', 'M2', 'M3', 'm', 'm2', 'm3', 'CM', 'MM', 'KG', 'kg',
   '噸', 'T', '面', '座', '組', '場', '棵', '株', '處', '個', '支', '片', '只', '間',
   '天', '日', '趟', '才', '公尺', '公斤', '台', '套', '包', '車', '批', '樘', '扇', '孔', '道',
-  '張', '盞', '針', '本', '式/月', '月']);
+  '張', '盞', '針', '本', '式/月', '月', '頂', '雙']);
 
 const text = (v) => {
   const s = v == null ? '' : String(v).trim();
@@ -338,11 +338,199 @@ function daySheetNames(wb) {
   });
 }
 
+const PDF_ITEM_NO_RE = /^(\d+|[一二三四五六七八九十壹貳參参肆伍陸柒捌玖拾])$/;
+const PDF_Y_TOL = 4;
+
+function pdfGroupRows(items) {
+  const buckets = [];
+  for (const it of (items || []).filter((i) => String(i.s || '').trim())
+    .slice().sort((a, b) => b.y - a.y)) {
+    let bucket = buckets.find((b) => Math.abs(b.y - it.y) <= PDF_Y_TOL);
+    if (!bucket) { bucket = { y: it.y, items: [] }; buckets.push(bucket); }
+    bucket.items.push(it);
+  }
+  return buckets.map((b) => ({ y: b.y, items: b.items.sort((p, q) => p.x - q.x) }));
+}
+
+const pdfLine = (row) => row.items.map((i) => i.s).join(' ');
+const pdfBetween = (row, from, to) => row.items
+  .filter((i) => i.x >= from && i.x < to).map((i) => i.s).join(' ').trim();
+const pdfUnit = (row) => {
+  for (const item of row.items.filter((i) => i.x >= 230 && i.x < 256)) {
+    const unit = unitOf(item.s);
+    if (unit) return unit;
+  }
+  return null;
+};
+const pdfFirstNum = (v) => {
+  const m = String(v || '').match(/-?\d{1,3}(?:,\d{3})*(?:\.\d+)?/);
+  return m ? numOf(m[0]) : null;
+};
+
+function westernTextToISO(v) {
+  const m = /(\d{4})[年\/]\s*(\d{1,2})[月\/]\s*(\d{1,2})/.exec(squash(v));
+  if (!m) return null;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${m[1]}-${p(Number(m[2]))}-${p(Number(m[3]))}`;
+}
+
+function parsePdfHeader(rows) {
+  const lines = rows.map(pdfLine);
+  const all = lines.join('\n');
+  const find = (re) => { const m = re.exec(all); return m ? m[1] : null; };
+  const noSpaces = (v) => (v == null ? null : squash(v));
+  const weather = lines.find((line) => /本日天氣/.test(line)) || '';
+  const wm = /上午[:：]?\s*(\S+).*?下午[:：]?\s*(\S+?)(?:\s+填報日期|$)/.exec(weather) || [];
+  return {
+    工程名稱: noSpaces(find(/工程名稱\s+(.+?)\s+承攬廠商名稱/)),
+    填報日期: westernTextToISO(find(/填報日期[:：]?\s*([^\n]+)/)),
+    星期: find(/(星期[一二三四五六日天])/),
+    天氣_上午: text(wm[1]),
+    天氣_下午: text(wm[2]),
+    預定進度: pdfFirstNum(find(/累積預定進度\(%\)\s+([\d.]+)%?/)),
+    實際進度: pdfFirstNum(find(/累積實際進度\(%\)\s+([\d.]+)%?/)),
+    出工總人數: null,
+    本日累計金額: null,
+    承包廠商: noSpaces(find(/承攬廠商名稱\s+([^\n]+)/)),
+    開工日期: rocTextToISO(find(/開工日期\s+(.+?)\s+完工日期/)),
+  };
+}
+
+function parsePdfItemRows(rows) {
+  const header = rows.find((row) => {
+    const s = squash(pdfLine(row));
+    return s.includes('項次') && s.includes('工程項目') && s.includes('單位');
+  });
+  if (!header) return [];
+  const unitHeader = header.items.find((item) => squash(item.s) === '單位');
+  const dx = unitHeader ? unitHeader.x - 231.6 : 0;
+  const nameFrom = 65 + dx;
+  const nameTo = 231 + dx;
+  const unitFrom = 230 + dx;
+  const footer = rows.find((row) => squash(pdfLine(row)).includes('累計(本日完成金額合計)'));
+  const lower = footer ? footer.y : -Infinity;
+  const anchors = [];
+  const fragments = [];
+  for (const row of rows) {
+    if (row.y >= header.y || row.y <= lower) continue;
+    const item = row.items.find((i) => i.x < 78 && PDF_ITEM_NO_RE.test(String(i.s || '').trim()));
+    for (const i of row.items) {
+      if (i.x >= nameFrom && i.x < nameTo) {
+        const value = text(i.s);
+        if (value) fragments.push({ y: i.y, value });
+      }
+    }
+    if (!item) continue;
+    anchors.push({
+      y: row.y,
+      項次: String(item.s).trim(),
+      fragments: [],
+      valueItems: [],
+    });
+  }
+  if (!anchors.length) return [];
+  for (const row of rows) {
+    if (row.y >= header.y || row.y <= lower || !row.items.some((item) => item.x >= unitFrom)) continue;
+    let nearest = anchors[0];
+    for (const anchor of anchors) {
+      if (Math.abs(anchor.y - row.y) < Math.abs(nearest.y - row.y)) nearest = anchor;
+    }
+    nearest.valueItems.push(...row.items);
+  }
+  const assigned = new Set();
+  const hasAnchorBetween = (anchor, fragment) => anchors.some((other) => other !== anchor
+    && (other.y - anchor.y) * (other.y - fragment.y) < 0);
+  for (const anchor of anchors) {
+    for (const fragment of fragments) {
+      if (assigned.has(fragment) || Math.abs(fragment.y - anchor.y) > PDF_Y_TOL) continue;
+      assigned.add(fragment);
+      anchor.fragments.push(fragment);
+    }
+  }
+  const priority = anchors.slice().sort((a, b) => Number(b.fragments.length === 0) - Number(a.fragments.length === 0));
+  const finished = new Set();
+  for (let pair = 1; pair <= 4; pair++) {
+    for (const anchor of priority) {
+      if (finished.has(anchor)) continue;
+      const free = fragments.filter((fragment) => !assigned.has(fragment) && !hasAnchorBetween(anchor, fragment));
+      const above = free.filter((fragment) => fragment.y > anchor.y).sort((a, b) => a.y - b.y)[0];
+      const below = free.filter((fragment) => fragment.y < anchor.y).sort((a, b) => b.y - a.y)[0];
+      if (!above || !below || Math.abs((above.y - anchor.y) - (anchor.y - below.y)) > 6) {
+        finished.add(anchor);
+        continue;
+      }
+      assigned.add(above); assigned.add(below);
+      anchor.fragments.push(above, below);
+    }
+  }
+  for (const fragment of fragments) {
+    if (assigned.has(fragment)) continue;
+    let nearest = anchors[0];
+    for (const anchor of anchors) {
+      if (Math.abs(anchor.y - fragment.y) < Math.abs(nearest.y - fragment.y)) nearest = anchor;
+    }
+    nearest.fragments.push(fragment);
+  }
+  return anchors.map((anchor) => {
+    const valueRow = { items: anchor.valueItems };
+    return {
+      項次: anchor.項次,
+      工程項目: anchor.fragments.sort((a, b) => b.y - a.y).map((f) => f.value).join('') || null,
+      單位: pdfUnit({ items: anchor.valueItems.map((item) => ({ ...item, x: item.x - dx })) }),
+      契約單價: pdfFirstNum(pdfBetween(valueRow, 290 + dx, 333 + dx)),
+      契約數量: pdfFirstNum(pdfBetween(valueRow, 250 + dx, 290 + dx)),
+      本日完成數量: pdfFirstNum(pdfBetween(valueRow, 367 + dx, 406 + dx)),
+      本日完成金額: pdfFirstNum(pdfBetween(valueRow, 434 + dx, 472 + dx)),
+      累計完成數量: pdfFirstNum(pdfBetween(valueRow, 406 + dx, 434 + dx)),
+    };
+  });
+}
+
+async function parsePdfAll(filePath, ft) {
+  if (typeof ft.extractItems !== 'function') throw new Error('缺少注入的 filetypes.extractItems');
+  const pages = await ft.extractItems(filePath);
+  const days = [];
+  let current = null;
+  const finishCurrent = () => {
+    if (!current) return;
+    const count = current._detailPages.length;
+    const combined = current._detailPages.flatMap((pageRows, index) => {
+      const offset = (count - index - 1) * 1000;
+      return pageRows.map((row) => ({
+        y: row.y + offset,
+        items: row.items.map((item) => ({ ...item, y: item.y + offset })),
+      }));
+    });
+    current.dailyRows = parsePdfItemRows(combined);
+    delete current._detailPages;
+  };
+  for (const page of pages) {
+    const rows = pdfGroupRows(page.items);
+    const all = rows.map(pdfLine).join('\n');
+    if (/本日天氣/.test(all) && /填報日期/.test(all) && /工程名稱/.test(all)) {
+      finishCurrent();
+      current = { header: parsePdfHeader(rows), dailyRows: [], extras: {}, _detailPages: [] };
+      days.push(current);
+    }
+    const hasDetailHeader = rows.some((row) => {
+      const s = squash(pdfLine(row));
+      return s.includes('項次') && s.includes('工程項目') && s.includes('單位');
+    });
+    if (current && (hasDetailHeader || (current._detailPages.length && !/本日天氣/.test(all)))) {
+      current._detailPages.push(rows);
+    }
+  }
+  finishCurrent();
+  if (!days.length) throw new Error('找不到任何 PDF 日誌頁');
+  days.sort((a, b) => String(a.header.填報日期 || '').localeCompare(String(b.header.填報日期 || '')));
+  return days;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
-  if (!ft || typeof ft.readWorkbook !== 'function') {
-    throw new Error('缺少注入的 filetypes.readWorkbook');
-  }
+  if (!ft) throw new Error('缺少注入的 filetypes');
+  if (/\.pdf$/i.test(filePath)) return parsePdfAll(filePath, ft);
+  if (typeof ft.readWorkbook !== 'function') throw new Error('缺少注入的 filetypes.readWorkbook');
   const wb = ft.readWorkbook(filePath);
   const names = daySheetNames(wb);
   if (!names.length) {
@@ -457,7 +645,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',
@@ -468,5 +656,8 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parseSheet, parseItemRows, itemColumns, rocTextToISO, numOf, unitOf },
+  _internal: {
+    parseSheet, parseItemRows, itemColumns, rocTextToISO, numOf, unitOf,
+    pdfGroupRows, parsePdfHeader, parsePdfItemRows,
+  },
 };

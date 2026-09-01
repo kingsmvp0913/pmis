@@ -76,6 +76,41 @@ const Api = {
     return data;
   },
 
+  // multipart 上傳後直接下載檔案(施工日誌辨識問題 ZIP)
+  async uploadDownload(path, formData) {
+    const token = this.getToken();
+    const headers = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    let res;
+    try {
+      res = await fetch(`/api/${path}`, { method: 'POST', headers, body: formData });
+    } catch (e) {
+      throw new Error('伺服器沒回應');
+    }
+    if (res.status === 401) {
+      this.clearToken();
+      window.location.hash = '/login';
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw apiError(data, res.status);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+    const m = star || /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+    const filename = m ? decodeURIComponent(m[1].replace(/"$/, '')) : 'download';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
   // 檔案下載;非 2xx 解析 JSON error 訊息拋出(如 409「尚未產出」)
   async download(path) {
     const token = this.getToken();

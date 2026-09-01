@@ -8,6 +8,7 @@ process.env.PMIS_DATA_DIR = TMP;
 
 const express = require('express');
 const request = require('supertest');
+const JSZip = require('jszip');
 const { newDb } = require('pg-mem');
 const db = require('../server/db');
 
@@ -81,6 +82,12 @@ const post = (app, token, id, route) => request(app)
   .set('Authorization', `Bearer ${token}`)
   .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf');
 
+const asBinary = (req) => req.buffer(true).parse((res, cb) => {
+  const chunks = [];
+  res.on('data', (c) => chunks.push(c));
+  res.on('end', () => cb(null, Buffer.concat(chunks)));
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   fillTemplate.mockImplementation(async (dest, tmp) => {
@@ -93,6 +100,47 @@ afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch
 test('未帶 token 回 401', async () => {
   const { app, id } = await makeApp();
   await request(app).post(`/api/projects/${id}/daily-logs/parse`).expect(401);
+});
+
+describe('辨識問題下載包', () => {
+  const problems = [{ 級別: '硬錯', code: 'E6', 日期: '2026-07-15', 項次: '三', 訊息: '單價「讀錯」' }];
+
+  test('未帶 token 回 401', async () => {
+    const { app, id } = await makeApp();
+    await request(app).post(`/api/projects/${id}/daily-logs/recognition-issues`).expect(401);
+  });
+
+  test('沒有辨識問題時不產生空 ZIP', async () => {
+    const { app, token, id } = await makeApp();
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', '[]')
+      .attach('daily_log', Buffer.from('first-file'), '第一聯.pdf')
+      .expect(400);
+    expect(res.body.error).toMatch(/辨識問題/);
+  });
+
+  test('ZIP 只列辨識問題並包含本次上傳的所有原始檔', async () => {
+    const { app, token, id } = await makeApp();
+    const res = await asBinary(request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify(problems))
+      .attach('daily_log', Buffer.from('first-file'), '第一聯.pdf')
+      .attach('daily_log', Buffer.from('second-file'), '第二聯.xlsx'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/application\/zip/);
+    const zip = await JSZip.loadAsync(res.body);
+    expect(Object.keys(zip.files)).toEqual(expect.arrayContaining([
+      '辨識問題列表.csv', '原始檔案/第一聯.pdf', '原始檔案/第二聯.xlsx',
+    ]));
+    expect(await zip.file('原始檔案/第一聯.pdf').async('string')).toBe('first-file');
+    const csv = await zip.file('辨識問題列表.csv').async('string');
+    expect(csv.charCodeAt(0)).toBe(0xFEFF);
+    expect(csv).toContain('"硬錯","E6","2026-07-15","三","單價「讀錯」"');
+  });
 });
 
 // 缺哪一份基準就明講缺哪一份——回籠統的「無法處理」會讓承辦人不知道要去補什麼

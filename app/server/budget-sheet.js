@@ -121,13 +121,28 @@ const MIN_ITEMS = 3;
  * @returns {Array<{name:string, items:Array<object>, 合計:number}>}
  */
 function findCandidates(sheets) {
-  const out = [];
-  for (const s of sheets || []) {
-    const items = parseItems(s.rows);
-    if (items.filter((i) => ITEM_NO.test(noKey(i.項次))).length < MIN_ITEMS) continue;
-    out.push({ name: s.name, items, 合計: items.reduce((sum, i) => sum + i.複價, 0) });
+  const parsed = (sheets || []).map((s) => ({ name: s.name, items: parseItems(s.rows) }));
+  const candidates = parsed.filter((s) => (
+    s.items.filter((i) => ITEM_NO.test(noKey(i.項次))).length >= MIN_ITEMS
+  ));
+  // 橋頭的「詳細價目表」把貳～陸的名稱整列往下錯置，但同檔「經費總表」正確。
+  // 單一標的且只有一張非候選總表時，以同項次的總表費用列校正；多標的／多候選
+  // 無法安全判斷對應關係，維持原資料交由承辦人選擇，不自行猜測。
+  const summaries = parsed.filter((s) => !candidates.includes(s)
+    && s.items.filter((i) => isFeeItem(i.項次)).length >= 5);
+  if (candidates.length === 1 && summaries.length === 1) {
+    const fees = new Map(summaries[0].items.filter((i) => isFeeItem(i.項次))
+      .map((i) => [noKey(i.項次), i]));
+    candidates[0].items = candidates[0].items.map((item) => {
+      const corrected = isFeeItem(item.項次) ? fees.get(noKey(item.項次)) : null;
+      return corrected ? { ...corrected, 大類: item.大類 } : item;
+    });
   }
-  return out;
+  return candidates.map((s) => ({
+    name: s.name,
+    items: s.items,
+    合計: s.items.reduce((sum, i) => sum + i.複價, 0),
+  }));
 }
 
 const EXT = new Set(['.xls', '.xlsx', '.xlsm']);

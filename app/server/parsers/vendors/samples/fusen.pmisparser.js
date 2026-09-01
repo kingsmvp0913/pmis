@@ -85,11 +85,18 @@ function collectRows(rows) {
   const anchors = [];   // 項次列
   const frags = [];     // 待歸屬的名稱片段
   // 公誠國小版型的左半表格整體右移約 25pt；依表頭位置選欄界，避免影響既有四湖格式。
-  const shifted = rows.some((r) => r.items.some((i) => (
-    (String(i.s || '').trim() === '項次' && i.x >= 90)
-    || (i.x >= 95 && i.x < 115 && ITEM_NO_RE.test(String(i.s || '').trim()))
-  )));
-  const x = shifted ? { 項次: 110, 名稱: 245, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 } : X;
+  const itemHeader = rows.flatMap((r) => r.items).find((i) => String(i.s || '').trim() === '項次');
+  const shiftedItemCount = rows.flatMap((r) => r.items).filter((i) => (
+    i.x >= 95 && i.x < 115 && ITEM_NO_RE.test(String(i.s || '').trim())
+  )).length;
+  let x = X;
+  if (itemHeader && itemHeader.x < 50) {
+    x = { 項次: 60, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
+  } else if (itemHeader && itemHeader.x >= 70 && itemHeader.x < 90) {
+    x = { 項次: 90, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
+  } else if ((itemHeader && itemHeader.x >= 90) || (!itemHeader && shiftedItemCount >= 2)) {
+    x = { 項次: 110, 名稱: 245, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
+  }
 
   // 資料區從表頭列(項次/施工項目/單位…)之下開始。**頁首的校名、天氣、工程名稱、
   // 工期、進度等文字也落在名稱欄的 x 範圍內**,不設這條界線就會被當成名稱片段
@@ -106,9 +113,10 @@ function collectRows(rows) {
   // 「…預定進度及實際進度應填變更設計後計算之進度。」也會命中,取全頁最低的一條
   // 會把上界壓到 y=161.9,整頁明細一列不剩(實測會掉掉每天的貳~陸)。
   const 是項次 = (i) => i.x < x.項次 && ITEM_NO_RE.test(String(i.s || '').trim());
-  const 項次Ys = rows.filter((r) => r.items.some(是項次)).map((r) => r.y);
-  const 最上項次 = 項次Ys.length ? Math.max(...項次Ys) : -Infinity;
   const 頁首標籤 = /表報編號|本日天氣|工程名稱|核定工期|開工日期|預定進度|承攬廠商名稱/;
+  const 項次Ys = rows.filter((r) => !頁首標籤.test(r.items.map((i) => i.s).join(''))
+    && r.items.some(是項次)).map((r) => r.y);
+  const 最上項次 = 項次Ys.length ? Math.max(...項次Ys) : -Infinity;
   let 資料區上界 = Infinity;
   let 資料區下界 = -Infinity;
   for (const r of rows) {
@@ -221,12 +229,14 @@ function parseHeader(rows) {
   const flat = rows.map((r) => r.items.map((i) => i.s).join(' '));
   const all = flat.join('\n');
   const 找 = (re) => { const m = re.exec(all); return m ? m[1] : null; };
+  const 去空白 = (v) => (v == null ? null : String(v).replace(/[\s　]/g, ''));
   const 天氣列 = flat.find((l) => /本日天氣/.test(l)) || '';
-  const wm = /上午[:：]?\s*(\S+)?.*?下午[:：]?\s*(\S+)?/.exec(天氣列.replace(/\s{2,}/g, ' ')) || [];
+  const wm = /上午[:：]?\s*(\S+).*?下午[:：]?\s*(\S+?)(?:\s+填報日期|$)/
+    .exec(天氣列.replace(/\s{2,}/g, ' ')) || [];
 
   return {
-    工程名稱: 找(/工程名稱\s+(\S+)/),
-    填報日期: toISO(找(/填報日期[:：]?\s*(\S+)/)),
+    工程名稱: 去空白(找(/工程名稱\s+(.+?)\s+承攬廠商名稱/)),
+    填報日期: toISO(找(/填報日期[:：]?\s*(.+?)(?:\s+星期[一二三四五六日天]|$)/)),
     星期: 找(/(星期[一二三四五六日天])/),
     天氣_上午: text(wm[1]),
     天氣_下午: text(wm[2]),
@@ -234,8 +244,8 @@ function parseHeader(rows) {
     實際進度: numOf(找(/實際進度\(%\)\s+([\d.]+)%?/)),
     出工總人數: null,
     本日累計金額: null,
-    承包廠商: 找(/承攬廠商名稱\s+(\S+)/),
-    開工日期: toISO(找(/開工日期\s+(\S+)/)),
+    承包廠商: 去空白(找(/承攬廠商名稱\s+([^\n]+)/)),
+    開工日期: toISO(找(/開工日期\s+(.+?)(?:\s+完工日期|$)/)),
   };
 }
 
@@ -251,27 +261,27 @@ async function parseAll(filePath, ctx) {
   // 一天的明細放不下時會續到下一頁,兩頁的填報日期相同(實測 238 頁 = 119 天)。
   // 不合併的話每一天都會被當成兩天:D1「同一天出現兩次」119 次,而且每頁各自
   // 只有一半的項目,與契約表逐項比對時整份都判不一致。
-  const byDate = new Map();
-  const order = [];
-  let currentKey = null;
+  const days = [];
+  let current = null;
   for (const p of pages) {
     const rows = groupRows(p.items);
     const dailyRows = collectRows(rows);
     if (isLogPage(rows)) {
       const header = parseHeader(rows);
-      const key = header.填報日期 || `page-${p.page}`;
-      if (!byDate.has(key)) {
-        byDate.set(key, { header, dailyRows: [], extras: {} });
-        order.push(key);
+      if (!current || current.header.填報日期 !== header.填報日期 || current._pageCount >= 2) {
+        current = { header, dailyRows: [], extras: {}, _pageCount: 0 };
+        days.push(current);
       }
-      byDate.get(key).dailyRows.push(...dailyRows);
-      currentKey = key;
-    } else if (currentKey && dailyRows.length) {
+      current.dailyRows.push(...dailyRows);
+      current._pageCount++;
+    } else if (current && dailyRows.length) {
       // 公誠國小的第二頁只續列工程費,沒有表報編號/填報日期；併到緊接的日誌頁。
-      byDate.get(currentKey).dailyRows.push(...dailyRows);
+      current.dailyRows.push(...dailyRows);
+      current._pageCount++;
     }
   }
-  return order.map((k) => byDate.get(k));
+  for (const day of days) delete day._pageCount;
+  return days;
 }
 
 async function parse(filePath, ctx) {

@@ -3,6 +3,7 @@
  *
  * 路由:
  *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
+ *   POST /api/projects/:id/daily-logs/recognition-issues 問題清單 + 原始檔 → ZIP
  *   POST /api/projects/:id/daily-logs/confirm         無硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
  *   POST /api/projects/:id/daily-logs/confirm-scanned 承辦人逐格確認後才寫入
@@ -30,6 +31,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const multer = require('multer');
+const JSZip = require('jszip');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
 const registry = require('./parsers/registry');
@@ -43,6 +45,7 @@ const {
 } = require('./daily-log-write');
 const { scanDays, scanCoverage } = require('./daily-log-scan');
 const { resizeOperations } = require('./contract-items');
+const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
@@ -116,6 +119,32 @@ function 讀取失敗(檔名, err) {
 // 兩種都收,舊前端(送單一 daily_log)不必同步改。
 const uploadedFiles = (req) => (req.files && req.files.length ? req.files
   : (req.file ? [req.file] : []));
+
+const csvCell = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+
+function uniqueZipName(name, used) {
+  const safe = path.basename(name) || '施工日誌';
+  let candidate = safe;
+  let n = 2;
+  while (used.has(candidate)) {
+    const ext = path.extname(safe);
+    candidate = `${path.basename(safe, ext)}(${n++})${ext}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+async function recognitionIssuesZip(files, problems) {
+  const zip = new JSZip();
+  const header = ['級別', '代碼', '日期', '項次', '說明'];
+  const rows = problems.map((p) => [p.級別, p.code, p.日期, p.項次, p.訊息]);
+  zip.file('辨識問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
+
+  const folder = zip.folder('原始檔案');
+  const used = new Set();
+  for (const file of files) folder.file(uniqueZipName(realName(file), used), file.buffer);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
 
 const NO_CONTRACT = '此工程尚未建立契約詳細價目表,無法核對施工日誌的項目。請先上傳發包經費總表。';
 const NO_START = '此工程尚未填開工日期,無法決定每一天要寫進報表的哪一欄。請先完成工程基本資料。';
@@ -227,16 +256,18 @@ async function loadOpenings(projectId) {
 const 最早日 = (rows) => (rows.length ? rows.map((r) => r.日期).sort()[0] : null);
 
 /** 把解析出的天數攤平成逐日逐項列(與 daily_records 同形狀)。 */
-function flatten(days) {
+function flatten(days, contract = []) {
   const out = [];
+  const itemIndex = contractItemIndex(contract);
   for (const d of days) {
     const 日期 = (d.header || {}).填報日期;
     if (!日期) continue;
     for (const r of d.dailyRows || []) {
       if (r.項次 == null) continue;
+      const matched = resolveContractItem(r, itemIndex);
       out.push({
         日期,
-        項次: String(r.項次),
+        項次: matched ? String(matched.項次) : String(r.項次),
         本日完成數量: r.本日完成數量 == null ? null : Number(r.本日完成數量),
       });
     }
@@ -426,7 +457,7 @@ function registerRoutes(app) {
         if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
 
         const { days, conflicts } = await parseFiles(files, ctx.parser);
-        const rows = flatten(days);
+        const rows = flatten(days, ctx.contract);
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
@@ -454,6 +485,32 @@ function registerRoutes(app) {
       }
     });
 
+  app.post('/api/projects/:id/daily-logs/recognition-issues', verifyToken,
+    upload.array('daily_log'), async (req, res) => {
+      try {
+        if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+        const { rows } = await query('SELECT id FROM projects WHERE id = $1', [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
+
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌原始檔' });
+
+        let problems;
+        try { problems = JSON.parse(req.body.problems || 'null'); }
+        catch { return res.status(400).json({ error: '辨識問題列表格式不合法' }); }
+        if (!Array.isArray(problems) || !problems.length || problems.some((p) => !p || typeof p !== 'object')) {
+          return res.status(400).json({ error: '請至少選擇一項辨識問題' });
+        }
+
+        const buffer = await recognitionIssuesZip(files, problems);
+        res.attachment('辨識問題.zip');
+        res.send(buffer);
+      } catch (err) {
+        console.error('[daily-log] 產生辨識問題下載包失敗:', err);
+        res.status(500).json({ error: '產生辨識問題下載包失敗' });
+      }
+    });
+
   app.post('/api/projects/:id/daily-logs/confirm', verifyToken,
     upload.array('daily_log'), async (req, res) => {
       try {
@@ -465,7 +522,7 @@ function registerRoutes(app) {
 
         // 重新解析與驗證,不吃前端送來的任何資料
         const { days } = await parseFiles(files, ctx.parser);
-        const rows = flatten(days);
+        const rows = flatten(days, ctx.contract);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
@@ -565,7 +622,7 @@ function registerRoutes(app) {
 
         // 驗證只是給承辦人參考:草稿本來就會有一堆硬錯(OCR 漏掉的格子)。
         // 真正決定能不能寫的是 confirm-scanned 那一次。
-        const rows = flatten(out.days);
+        const rows = flatten(out.days, ctx.contract);
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days: out.days, contract: ctx.contract, project: ctx.project,
@@ -611,7 +668,7 @@ function registerRoutes(app) {
           return res.status(400).json({ error: `送出的內容不合法:${e.message}` });
         }
 
-        const rows = flatten(days);
+        const rows = flatten(days, ctx.contract);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),

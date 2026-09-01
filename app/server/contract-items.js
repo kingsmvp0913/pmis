@@ -71,11 +71,13 @@ function selectSheets(files, 決標金額) {
  * 寫入前的硬錯檢查。一次列全——逐條修正會讓承辦人來回改檔好幾次。
  * @returns {Array<{項次:string, 訊息:string}>}
  */
+const { fullItemNo, tailItemNo } = require('./item-no');
+
 function validateItems(items) {
   const errs = [];
   const seen = new Set();
   for (const i of items || []) {
-    const 項次 = String(i.項次 == null ? '' : i.項次);
+    const 項次 = fullItemNo(i);
     if (String(i.項目 || '').trim() === '') {
       errs.push({ 項次, 訊息: '項目名稱為空' });
     }
@@ -158,7 +160,7 @@ const INDEX_ROWS = {
   契約詳細價目表: { first: 2, last: 37, op: 'copyRowDown', 只算施工項目: false },
 };
 
-const IS_WORK_ITEM = (i) => /^\d+$/.test(String(i.項次));
+const IS_WORK_ITEM = (i) => /^\d+$/.test(tailItemNo(fullItemNo(i)));
 
 // 「参/贰/陆」是異體字,樣本裡兩種混用(見 budget-sheet.js 的 FEE_NO);
 // 不正規化的話,寫「(壹~参)」的案子會找不到那一列。
@@ -242,13 +244,10 @@ const 數字欄 = {
  * 承辦人的慣例是把大類標題接在項次前面:49 個舊案的人工報表 42 份寫
  * `壹.1`(鎮西兩層寫 `壹.一.1`、古坑兩子工程寫 `A.壹.1`),只有 6 份寫純數字。
  * 而來源的經費總表**全部都是**「壹」大類列 + 「1、2、3」——連那 6 份也是,
- * 所以前綴是承辦人自己加的,不是資料差異。
- *
- * 前綴刻意只在這裡組、不進 `項次` 欄:廠商施工日誌寫的是純數字,SP3 拿項次
- * 逐字當 key 對日誌(`daily-log-validate.js` 的 contractByNo),資料層一加前綴
- * 就每天都對不上、整份寫不進去。
+ * 2026-09 重新盤點完整樣本後確認，同張契約會同時有「壹.一.1」與「壹.二.1」；
+ * 前綴是資料鍵的一部分，不能只當版面文字，否則兩項入庫後都會退化成「1」。
  */
-const 顯示項次 = (i) => (i.大類 ? `${i.大類}.${i.項次}` : i.項次);
+const 顯示項次 = (i) => fullItemNo(i);
 
 /**
  * 費用項目(貳~陸)的單價要寫成**公式**,不是死值。
@@ -505,5 +504,5 @@ function itemsToOperations(items, previousCount = 0, 現有列數 = null) {
 module.exports = {
   selectSheets, validateItems, diffItems, roundHalfUp, constructionCost,
   itemsToOperations, resizeOperations, supervisionItemRowCount, formulaItemRowCount,
-  SHEET, INDEX_ROWS,
+  SHEET, INDEX_ROWS, fullItemNo,
 };

@@ -157,7 +157,7 @@ test('確認後寫入報表並落庫', async () => {
     'SELECT item_no, name, quantity, unit_price FROM contract_items WHERE project_id = $1 ORDER BY seq',
     [id]);
   expect(rows).toHaveLength(30);
-  expect(rows[0].item_no).toBe('1');
+  expect(rows[0].item_no).toBe('壹.1');
   expect(rows[rows.length - 1].item_no).toBe('陸'); // 費用項目排在最後
 }, 15000);
 

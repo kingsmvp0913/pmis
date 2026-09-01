@@ -90,6 +90,18 @@ describe('fusen 名稱片段歸屬(純函式)', () => {
   });
 });
 
+test('公誠 PDF 的分隔空白不會截斷日期、工程名與廠商名', () => {
+  const rows = [
+    { items: [{ s: '本日天氣: 上午: 晴 下午: 晴 填報日期: 2026 年 8 月 1 日 星期六' }] },
+    { items: [{ s: '工程名稱 114年 仁愛 樓 老舊 廁所整 修 工程 承攬廠商名稱 富森 土 木包 工 業' }] },
+  ];
+  expect(mod._internal.parseHeader(rows)).toMatchObject({
+    工程名稱: '114年仁愛樓老舊廁所整修工程',
+    填報日期: '2026-08-01',
+    承包廠商: '富森土木包工業',
+  });
+});
+
 describe('fusen parseAll', () => {
   let all;
   beforeAll(async () => { all = await mod.parseAll(FIXTURE, ctx); });
