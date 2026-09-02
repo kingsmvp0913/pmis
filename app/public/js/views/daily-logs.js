@@ -139,16 +139,12 @@ const DailyLogs = (() => {
     function renderFindings(errors, warnings) {
       listBox.innerHTML = '';
       issueDownloadBtn.style.display = 'none';
-      const all = [
-        ...(errors || []).map((e) => ({ ...e, 級別: '硬錯' })),
-        ...(warnings || []).map((e) => ({ ...e, 級別: '警告' })),
-      ];
+      const all = FindingGroups.groupFindings(errors, warnings);
       if (!all.length) return;
       const updateDownload = () => {
         issueDownloadBtn.style.display = all.some((f) => f.問題歸屬 === '辨識問題') ? '' : 'none';
       };
       const trs = all.map((f) => {
-        f.問題歸屬 = '待確認';
         const owner = el('select', { class: 'form-control issue-owner' }, [
           el('option', { value: '待確認' }, '待確認'),
           el('option', { value: '廠商問題' }, '廠商問題'),
@@ -164,7 +160,7 @@ const DailyLogs = (() => {
           // 「硬」「錯」上下兩行——那一欄只有 56px,而 .error-msg 是帶邊框與內距的框。
           el('td', {}, el('span', { class: `lvl-badge ${f.級別 === '硬錯' ? 'error-msg' : 'hint'}` }, f.級別)),
           el('td', {}, f.code),
-          el('td', {}, f.日期 || '—'),
+          el('td', { title: f.日期.join('、') }, f.日期顯示),
           el('td', {}, f.項次 || '—'),
           el('td', {}, f.訊息),
           el('td', {}, owner),
@@ -173,15 +169,15 @@ const DailyLogs = (() => {
       listBox.appendChild(el('table', { class: 'data' }, [
         el('thead', {}, el('tr', {}, [
           el('th', { style: 'width:56px' }, '級別'), el('th', { style: 'width:48px' }, '代碼'),
-          el('th', { style: 'width:110px' }, '日期'), el('th', { style: 'width:60px' }, '項次'),
+          el('th', { style: 'width:210px' }, '錯誤日期'), el('th', { style: 'width:70px' }, '項次'),
           el('th', {}, '說明'), el('th', { style: 'width:120px' }, '問題歸屬'),
         ])),
         el('tbody', {}, trs),
       ]));
 
       issueDownloadBtn.onclick = async () => {
-        const problems = all.filter((f) => f.問題歸屬 === '辨識問題')
-          .map(({ 級別, code, 日期, 項次, 訊息 }) => ({ 級別, code, 日期, 項次, 訊息 }));
+        // 畫面可以分組，但交付辨識問題時要展開回每天一列，避免廠商漏掉範圍中的日期。
+        const problems = FindingGroups.recognitionProblems(all);
         if (!problems.length) return;
         issueDownloadBtn.disabled = true;
         try {
