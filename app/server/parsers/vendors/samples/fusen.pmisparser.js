@@ -89,11 +89,18 @@ function collectRows(rows) {
   const shiftedItemCount = rows.flatMap((r) => r.items).filter((i) => (
     i.x >= 95 && i.x < 115 && ITEM_NO_RE.test(String(i.s || '').trim())
   )).length;
+  // 東榮國小的第二聯沒有重印表頭，費用項項次在 x≈45、名稱從 x≈67 開始。
+  // 沿用預設 x=75 會把每個名稱的首段截掉（如「營造綜合保險費」變「合保險費」）。
+  const leftItemCount = rows.flatMap((r) => r.items).filter((i) => (
+    i.x >= 40 && i.x < 60 && ITEM_NO_RE.test(String(i.s || '').trim())
+  )).length;
   let x = X;
   if (itemHeader && itemHeader.x < 50) {
     x = { 項次: 60, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
   } else if (itemHeader && itemHeader.x >= 70 && itemHeader.x < 90) {
     x = { 項次: 90, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
+  } else if (!itemHeader && leftItemCount >= 2) {
+    x = { 項次: 60, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
   } else if ((itemHeader && itemHeader.x >= 90) || (!itemHeader && shiftedItemCount >= 2)) {
     x = { 項次: 110, 名稱: 245, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
   }
@@ -327,7 +334,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.1.0',
+    version: '1.1.1',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
