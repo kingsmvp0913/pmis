@@ -522,6 +522,17 @@ test('E1 依名稱對應後,該契約項目不再被 E2 判為整期未出現', 
   expect(e2.map((w) => w.項次)).not.toContain('2');
 });
 
+test('E1 名稱對應的異體項次不再被 E2 判為未出現', () => {
+  const r = validateDailyLog({
+    days: [day('2026-04-08', [
+      row('二', { 工程項目: '職業安全衛生管理費', 單位: '式', 契約數量: 1, 契約單價: 100 }),
+    ])],
+    contract: [{ 項次: '参', 項目: '職業安全衛生管理費', 單位: '式', 數量: 1, 單價: 100 }],
+    project: PROJECT,
+  });
+  expect(r.warnings.filter((w) => w.code === 'E2')).toHaveLength(0);
+});
+
 // 契約表有、日誌整期都沒出現過:可能是漏做也可能是還沒做到,故軟警告
 test('E2 契約項目整期未出現是軟警告', () => {
   const r = runC([day('2026-04-08', [row('1')])]);
@@ -1081,6 +1092,19 @@ describe('D5 當月最後一天要有完整明細', () => {
       day('2026-04-30', [row('1'), row('2')]),
     ]);
     expect(codes(r)).not.toContain('D5');
+  });
+
+  test('契約分類標題不是日誌明細，不判 E2 或 D5', () => {
+    const r = validateDailyLog({
+      days: [day('2026-04-30', [row('1')])],
+      contract: [
+        { 項次: '壹', 項目: '直接工程費', 單位: null, 數量: null, 單價: null },
+        { 項次: '1', 項目: '項目1', 單位: '式', 數量: 10, 單價: 100 },
+      ],
+      project: PROJECT,
+    });
+    expect(codes(r)).not.toContain('D5');
+    expect(r.warnings.filter((w) => w.code === 'E2')).toHaveLength(0);
   });
 
   // 廠商把費用項目編成接續的阿拉伯數字或異體中文數字(二/参),而契約表是「貳/參」——

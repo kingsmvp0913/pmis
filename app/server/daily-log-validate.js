@@ -103,6 +103,12 @@ function isCategoryRow(r) {
   return isBlank(r.單位) && r.契約單價 == null && r.契約數量 == null;
 }
 
+// 契約表的大類標題沒有單位、數量、單價；它不是施工日誌應列的明細，不能因為日誌
+// 沒有這一列而判 E2 或 D5。契約欄位名稱與日誌不同，不能直接重用 isCategoryRow。
+function isContractCategory(c) {
+  return isBlank(c.單位) && num(c.數量) == null && num(c.單價) == null;
+}
+
 // header 裡會被「整份都缺」規則保護的欄位 → 對應的規則代碼與說明
 const HEADER_FIELD_RULES = [
   { fields: ['天氣_上午', '天氣_下午'], code: 'A2', label: '天氣' },
@@ -468,7 +474,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
           soft('E1', 日期, 項次, `項次與契約表不同(契約表為「${c.項次}」),已依項目名稱對應`);
           // 對應成功代表這個契約項目其實有出現,只是編號不同。不補記的話
           // E2 會再補一刀「整期未出現」,同一件事被判錯兩次。
-          seenItemNos.add(String(c.項次));
+          seenItemNos.add(normNo(c.項次));
         }
         if (squash(r.工程項目) !== squash(c.項目)) {
           soft('E3', 日期, 項次, `項目名稱與契約表不一致(契約表:${c.項目})`);
@@ -677,6 +683,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // E2 契約表有、日誌整期都沒出現過。可能是漏做也可能是還沒做到那一項,
   // 故軟警告——判硬錯會讓工程做到一半時每次都被擋。
   for (const c of contract) {
+    if (isContractCategory(c)) continue;
     if (!seenItemNos.has(normNo(c.項次))) {
       soft('E2', null, String(c.項次), `契約項目「${c.項目}」在這批日誌裡整期都沒出現過`);
     }
@@ -712,7 +719,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 依項目名稱對回契約的「貳~陸」並放行;D5 若還逐字比原始項次,同一批項目每個
   // 月末都會被判成「缺 5 項」——2026-08-17 實測元長鋪面、橋頭許厝分校、鹿場
   // 三案全中,而 D5 是硬錯,整份日誌卡住且訊息完全指不到真正原因。
-  const 應有項次 = contract.length ? contract.map((c) => String(c.項次)) : [...seenItemNos];
+  const 應有項次 = contract.length
+    ? contract.filter((c) => !isContractCategory(c)).map((c) => String(c.項次))
+    : [...seenItemNos];
   const 月末 = new Map();
   for (const d of days) {
     const 日 = (d.header || {}).填報日期;
