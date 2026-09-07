@@ -73,6 +73,13 @@ function numOf(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function progressNum(v) {
+  const s = v == null ? '' : String(v).replace(/[%％,\s　]/g, '');
+  if (s === '' || DASH_RE.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** 民國「115年7月29日」→ ISO。 */
 function rocToISO(s) {
   const t = String(s == null ? '' : s).replace(/[\s　]/g, '');
@@ -257,8 +264,107 @@ function parsePage(raw) {
   };
 }
 
+// ── Excel 路徑 ─────────────────────────────────────────────
+// 廠商第二版 Excel 與掃描 PDF 是同一張雙欄表單，但 Excel 一天一區塊、三天垂直排列。
+const at = (grid, r, c) => (grid && grid[r] ? grid[r][c] : undefined);
+const compact = (v) => String(v == null ? '' : v).normalize('NFKC').replace(/[\s　]/g, '');
+
+function excelBlockStarts(grid) {
+  const out = [];
+  for (let r = 0; r < grid.length; r++) {
+    if (compact(at(grid, r, 0)) === '表報編號:') out.push(r);
+  }
+  return out;
+}
+
+function excelRows(grid, a, C) {
+  const rows = [];
+  for (let r = a + 8; r < Math.min(grid.length, a + 32); r++) {
+    const name = text(at(grid, r, C.名稱));
+    if (name == null || /營造業專業工程特定施工項目/.test(name)) continue;
+    rows.push({
+      工程項目: name,
+      單位: text(at(grid, r, C.單位)),
+      契約單價: null,
+      契約數量: numOf(at(grid, r, C.數量)),
+      本日完成數量: numOf(at(grid, r, C.本日)),
+      本日完成金額: null,
+      累計完成數量: numOf(at(grid, r, C.累計)),
+    });
+  }
+  return rows;
+}
+
+function assignItemNos(rows) {
+  let n = 0;
+  let f = 0;
+  for (const r of rows) {
+    if (r.工程項目 && FEE_RE.test(String(r.工程項目).replace(/[\s　]/g, ''))
+      && f < FEE_ORDER.length) {
+      r.項次 = FEE_ORDER[f++];
+    } else {
+      r.項次 = String(++n);
+    }
+  }
+  return rows;
+}
+
+function parseExcelDay(grid, a, serialToISO) {
+  const rows = assignItemNos([
+    ...excelRows(grid, a, { 名稱: 0, 單位: 4, 數量: 5, 本日: 6, 累計: 7 }),
+    ...excelRows(grid, a, { 名稱: 8, 單位: 10, 數量: 11, 本日: 12, 累計: 13 }),
+  ]);
+  const extras = {};
+  const 出工明細 = [];
+  const 主要機具 = [];
+  for (let r = a + 40; r < Math.min(grid.length, a + 46); r++) {
+    const 工別 = text(at(grid, r, 0));
+    if (工別 && /^四、/.test(工別)) break;
+    if (工別) 出工明細.push({ 工別, 人數: numOf(at(grid, r, 2)) });
+    const 名稱 = text(at(grid, r, 7));
+    if (名稱) 主要機具.push({ 名稱, 數量: numOf(at(grid, r, 9)) });
+  }
+  if (出工明細.length) extras.出工明細 = 出工明細;
+  if (主要機具.length) extras.主要機具 = 主要機具;
+  const 有人數 = 出工明細.filter((x) => x.人數 != null);
+  return {
+    header: {
+      工程名稱: text(at(grid, a + 2, 2)),
+      填報日期: serialToISO(numOf(at(grid, a + 1, 11))),
+      星期: null,
+      天氣_上午: text(at(grid, a + 1, 2)),
+      天氣_下午: text(at(grid, a + 1, 4)),
+      預定進度: progressNum(at(grid, a + 5, 5)),
+      實際進度: progressNum(at(grid, a + 5, 9)),
+      出工總人數: 有人數.length ? 有人數.reduce((sum, x) => sum + x.人數, 0) : null,
+      本日累計金額: null,
+      承包廠商: text(at(grid, a + 2, 11)),
+      開工日期: serialToISO(numOf(at(grid, a + 4, 5))),
+    },
+    dailyRows: rows,
+    extras,
+  };
+}
+
+async function parseExcelAll(filePath, ft) {
+  const wb = ft.readWorkbook(filePath);
+  const grid = wb.sheets['施工日誌'];
+  const starts = grid ? excelBlockStarts(grid) : [];
+  if (!starts.length) throw new Error('找不到「施工日誌/表報編號」區塊(此檔非銘佑 Excel 格式)');
+  const days = starts.map((a) => parseExcelDay(grid, a, ft.excelSerialToISO))
+    .filter((d) => d.header.填報日期 && d.dailyRows.length);
+  if (!days.length) throw new Error('讀不到任何一天的明細(非銘佑 Excel 格式?)');
+  return days;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
+  if (/\.xls(?:x|m)?$/i.test(String(filePath))) {
+    if (!ft || typeof ft.readWorkbook !== 'function' || typeof ft.excelSerialToISO !== 'function') {
+      throw new Error('缺少注入的 Excel filetypes');
+    }
+    return parseExcelAll(filePath, ft);
+  }
   if (!ft || typeof ft.extractItemsOcr !== 'function') {
     throw new Error('缺少注入的 filetypes.extractItemsOcr(此格式是無文字層的掃描件)');
   }
@@ -313,7 +419,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
@@ -323,5 +429,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parsePage, columnRows, rocToISO },
+  _internal: { parsePage, columnRows, rocToISO, parseExcelDay, excelBlockStarts },
 };

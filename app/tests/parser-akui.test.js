@@ -1,15 +1,15 @@
 /**
  * 阿奎營造(新社高中弘揚樓廁所)施工日誌讀取器測試。
  *
- * ⚠️ 這家 14 份日誌裡**只有這 1 份 xls 讀得動**,其餘 13 份是 7~35MB 的紙本掃描
- * PDF、沒有文字層。覆蓋率 1/14 是事實不是待辦。
- * 一個檔就是一天(不是垂直堆疊的多天區塊)。
+ * 舊版新社高中 xls 一個檔一天；外埔國小另有可獨立讀取的橫向 xlsm 與雙頁 PDF。
  */
 const path = require('path');
 const mod = require('../server/parsers/vendors/samples/akui.pmisparser.js');
 const filetypes = require('../server/parsers/filetypes');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'akui.xls');
+const WAIPU_XLSM = path.join(__dirname, 'fixtures', 'akui-waipu.xlsm');
+const WAIPU_PDF = path.join(__dirname, 'fixtures', 'akui-waipu.pdf');
 const ctx = { filetypes };
 
 test('selfTest 通過', () => {
@@ -80,10 +80,72 @@ describe('parseAll(新社高中)', () => {
   });
 });
 
+describe('parseAll(外埔國小 Excel)', () => {
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(WAIPU_XLSM, ctx); }, 120000);
+
+  test('從數量表與出工表讀出所有已填日，不受日誌分頁目前選取日限制', () => {
+    expect(days).toHaveLength(23);
+    expect(days[0].header.填報日期).toBe('2026-08-12');
+    expect(days.at(-1).header.填報日期).toBe('2026-09-03');
+  });
+
+  test('header 與 38 項明細逐欄', () => {
+    expect(days[0].header).toMatchObject({
+      工程名稱: '114-116年度D棟老舊廁所整修工程',
+      星期: '三', 天氣_上午: '晴', 天氣_下午: '晴',
+      預定進度: 0, 實際進度: 0.00651,
+      出工總人數: 1, 承包廠商: '阿奎營造有限公司', 開工日期: '2026-08-12',
+    });
+    expect(days[0].dailyRows).toHaveLength(38);
+    expect(days[0].dailyRows[0]).toMatchObject({
+      項次: '1', 單位: '式', 契約數量: 1, 本日完成數量: 1, 累計完成數量: 1,
+    });
+    expect(days[0].dailyRows.slice(-6).map((r) => r.項次))
+      .toEqual(['貳', '參', '肆', '伍', '陸', '柒']);
+  });
+});
+
+describe('parseAll(外埔國小 PDF)', () => {
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(WAIPU_PDF, ctx); }, 120000);
+
+  test('每天兩頁只收一筆明細，共 20 天', () => {
+    expect(days).toHaveLength(20);
+    expect(days.map((d) => d.header.填報日期))
+      .toEqual(Array.from({ length: 20 }, (_, i) => `2026-08-${String(i + 12).padStart(2, '0')}`));
+  });
+
+  test('項次欄與跨行名稱各自正確，不把項次黏進名稱', () => {
+    expect(days[0].dailyRows).toHaveLength(38);
+    expect(days[0].dailyRows[0]).toMatchObject({
+      項次: '1', 工程項目: '乙種施工圍籬、警示帶、安全警示燈等安全措施(租用)',
+      單位: '式', 契約數量: 1, 本日完成數量: 1, 累計完成數量: 1,
+    });
+    expect(days[0].dailyRows[3].工程項目).toMatch(/含合法證明.*環境保護與清潔/);
+    expect(days[0].dailyRows.slice(-6).map((r) => r.項次))
+      .toEqual(['貳', '參', '肆', '伍', '陸', '柒']);
+  });
+
+  test('第二頁人員資料會合併回同一天', () => {
+    expect(days[0].header.出工總人數).toBe(1);
+    expect(days[0].extras.出工明細.map((x) => x.工別)).toEqual(['技工', '普工', '水電工']);
+  });
+
+  test('PDF 百分數與 Excel 比例在 parser 輸出內統一', async () => {
+    const excel = await mod.parseAll(WAIPU_XLSM, ctx);
+    // PDF 只印到百分比小數 2 位(0.65%)，Excel 保留 0.00651；只容許來源顯示精度的差。
+    expect(days[0].header.預定進度).toBeCloseTo(excel[0].header.預定進度, 4);
+    expect(days[0].header.實際進度).toBeCloseTo(excel[0].header.實際進度, 4);
+    expect(days[0].dailyRows.map((r) => [r.項次, r.契約數量, r.本日完成數量, r.累計完成數量]))
+      .toEqual(excel[0].dailyRows.map((r) => [r.項次, r.契約數量, r.本日完成數量, r.累計完成數量]));
+  });
+});
+
 // 13/14 份是無文字層的掃描 PDF,SheetJS 對它回一份空活頁簿。
 test('讀不動的檔要明確失敗,不可回空陣列', async () => {
   await expect(mod.parseAll(path.join(__dirname, 'fixtures', 'jinda.pdf'), ctx))
-    .rejects.toThrow(/表報編號/);
+    .rejects.toThrow(/找不到|阿奎/);
 });
 
 test('registry.inspect(沙箱載入 + 跑 selfTest)通過', () => {

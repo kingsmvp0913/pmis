@@ -313,6 +313,29 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   const 預定Scale = progressScale('預定進度');
   const 實際Scale = progressScale('實際進度');
 
+  // 月結日判準與下方 D5 共用：最新月份必須真的到曆月最後一天；若後面已有
+  // 下一個月份，則該月在這批資料中的最後一天也代表那個月已經收完。
+  const 月末 = new Map();
+  for (const d of days) {
+    const 日 = (d.header || {}).填報日期;
+    if (isBlank(日)) continue;
+    const 月 = String(日).slice(0, 7);
+    const cur = 月末.get(月);
+    if (!cur || 日 > cur.日) 月末.set(月, { 日, d });
+  }
+  const 月末的月 = [...月末.keys()].sort();
+  const 是月底 = (iso) => {
+    const [y, m, dd] = String(iso).split('-').map(Number);
+    return dd === new Date(Date.UTC(y, m, 0)).getUTCDate();
+  };
+  const 是月結日 = (iso) => {
+    if (isBlank(iso)) return false;
+    const 月 = String(iso).slice(0, 7);
+    const end = 月末.get(月);
+    if (!end || end.日 !== iso) return false;
+    return 是月底(iso) || 月 !== 月末的月[月末的月.length - 1];
+  };
+
   // 完工日:實際進度首次達 100% 的那一天(日期最早者,不是 days 陣列的先後——
   // 一份檔案裡日期不保證遞增,富森那份 2026 的月份排在 2025 之前)。
   //
@@ -627,11 +650,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     }
     if (實際 != null) prevProgress = 實際;
 
-    // H1 落後門檻:實際比預定低 10 個百分點以上。各家給的是比例(0.75)或
-    // 百分數(75),要先統一單位再比。**單位一律看整份的最大值決定,不看單一天**
-    // (見 progressScale 的說明)。
+    // H1 只在月結日判定落後，避免月中暫時落後、月底已追回時每天重複警告。
+    // 落後門檻是 10 個百分點；各家給的是比例(0.75)或百分數(75)，要先統一單位。
+    // **單位一律看整份的最大值決定，不看單一天**（見 progressScale 的說明）。
     const 預定 = num(h.預定進度);
-    if (實際 != null && 預定 != null) {
+    if (是月結日(日期) && 實際 != null && 預定 != null) {
       if (實際 * 實際Scale - 預定 * 預定Scale < -10) {
         soft('H1', 日期, null,
           `實際進度落後預定超過 10%(預定 ${預定}、實際 ${實際})`);
@@ -727,24 +750,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   const 應有項次 = contract.length
     ? contract.filter((c) => !isContractCategory(c)).map((c) => String(c.項次))
     : [...seenItemNos];
-  const 月末 = new Map();
-  for (const d of days) {
-    const 日 = (d.header || {}).填報日期;
-    if (isBlank(日)) continue;
-    const 月 = String(日).slice(0, 7);
-    const cur = 月末.get(月);
-    if (!cur || 日 > cur.日) 月末.set(月, { 日, d });
-  }
   // 只驗**已經收完**的月份。月中上傳是常態(廠商 7 月的檔裡常多印幾天,或整月
   // 表格預先列印到下個月),那時「這批的最後一天」不是月結點,拿它要求完整清單
   // 就是硬擋一份沒有錯的日誌——2026-08-17 實測元長鋪面被判 8/7、橋頭許厝分校
   // 被判 9/12,承辦人歸檔不了。判準二選一:那天就是該月最後一天(廠商真的做到
   // 月底),或後面還有別的月份的資料(有後續就代表這個月收完了)。
-  const 月末的月 = [...月末.keys()].sort();
-  const 是月底 = (iso) => {
-    const [y, m, dd] = String(iso).split('-').map(Number);
-    return dd === new Date(Date.UTC(y, m, 0)).getUTCDate();
-  };
   for (const [月, { 日, d }] of 月末) {
     if (!是月底(日) && 月 === 月末的月[月末的月.length - 1]) continue;
     const 有 = 當日契約項次.get(d) || new Set();

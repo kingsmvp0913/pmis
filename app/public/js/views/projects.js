@@ -4,6 +4,10 @@
 
   const STATUS_LABEL = { submitted: '已繳', overdue: '未繳', pending: '未到期' };
 
+  // 工程詳細頁與列表共用同一個 SPA 執行環境；把使用者選的狀態留在 view 層，
+  // 從詳細頁返回列表時就不會重設成「全部狀態」。重新整理頁面仍回預設值。
+  let listStatus = '';
+
   // ⋮ 下拉選單:目前開著的那顆(全域最多一顆)。.table-wrap 是 overflow-x:auto,
   // 依 CSS Overflow 規範另一軸沒設就會被算成 auto,等於雙軸捲動容器,
   // absolute 定位的選單包含塊被它裁掉(實測列表最後一列選單只剩 11px 可見)。
@@ -715,6 +719,7 @@
     const STATUSES = ['未開工', '施工中', '已竣工'];
     const statusSel = el('select', { class: 'form-control', style: 'width:auto' },
       [el('option', { value: '' }, '全部狀態'), ...STATUSES.map((s) => el('option', { value: s }, s))]);
+    statusSel.value = listStatus;
     content.appendChild(el('div', { class: 'toolbar' }, [
       search,
       statusSel,
@@ -770,7 +775,10 @@
     let timer;
     search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); });
     // 狀態與排序只動已載入的資料,不重打 API——搜尋字串沒變,重打只會多一次往返。
-    statusSel.addEventListener('change', paint);
+    statusSel.addEventListener('change', () => {
+      listStatus = statusSel.value;
+      paint();
+    });
 
     // 流程關卡。判定與 WorkflowStatus.bar 同一套語意(附件種類、契約項目數、
     // 日誌天數),不重寫一份規則——真正的把關仍在各自的後端路由。

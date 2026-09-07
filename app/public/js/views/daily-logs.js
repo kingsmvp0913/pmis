@@ -142,7 +142,12 @@ const DailyLogs = (() => {
       const all = FindingGroups.groupFindings(errors, warnings);
       if (!all.length) return;
       const updateDownload = () => {
-        issueDownloadBtn.style.display = all.some((f) => f.問題歸屬 === '辨識問題') ? '' : 'none';
+        const 有辨識問題 = all.some((f) => f.問題歸屬 === '辨識問題');
+        issueDownloadBtn.style.display = '';
+        issueDownloadBtn.disabled = !有辨識問題;
+        issueDownloadBtn.textContent = 有辨識問題
+          ? '下載辨識問題 ZIP'
+          : '下載辨識問題 ZIP（請先指定問題歸屬）';
       };
       const trs = all.map((f) => {
         const owner = el('select', { class: 'form-control issue-owner' }, [
@@ -174,6 +179,7 @@ const DailyLogs = (() => {
         ])),
         el('tbody', {}, trs),
       ]));
+      updateDownload();
 
       issueDownloadBtn.onclick = async () => {
         // 畫面可以分組，但交付辨識問題時要展開回每天一列，避免廠商漏掉範圍中的日期。
@@ -187,7 +193,7 @@ const DailyLogs = (() => {
         } catch (e) {
           showErr(e.message);
         } finally {
-          issueDownloadBtn.disabled = false;
+          updateDownload();
         }
       };
     }

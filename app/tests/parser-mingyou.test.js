@@ -17,10 +17,12 @@
 const fs = require('fs');
 const path = require('path');
 const mod = require('../server/parsers/vendors/samples/mingyou.pmisparser.js');
+const filetypes = require('../server/parsers/filetypes');
 
 const OCR = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'mingyou-ocr.json'), 'utf8'));
 // 注入假的檔型工具:讀取器只透過 ctx.filetypes 取檔型能力,這裡回快取的 OCR 輸出。
 const ctx = { filetypes: { extractItemsOcr: async () => OCR } };
+const EXCEL = path.join(__dirname, 'fixtures', 'mingyou.xlsm');
 
 // 發包後經費總表(SP2)的 35 項。項次/單位/數量抄自
 // `模板\發包後經費總表\龍井國小114-116年…_發包後經費總表.xlsm` 的「詳細價目表」。
@@ -116,6 +118,36 @@ describe('parseAll(龍井國小廁所,掃描件)', () => {
     const rows = days.flatMap((d) => d.dailyRows);
     expect(rows.every((r) => r.契約單價 === null)).toBe(true);
     expect(rows.every((r) => r.本日完成金額 === null)).toBe(true);
+  });
+});
+
+describe('parseAll(龍井國小廁所,廠商第二版 Excel)', () => {
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(EXCEL, { filetypes }); });
+
+  test('可獨立讀出 8/29 日誌與完整 35 項', () => {
+    expect(days).toHaveLength(1);
+    expect(days[0].header).toMatchObject({
+      工程名稱: '龍井國小114-116年公立國民中小學老舊廁所整修工程',
+      填報日期: '2026-08-29',
+      天氣_上午: '陰天',
+      天氣_下午: '陰天',
+      預定進度: 9.87,
+      實際進度: 11.3,
+      承包廠商: '銘佑營造有限公司',
+      開工日期: '2026-07-29',
+    });
+    expect(days[0].dailyRows).toHaveLength(35);
+    expect(days[0].dailyRows.map((r) => [r.項次, r.單位, r.契約數量])).toEqual(契約);
+  });
+
+  test('Excel 沒有單價與金額欄，不回推', () => {
+    expect(days[0].dailyRows.every((r) => r.契約單價 === null && r.本日完成金額 === null)).toBe(true);
+  });
+
+  test('人員區止於第四項，不會把段落標題收成工別', () => {
+    expect(days[0].extras.出工明細.map((x) => x.工別))
+      .toEqual(['工程師', '小工', '鋼筋工', '模板工', '技工']);
   });
 });
 

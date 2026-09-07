@@ -76,6 +76,13 @@ function unitOf(grid, r) {
   return KNOWN_UNITS.has(s) ? s : null;                 // 白名單,不逐字收
 }
 
+const unitText = (v) => {
+  const s = text(v);
+  if (s == null) return null;
+  const n = String(s).normalize('NFKC').trim();
+  return KNOWN_UNITS.has(n) ? n : null;
+};
+
 /**
  * 解析一天(純函式;selfTest 重用之)。
  * @param {Array<Array>} grid `施工` 分頁
@@ -164,12 +171,196 @@ function blockStarts(grid) {
   return out;
 }
 
+// ── 外埔 Excel：橫向逐日資料 ───────────────────────────────
+// 「日誌」只顯示目前選取的一天；完整資料在「數量表」(每欄一天)與「出工表」(每列一天)。
+function parseHorizontalWorkbook(wb, serialToISO) {
+  const qty = wb.sheets['數量表'];
+  const crew = wb.sheets['出工表'];
+  if (!qty || !crew || despace(at(qty, 3, 3)) !== '日期') {
+    throw new Error('找不到「數量表/出工表」逐日資料(此檔非阿奎外埔格式)');
+  }
+  const itemRows = [];
+  for (let r = 12; r < qty.length; r++) {
+    const no = text(at(qty, r, 0));
+    const name = text(at(qty, r, 1));
+    if (no && name && /^(?:\d+|[貳參肆伍陸柒])$/.test(no)) itemRows.push(r);
+  }
+
+  const days = [];
+  for (let c = 4; c < (qty[3] || []).length; c++) {
+    const dateSerial = numOf(at(qty, 3, c));
+    const cr = c - 3;
+    const crewValues = crew[cr] || [];
+    const hasCrewData = crewValues.slice(1).some((v) => text(v) != null);
+    const hasQuantity = itemRows.some((r) => numOf(at(qty, r, c)) != null);
+    if (dateSerial == null || (!hasCrewData && !hasQuantity)) continue;
+
+    const dailyRows = itemRows.map((r) => {
+      let cumulative = 0;
+      let hasCumulative = false;
+      for (let k = 4; k <= c; k++) {
+        const n = numOf(at(qty, r, k));
+        if (n != null) { cumulative += n; hasCumulative = true; }
+      }
+      return {
+        項次: text(at(qty, r, 0)),
+        工程項目: text(at(qty, r, 1)),
+        單位: unitText(at(qty, r, 3)),
+        契約單價: null,
+        契約數量: numOf(at(qty, r, 2)),
+        本日完成數量: numOf(at(qty, r, c)),
+        本日完成金額: null,
+        累計完成數量: hasCumulative ? cumulative : null,
+      };
+    });
+
+    const 出工明細 = [];
+    for (let k = 3; k <= 5; k++) {
+      const 工別 = text(at(crew, 0, k));
+      if (工別) 出工明細.push({ 工別, 人數: numOf(at(crew, cr, k)) });
+    }
+    const 主要機具 = [];
+    for (const k of [7, 8, 9, 11, 12, 13]) {
+      const 名稱 = text(at(crew, 0, k));
+      if (名稱) 主要機具.push({ 名稱, 數量: numOf(at(crew, cr, k)) });
+    }
+    const 有人數 = 出工明細.filter((x) => x.人數 != null);
+    days.push({
+      header: {
+        工程名稱: text(at(qty, 0, 1)),
+        填報日期: serialToISO(dateSerial),
+        星期: text(at(qty, 4, c)),
+        天氣_上午: text(at(crew, cr, 1)),
+        天氣_下午: text(at(crew, cr, 2)),
+        預定進度: numOf(at(qty, 8, c)),
+        實際進度: numOf(at(qty, 9, c)),
+        出工總人數: 有人數.length ? 有人數.reduce((sum, x) => sum + x.人數, 0) : null,
+        本日累計金額: null,
+        承包廠商: text(at(qty, 8, 1)),
+        開工日期: serialToISO(numOf(at(qty, 4, 1))),
+      },
+      dailyRows,
+      extras: { 出工明細, 主要機具 },
+    });
+  }
+  if (!days.length) throw new Error('「數量表/出工表」沒有已填寫的施工日誌');
+  return days;
+}
+
+// ── 外埔 PDF：工程會標準日誌，每天兩頁 ─────────────────────
+const PDF_ITEM_NO = /^(?:\d{1,2}|[貳參肆伍陸柒])$/;
+
+function rocTextToISO(v) {
+  const m = /(\d{2,4})年(\d{1,2})月(\d{1,2})日/.exec(despace(v));
+  if (!m) return null;
+  const year = Number(m[1]) < 1911 ? Number(m[1]) + 1911 : Number(m[1]);
+  return `${year}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`;
+}
+
+const pdfJoin = (items) => items.slice().sort((a, b) => (Math.abs(a.y - b.y) > 1 ? b.y - a.y : a.x - b.x))
+  .map((i) => String(i.s || '').trim()).filter(Boolean).join('');
+
+function parsePdfHeader(items) {
+  const dateLine = pdfJoin(items.filter((i) => i.y > 795 && i.x > 420));
+  const weather = pdfJoin(items.filter((i) => i.y > 795 && i.y < 805 && i.x > 140 && i.x < 240));
+  const progress = pdfJoin(items.filter((i) => i.y > 758 && i.y < 766 && i.x < 470));
+  const pm = /預定進度\(%\)([\d.]+)%/.exec(progress);
+  const am = /實際進度\(%\)([\d.]+)%/.exec(progress);
+  const wm = /上午:(.{1,3})下午:(.{1,3})/.exec(despace(weather));
+  const name = pdfJoin(items.filter((i) => i.y > 787 && i.y < 794 && i.x > 160 && i.x < 420));
+  const vendor = pdfJoin(items.filter((i) => i.y > 787 && i.y < 794 && i.x > 470));
+  const startLine = pdfJoin(items.filter((i) => i.y > 768 && i.y < 775 && i.x < 370));
+  return {
+    工程名稱: text(name),
+    填報日期: rocTextToISO(dateLine),
+    星期: ((/[（(](?:週|星期)(.)[）)]/.exec(dateLine) || [])[1]) || null,
+    天氣_上午: wm ? text(wm[1]) : null,
+    天氣_下午: wm ? text(wm[2]) : null,
+    // Excel 原稿存比例(0.0065)，PDF 印百分數(0.65%)；同一家兩載體統一回比例。
+    預定進度: pm ? Number(pm[1]) / 100 : null,
+    實際進度: am ? Number(am[1]) / 100 : null,
+    出工總人數: null,
+    本日累計金額: null,
+    承包廠商: text(vendor),
+    開工日期: rocTextToISO(startLine),
+  };
+}
+
+function parsePdfMainPage(items) {
+  const anchors = items.filter((i) => i.y > 130 && i.y < 735 && i.x > 60 && i.x < 100
+    && PDF_ITEM_NO.test(String(i.s || '').trim())).sort((a, b) => b.y - a.y);
+  if (!anchors.length) return null;
+  const dailyRows = anchors.map((anchor, index) => {
+    const hi = index === 0 ? 735 : (anchors[index - 1].y + anchor.y) / 2;
+    const lo = index === anchors.length - 1 ? 130 : (anchor.y + anchors[index + 1].y) / 2;
+    const zone = items.filter((i) => i.y < hi && i.y >= lo);
+    const value = (from, to) => numOf(pdfJoin(zone.filter((i) => i.x >= from && i.x < to)));
+    return {
+      項次: String(anchor.s).trim(),
+      工程項目: text(pdfJoin(zone.filter((i) => i.x >= 95 && i.x < 330))),
+      單位: unitText(pdfJoin(zone.filter((i) => i.x >= 330 && i.x < 370))),
+      契約單價: null,
+      契約數量: value(370, 423),
+      本日完成數量: value(423, 476),
+      本日完成金額: null,
+      累計完成數量: value(476, 530),
+    };
+  }).filter((r) => r.工程項目);
+  return { header: parsePdfHeader(items), dailyRows, extras: {} };
+}
+
+function parsePdfSupplement(items) {
+  const header = parsePdfHeader(items);
+  const rows = [676.5, 667.9, 659.3];
+  const near = (y, from, to) => pdfJoin(items.filter((i) => Math.abs(i.y - y) < 1.2 && i.x >= from && i.x < to));
+  const 出工明細 = rows.map((y) => ({ 工別: text(near(y, 50, 100)), 人數: numOf(near(y, 100, 150)) }))
+    .filter((x) => x.工別);
+  const 主要機具 = rows.map((y) => ({ 名稱: text(near(y, 365, 420)), 數量: numOf(near(y, 420, 470)) }))
+    .filter((x) => x.名稱);
+  const 有人數 = 出工明細.filter((x) => x.人數 != null);
+  return {
+    date: header.填報日期,
+    extras: { 出工明細, 主要機具 },
+    出工總人數: 有人數.length ? 有人數.reduce((sum, x) => sum + x.人數, 0) : null,
+  };
+}
+
+async function parsePdfAll(filePath, ft) {
+  const pages = await ft.extractItems(filePath);
+  const days = [];
+  const byDate = new Map();
+  for (const page of pages) {
+    const items = page.items || page;
+    const day = parsePdfMainPage(items);
+    if (day && day.header.填報日期 && day.dailyRows.length) {
+      days.push(day);
+      byDate.set(day.header.填報日期, day);
+      continue;
+    }
+    const extra = parsePdfSupplement(items);
+    const target = byDate.get(extra.date);
+    if (target) {
+      target.extras = extra.extras;
+      target.header.出工總人數 = extra.出工總人數;
+    }
+  }
+  if (!days.length) throw new Error('PDF 裡找不到阿奎施工日誌明細');
+  return days;
+}
+
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
+  if (/\.pdf$/i.test(String(filePath))) {
+    if (!ft || typeof ft.extractItems !== 'function') throw new Error('缺少注入的 filetypes.extractItems');
+    return parsePdfAll(filePath, ft);
+  }
   if (!ft || typeof ft.readWorkbook !== 'function') {
     throw new Error('缺少注入的 filetypes.readWorkbook');
   }
   const wb = ft.readWorkbook(filePath);
+  if (wb.sheets['數量表'] && wb.sheets['出工表']) {
+    return parseHorizontalWorkbook(wb, ft.excelSerialToISO);
+  }
   const grid = wb.sheets[SHEET];
   const starts = grid ? blockStarts(grid) : [];
   if (!starts.length) {
@@ -236,7 +427,7 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',
@@ -246,5 +437,8 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parseDay, blockStarts, numInSpan, unitOf },
+  _internal: {
+    parseDay, blockStarts, numInSpan, unitOf, parseHorizontalWorkbook,
+    parsePdfMainPage, parsePdfSupplement,
+  },
 };
