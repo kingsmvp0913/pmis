@@ -179,6 +179,10 @@ const squash = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[\s�
 // D5 的目的在於確認「是否有這一項」，不是審核標點。PDF 文字層常把全半形
 // 標點、括號與換行轉成不同字元；只移除標點後仍須是唯一名稱才允許對應。
 const looseName = (s) => squash(s).replace(/[、，,;；:：()（）\[\]【】]/g, '');
+// 工程會表單與契約詳細價目表對同一筆保險費有兩種固定名稱；橋頭日誌寫
+// 「營造綜合保險費」，契約表寫「營造業綜合保險費」。只正規化這個已確認別名，
+// 不做一般性的刪字或模糊比對，避免把不同施工項目錯接在一起。
+const matchName = (s) => looseName(s).replace(/營造業綜合保險費/g, '營造綜合保險費');
 
 // 項次比對用的正規化。除了 squash,還要把**中文數字大寫的異體字**折成同一個字:
 // 同一個工程的兩份文件會各寫各的(實測宜謙:發包後經費總表寫「参」U+53C2、
@@ -366,7 +370,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     const key = squash(c.項目);
     if (!key) continue;
     contractByName.set(key, contractByName.has(key) ? null : c); // 撞名則標記為不可用
-    const loose = looseName(c.項目);
+    const loose = matchName(c.項目);
     if (loose) contractByLooseName.set(loose, contractByLooseName.has(loose) ? null : c);
   }
   const seenItemNos = new Set();
@@ -454,7 +458,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       let 依名稱對應 = false;
       if (項次 != null && contract.length && !isBlank(r.工程項目)) {
         const byName = contractByName.get(squash(r.工程項目))
-          || contractByLooseName.get(looseName(r.工程項目));
+          || contractByLooseName.get(matchName(r.工程項目));
         if (byName && (!c || squash(r.工程項目) !== squash(c.項目))) {
           c = byName;
           依名稱對應 = true;
@@ -540,8 +544,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         cumAmount.set(狀態項次, 累計金額);
         const 筆數 = (amountTerms.get(狀態項次) || 0) + 1;
         amountTerms.set(狀態項次, 筆數);
+        // 恰好等於 0.5 × 筆數仍在逐筆四捨五入的理論上限內；浮點乘法另留極小誤差。
         if (累計量 != null && 單價 != null
-          && Math.abs(累計金額 - 累計量 * 單價) >= 0.5 * 筆數) {
+          && Math.abs(累計金額 - 累計量 * 單價) > 0.5 * 筆數 + 1e-6) {
           // 費用項目(貳~陸)的「完成數量」是**完成比例**而非數量(金大實測:貳的
           // 本日完成數量 0.003、金額 45,而 0.003×15996≈48),金額由廠商按自己的
           // 計價基準算,與「數量×單價」本來就不相乘。判硬錯會生出 317 個假警報,

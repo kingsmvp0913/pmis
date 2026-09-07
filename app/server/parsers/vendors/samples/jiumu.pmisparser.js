@@ -404,6 +404,34 @@ function parsePdfItemRows(rows) {
   if (!header) return [];
   const unitHeader = header.items.find((item) => squash(item.s) === '單位');
   const dx = unitHeader ? unitHeader.x - 231.6 : 0;
+  // 新版工程會 PDF 會重新分配後四個數值欄的寬度，不能把「單位」欄的位移量
+  // 套到所有欄。直接以兩組合併表頭的起點與中點切欄；舊版／精簡測試沒有這些
+  // 表頭 item 時才沿用既有座標。
+  const quantityHeader = header.items.find((item) => {
+    const s = squash(item.s);
+    return s.includes('本日完成數量') && s.includes('累計完成數量');
+  });
+  const combinedAmountHeader = header.items.find((item) => {
+    const s = squash(item.s);
+    return s.includes('本日完成金額') && s.includes('累計完成金額');
+  });
+  const todayAmountHeader = header.items.find((item) => squash(item.s) === '本日完成金額');
+  const cumulativeAmountHeader = todayAmountHeader && header.items.find((item) => (
+    item.x > todayAmountHeader.x && squash(item.s).startsWith('累計完成')
+  ));
+  const quantityMid = quantityHeader && Number.isFinite(quantityHeader.w)
+    ? quantityHeader.x + quantityHeader.w / 2 : 395 + dx;
+  const amountFrom = todayAmountHeader ? todayAmountHeader.x
+    : (combinedAmountHeader ? combinedAmountHeader.x : 434 + dx);
+  const amountMid = cumulativeAmountHeader ? cumulativeAmountHeader.x
+    : (combinedAmountHeader && Number.isFinite(combinedAmountHeader.w)
+      ? combinedAmountHeader.x + combinedAmountHeader.w / 2 : 472 + dx);
+  const columns = {
+    本日數量起: quantityHeader ? quantityHeader.x : 367 + dx,
+    累計數量起: quantityMid,
+    本日金額起: amountFrom,
+    累計金額起: amountMid,
+  };
   const nameFrom = 65 + dx;
   const nameTo = 231 + dx;
   const unitFrom = 230 + dx;
@@ -479,9 +507,9 @@ function parsePdfItemRows(rows) {
       單位: pdfUnit({ items: anchor.valueItems.map((item) => ({ ...item, x: item.x - dx })) }),
       契約單價: pdfFirstNum(pdfBetween(valueRow, 290 + dx, 333 + dx)),
       契約數量: pdfFirstNum(pdfBetween(valueRow, 250 + dx, 290 + dx)),
-      本日完成數量: pdfFirstNum(pdfBetween(valueRow, 367 + dx, 406 + dx)),
-      本日完成金額: pdfFirstNum(pdfBetween(valueRow, 434 + dx, 472 + dx)),
-      累計完成數量: pdfFirstNum(pdfBetween(valueRow, 406 + dx, 434 + dx)),
+      本日完成數量: pdfFirstNum(pdfBetween(valueRow, columns.本日數量起, columns.累計數量起)),
+      本日完成金額: pdfFirstNum(pdfBetween(valueRow, columns.本日金額起, columns.累計金額起)),
+      累計完成數量: pdfFirstNum(pdfBetween(valueRow, columns.累計數量起, columns.本日金額起)),
     };
   });
 }
@@ -645,7 +673,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.1.0',
+    version: '1.2.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',
