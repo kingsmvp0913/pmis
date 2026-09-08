@@ -498,6 +498,28 @@ test('E3 標點的全形/半形差異不算名稱不一致', () => {
   expect(wcodes(r)).not.toContain('E3');
 });
 
+test.each([
+  ['30', '地坪貼止滑石英磚30cm*30cm，本色水泥勾縫(連工帶料)'],
+  ['60', '地坪貼60cm*60cm止滑石英磚，本色水泥勾縫(連工帶料)'],
+])('E3 尺寸 %scm 的單位與固定詞序差異視為一致', (size, contractName) => {
+  const c = [{
+    項次: '1',
+    項目: contractName,
+    單位: 'M2',
+    數量: 1,
+    單價: 100,
+  }];
+  const r = validateDailyLog({
+    days: [day('2026-09-01', [row('1', {
+      工程項目: `地坪貼止滑石英磚${size}*${size}cm,本色水泥勾縫(連工帶料)`,
+      單位: 'M2',
+    })])],
+    contract: c,
+    project: PROJECT,
+  });
+  expect(wcodes(r)).not.toContain('E3');
+});
+
 // 名稱對應是項次對不上時唯一的退路,它也必須吃得下標點差異,否則等於沒有退路
 test('E1 名稱對應也套用同一套正規化', () => {
   const c = [{ 項次: '貳', 項目: '職業安全衛生管理費(壹*1%)', 單位: '式', 數量: 1, 單價: 100 }];

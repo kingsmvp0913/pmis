@@ -176,9 +176,16 @@ const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 // **刻意不自行統一「、」與「,」**:那兩個在中文裡語意不同(頓號列舉 vs 逗號分句),
 // 硬統一是把一種誤判換成另一種。實測也顯示多做這層沒有額外效益。
 const squash = (s) => String(s == null ? '' : s).normalize('NFKC').replace(/[\s　]/g, '');
+// 尺寸的單位可能每邊都寫一次（30cm*30cm），也可能只標在末邊（30*30cm）。
+// 東榮同一項另有「地坪貼60cm*60cm止滑石英磚」與「地坪貼止滑石英磚60*60cm」
+// 的固定詞序差異。只在施工項目名稱比對時統一；工程名、廠商名與單位欄不套用。
+const itemNameKey = (s) => squash(s)
+  .replace(/(\d+(?:\.\d+)?)(mm|cm|m)\*(\d+(?:\.\d+)?)\2/gi, '$1*$3$2')
+  .replace(/地坪貼(\d+(?:\.\d+)?\*\d+(?:\.\d+)?(?:mm|cm|m))止滑石英磚/gi,
+    '地坪貼止滑石英磚$1');
 // D5 的目的在於確認「是否有這一項」，不是審核標點。PDF 文字層常把全半形
 // 標點、括號與換行轉成不同字元；只移除標點後仍須是唯一名稱才允許對應。
-const looseName = (s) => squash(s).replace(/[、，,;；:：()（）\[\]【】]/g, '');
+const looseName = (s) => itemNameKey(s).replace(/[、，,;；:：()（）\[\]【】]/g, '');
 // 工程會表單與契約詳細價目表對同一筆保險費有兩種固定名稱；橋頭日誌寫
 // 「營造綜合保險費」，契約表寫「營造業綜合保險費」。只正規化這個已確認別名，
 // 不做一般性的刪字或模糊比對，避免把不同施工項目錯接在一起。
@@ -390,7 +397,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   const contractByName = new Map();
   const contractByLooseName = new Map();
   for (const c of contract) {
-    const key = squash(c.項目);
+    const key = itemNameKey(c.項目);
     if (!key) continue;
     contractByName.set(key, contractByName.has(key) ? null : c); // 撞名則標記為不可用
     const loose = matchName(c.項目);
@@ -480,9 +487,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // 項目開始便整體差一格。若先相信撞到的項次，會把品質管制費拿去比職安費。
       let 依名稱對應 = false;
       if (項次 != null && contract.length && !isBlank(r.工程項目)) {
-        const byName = contractByName.get(squash(r.工程項目))
+        const byName = contractByName.get(itemNameKey(r.工程項目))
           || contractByLooseName.get(matchName(r.工程項目));
-        if (byName && (!c || squash(r.工程項目) !== squash(c.項目))) {
+        if (byName && (!c || itemNameKey(r.工程項目) !== itemNameKey(c.項目))) {
           c = byName;
           依名稱對應 = true;
         }
@@ -505,7 +512,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         if (依名稱對應) {
           soft('E1', 日期, 項次, `項次與契約表不同(契約表為「${c.項次}」),已依項目名稱對應`);
         }
-        if (squash(r.工程項目) !== squash(c.項目)) {
+        if (itemNameKey(r.工程項目) !== itemNameKey(c.項目)) {
           soft('E3', 日期, 項次, `項目名稱與契約表不一致(契約表:${c.項目})`);
         }
         if (!isBlank(r.單位) && squash(r.單位) !== squash(c.單位)) {
