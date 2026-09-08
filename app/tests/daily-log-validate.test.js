@@ -1180,6 +1180,7 @@ describe('D5 當月最後一天要有完整明細', () => {
       project: PROJECT,
     });
     expect(codes(r)).not.toContain('D5');
+    expect(r.warnings.filter((w) => w.code === 'E2')).toHaveLength(0);
   });
 
   test('PDF 標點與括號差異時不誤判月末缺項', () => {

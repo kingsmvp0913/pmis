@@ -487,10 +487,15 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
           依名稱對應 = true;
         }
       }
-      // 這一列到底涵蓋到哪個契約項次:對得上契約就記契約的編號,對不上就記自己的。
-      // D5 靠這個集合判斷月末清單完不完整。
-      if (c) 本日項次.add(normNo(c.項次));
-      else if (項次 != null) 本日項次.add(normNo(項次));
+      // 這一列到底涵蓋到哪個契約項次：對得上契約就記契約的編號，對不上就記自己的。
+      // D5 靠每日集合判斷月末清單；E2 靠整期集合判斷契約項目是否曾出現。
+      if (c) {
+        const 契約項次 = normNo(c.項次);
+        本日項次.add(契約項次);
+        seenItemNos.add(契約項次);
+      } else if (項次 != null) {
+        本日項次.add(normNo(項次));
+      }
 
       if (項次 != null && contract.length && !c) {
         hard('E1', 日期, 項次, '此項次在契約詳細價目表中不存在');
@@ -499,9 +504,6 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         // 名稱唯一相同已足以確認是同一項,擋下來只會讓整份日誌無法歸檔。
         if (依名稱對應) {
           soft('E1', 日期, 項次, `項次與契約表不同(契約表為「${c.項次}」),已依項目名稱對應`);
-          // 對應成功代表這個契約項目其實有出現,只是編號不同。不補記的話
-          // E2 會再補一刀「整期未出現」,同一件事被判錯兩次。
-          seenItemNos.add(normNo(c.項次));
         }
         if (squash(r.工程項目) !== squash(c.項目)) {
           soft('E3', 日期, 項次, `項目名稱與契約表不一致(契約表:${c.項目})`);
