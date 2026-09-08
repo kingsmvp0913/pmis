@@ -87,7 +87,7 @@ function 本機請求(req) {
  * 作法同 scripts/start.js 開瀏覽器那一段(這是本機執行的桌面型工具)。
  */
 function 開啟資料夾(dir) {
-  if (process.platform !== 'win32') return;
+  if (process.platform !== 'win32' || process.env.NODE_ENV === 'test') return;
   try {
     require('child_process')
       .spawn('explorer', [dir], { detached: true, stdio: 'ignore' })

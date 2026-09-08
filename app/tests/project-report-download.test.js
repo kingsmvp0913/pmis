@@ -3,6 +3,7 @@ process.env.JWT_SECRET = 'test-secret';
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const childProcess = require('child_process');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-repdl-'));
 // ⚠️ 必須在 require 之前:report-workbook 在 module load 時就把資料根算好,
 // 晚一步設定會把報表寫進正式 data/。
@@ -54,7 +55,10 @@ const filenameStar = (res) => {
   return m ? decodeURIComponent(m[1]) : null;
 };
 
-afterEach(() => { db._setPoolForTesting(null); });
+afterEach(() => {
+  jest.restoreAllMocks();
+  db._setPoolForTesting(null);
+});
 afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ } });
 
 test('未帶 token 回 401', async () => {
@@ -115,6 +119,10 @@ test('工程名含檔名非法字元時清掉再當檔名', async () => {
 // 「列印PDF」按鈕按下去只會得到「無法執行巨集…或者已停用所有巨集」。
 // 由**伺服器在本機寫檔**就沒有這個標記(標記是瀏覽器加的,不是檔案內容)。
 test('存到本機:寫出檔案並回絕對路徑', async () => {
+  const spawn = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+    on() { return this; },
+    unref() {},
+  });
   const { app, token, id } = await makeApp();
   putWorkbook(id, 'xlsm-bytes');
   const res = await request(app).post(`/api/projects/${id}/report/save-local`)
@@ -123,6 +131,7 @@ test('存到本機:寫出檔案並回絕對路徑', async () => {
   expect(fs.existsSync(res.body.path)).toBe(true);
   expect(fs.readFileSync(res.body.path, 'utf8')).toBe('xlsm-bytes');
   expect(path.basename(res.body.path)).toBe('竹崎圍牆工程_監造報表.xlsm');
+  expect(spawn).not.toHaveBeenCalled();
 });
 
 test('存到本機:報表還沒建立時回 409 並說要先做什麼', async () => {
