@@ -17,13 +17,16 @@ const StatusBoard = (() => {
   // 竣工日進入這個天數內就整列標色。使用者要的是「剩下 10 天」。
   const DUE_SOON_DAYS = 10;
 
-  const fmtDate = (v) => (v ? String(v).slice(0, 10) : '—');
-  const dateValue = (v) => (v ? String(v).slice(0, 10) : '');
+  // projects 的 DATE 欄位經 node-pg/JSON 後會帶 UTC 時間；直接截前 10 碼會讓
+  // 台灣日期少一天。顯示、工期計算與編輯欄必須共用 app.js 的日期轉換。
+  const dateValue = (v) => PmisApp.toDateInputValue(v);
+  const fmtDate = (v) => dateValue(v) || '—';
 
   /** 剩餘工期。過期回負數,呼叫端自己決定怎麼標。 */
   function daysLeft(contractEnd) {
-    if (!contractEnd) return null;
-    const end = new Date(String(contractEnd).slice(0, 10) + 'T00:00:00');
+    const day = dateValue(contractEnd);
+    if (!day) return null;
+    const end = new Date(day + 'T00:00:00');
     if (isNaN(end.getTime())) return null;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
