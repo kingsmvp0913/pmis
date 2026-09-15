@@ -83,6 +83,7 @@ async function main() {
   const missing = [];   // 每個「非大類列但缺必要欄位」的位置
   let totalRows = 0;
   const headerMissing = {};
+  const 無財務欄日期 = new Set();
   // 某欄位在**所有明細列**都缺 = 這個格式不提供該欄(富森就沒有契約單價),
   // 不是讀取器讀不到。判準與 SP3 一致:整份缺→格式限制,部分缺→才是漏讀。
   // 不分這兩者的話,富森會被報成「100% 缺漏」而看不出真正有問題的列。
@@ -110,13 +111,18 @@ async function main() {
   const checkFields = REQUIRED_ROW_FIELDS.filter((f) => !absentFields.includes(f));
   for (const d of days) {
     const h = d.header || {};
+    const 當日明細 = (d.dailyRows || []).filter((r) => !isCategoryRow(r));
+    const 當日無財務欄 = 當日明細.length > 0
+      && 當日明細.every((r) => r.契約單價 == null && r.本日完成金額 == null);
+    if (當日無財務欄) 無財務欄日期.add(h.填報日期);
     for (const [k, v] of Object.entries(h)) {
       if (v == null || v === '') headerMissing[k] = (headerMissing[k] || 0) + 1;
     }
     for (const r of d.dailyRows || []) {
       if (isCategoryRow(r)) continue;
       totalRows++;
-      const lack = checkFields.filter((f) => (r[f] == null || r[f] === '')
+      const lack = checkFields.filter((f) => !(f === '契約單價' && 當日無財務欄)
+        && (r[f] == null || r[f] === '')
         && !(f === '契約數量' && absentQtyItems.has(String(r.項次))));
       if (lack.length) {
         missing.push({ 日期: h.填報日期, 項次: r.項次, 工程項目: r.工程項目, 缺: lack });
@@ -130,6 +136,9 @@ async function main() {
   }
   if (absentQtyItems.size) {
     console.log(`  項目未提供契約數量:${[...absentQtyItems].join('、')}(跨多天皆空,已排除於缺漏統計外)`);
+  }
+  if (無財務欄日期.size) {
+    console.log(`  頁型未提供契約單價:${[...無財務欄日期].filter(Boolean).join('、')}(當日整頁無財務欄,已排除於缺漏統計外)`);
   }
   console.log(`明細列 ${totalRows} 列,缺必要欄位 ${missing.length} 列 ` +
     `(${totalRows ? (missing.length / totalRows * 100).toFixed(1) : 0}%)`);

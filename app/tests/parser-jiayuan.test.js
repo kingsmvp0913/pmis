@@ -11,6 +11,7 @@ const mod = require('../server/parsers/vendors/samples/jiayuan.pmisparser.js');
 const filetypes = require('../server/parsers/filetypes');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'jiayuan.pdf');
+const SEPTEMBER_FIXTURE = path.join(__dirname, 'fixtures', 'jiayuan-september.pdf');
 const ctx = { filetypes };
 
 test('selfTest 通過', () => {
@@ -125,6 +126,32 @@ describe('parseAll(民生球場 4 月)', () => {
   test('續頁的註腳不會變成一列明細', () => {
     const d = days.find((x) => x.header.填報日期 === '2025-04-30');
     expect(d.dailyRows.some((r) => /本日完成進度/.test(String(r.工程項目)))).toBe(false);
+  });
+});
+
+describe('parseAll(新光球場 9 月混合頁型)', () => {
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(SEPTEMBER_FIXTURE, ctx); }, 180000);
+
+  test('讀出 9 月 1 日至 15 日，並收回跨行工程名稱', () => {
+    expect(days).toHaveLength(15);
+    expect(days[0].header.填報日期).toBe('2026-09-01');
+    expect(days[14].header.填報日期).toBe('2026-09-15');
+    expect(days[0].header.工程名稱).toBe(
+      'Danas-E-05-01-012雲林縣新光國小災後風雨教室綜合球場地坪破損修復災後復建工程'
+    );
+  });
+
+  test('一般頁的截斷名稱以同檔完整明細頁補齊，但不補不存在的財務欄', () => {
+    const dates = ['2026-09-04', '2026-09-05', '2026-09-07', '2026-09-11'];
+    for (const date of dates) {
+      const r = days.find((d) => d.header.填報日期 === date).dailyRows.find((x) => x.項次 === '7');
+      expect(r.工程項目).toBe('鋪設3mm壓克力面層(含地面坑洞裂縫切V槽清潔,以樹脂砂漿修補整平)');
+      expect(r.契約單價).toBeNull();
+      expect(r.本日完成金額).toBeNull();
+    }
+    const r8 = days.find((d) => d.header.填報日期 === '2026-09-14').dailyRows.find((r) => r.項次 === '8');
+    expect(r8).toMatchObject({ 工程項目: '球場畫線', 契約單價: null, 本日完成金額: null });
   });
 });
 

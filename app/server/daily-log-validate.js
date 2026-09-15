@@ -454,6 +454,10 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       hard('A9', 日期, null,
         '這一天的明細只有項目名稱,沒有單位也沒有數量,無法核對進度');
     }
+    // 同一份 PDF 可能混有兩種頁型：一般日誌頁完全沒有單價／金額欄，只有少數
+    // 完整明細頁提供財務欄。不能因為整份檔案曾出現過金額，就把一般頁的空值
+    // 當成廠商漏填。以當日所有明細列判斷該頁型是否提供財務欄。
+    const 當日提供財務欄 = 明細列.some((r) => num(r.契約單價) != null || num(r.本日完成金額) != null);
 
     for (const r of d.dailyRows || []) {
       if (isCategoryRow(r)) continue;
@@ -537,7 +541,14 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       const 契約量 = num(r.契約數量);
 
       if (本日量 != null && 本日量 > 0 && 本日金額 == null && !skippedCodes.has('B3')) {
-        hard('A8', 日期, 項次, '本日有施工,但本日完成金額讀不到');
+        if (當日提供財務欄) {
+          hard('A8', 日期, 項次, '本日有施工,但本日完成金額讀不到');
+        } else {
+          skipped.push({
+            code: 'A8', 日期, 項次,
+            原因: '此日頁面不提供單價與本日完成金額欄位,無從確認是否漏填,已跳過此項檢查',
+          });
+        }
       }
 
       // B2 累計 = 前一日累計 + 本日完成

@@ -149,6 +149,13 @@ function parsePage(items, 寬鬆) {
   const nb = bandWith(all, /^工程名稱$/);
   const pb = bandWith(all, /^累計預定進度/);
   const sb = bandWith(all, /^開工日期$/);
+  const nameLabel = find(/^工程名稱$/);
+  const vendorLabel = find(/^承攬廠商名稱$/);
+  const projectName = nameLabel && vendorLabel ? text(items
+    .filter((it) => it !== nameLabel && it.x >= nameLabel.x + (nameLabel.w || 0) - 1
+      && it.x < vendorLabel.x && Math.abs(it.y - nameLabel.y) <= 5)
+    .sort((a, b) => b.y - a.y || a.x - b.x)
+    .map((it) => it.s).join('')) : null;
 
   const dateText = wb ? (bandText(wb).match(/民國?\s*\d{2,4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/) || [])[0] : null;
   const week = wb ? (bandText(wb).match(/星期[一二三四五六日天]/) || [])[0] : null;
@@ -223,7 +230,7 @@ function parsePage(items, 寬鬆) {
 
   return {
     header: {
-      工程名稱: pick(nb, /^工程名稱$/, /^承攬廠商名稱$/),
+      工程名稱: projectName || pick(nb, /^工程名稱$/, /^承攬廠商名稱$/),
       填報日期: rocTextToISO(dateText),
       星期: week || null,
       // pick 是「找到剛好等於標籤的 item,取它到下一個標籤之間」,而 OCR 併框之後
@@ -357,6 +364,7 @@ async function parseAll(filePath, ctx) {
   const 放寬 = (items) => items.some((it) => /^表單編號[:：]?/.test(despace(it.s)));
   // 續頁也帶「表單編號:」,先挑出來,免得被當成「沒有日期的一天」丟掉
   const 續頁 = new Map();                                  // 表單編號 → 續頁明細
+  const 完整名稱 = new Map();                              // 項次 → 同檔完整明細頁的名稱
   // ⚠️ 不可以取「陣列裡的下一個 item」:抽出來的順序不保證是閱讀序,續頁實測
   // 標籤的下一個 item 是「合約項次」而不是編號。改成取同一帶、右邊最近的那個。
   const 編號 = (items) => {
@@ -370,7 +378,14 @@ async function parseAll(filePath, ctx) {
   for (const p of pages) {
     const items = p.items || [];
     const cont = 嚴格(items) ? parseContinuation(items) : null;
-    if (cont) 續頁.set(編號(items), cont);
+    if (cont) {
+      續頁.set(編號(items), cont);
+      for (const r of cont.dailyRows) {
+        if (r.項次 == null || r.工程項目 == null) continue;
+        const old = 完整名稱.get(String(r.項次));
+        if (old == null || r.工程項目.length > old.length) 完整名稱.set(String(r.項次), r.工程項目);
+      }
+    }
     else 一般頁.push(p);
   }
   let 日誌頁 = 一般頁.filter((p) => 嚴格(p.items || []));
@@ -384,6 +399,12 @@ async function parseAll(filePath, ctx) {
       d.dailyRows = c.dailyRows;
       if (c.本日累計金額 != null) d.header.本日累計金額 = c.本日累計金額;
     }
+    // 一般頁的窄儲存格可能只印出名稱前半段；完整明細頁有同項次的完整文字。
+    // 只在完整名稱確實以短名稱開頭時補齊，避免用項次覆蓋不同內容。
+    d.dailyRows = d.dailyRows.map((r) => {
+      const full = r.項次 == null ? null : 完整名稱.get(String(r.項次));
+      return full && r.工程項目 && full.startsWith(r.工程項目) ? { ...r, 工程項目: full } : r;
+    });
     return d;
   });
   if (!days.length) throw new Error('找不到「表單編號」頁(此檔非嘉原格式)');
@@ -470,7 +491,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',

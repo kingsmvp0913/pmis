@@ -183,6 +183,22 @@ test('A8 沒施工的日子不觸發', () => {
   expect(codes(r)).not.toContain('A8');
 });
 
+// 嘉原的新光日誌同檔混有兩種頁型：一般日誌頁沒有單價／金額欄，少數完整明細頁
+// 才有。只看整份是否曾出現金額，會把一般頁誤判成廠商漏填。
+test('A8 同檔混合頁型時，當日整頁無財務欄應列為未檢查', () => {
+  const days = [
+    day('2026-04-08', [row('1', {
+      契約單價: null, 本日完成數量: 5, 本日完成金額: null, 累計完成數量: 5,
+    })]),
+    day('2026-04-09', [row('1', {
+      本日完成數量: 0, 本日完成金額: 0, 累計完成數量: 5,
+    })]),
+  ];
+  const r = run(days);
+  expect(r.errors).not.toContainEqual(expect.objectContaining({ code: 'A8', 日期: '2026-04-08' }));
+  expect(r.skipped).toContainEqual(expect.objectContaining({ code: 'A8', 日期: '2026-04-08', 項次: '1' }));
+});
+
 // 錯誤要指得出「哪天、哪個項次」——只說「有 3 項硬錯」等於要承辦人自己翻 80 頁
 test('每則錯誤都帶得出日期與項次', () => {
   const r = run([day('2026-04-09', [row('7', { 單位: null })])]);
