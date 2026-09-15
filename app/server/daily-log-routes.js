@@ -4,6 +4,7 @@
  * 路由:
  *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
  *   POST /api/projects/:id/daily-logs/recognition-issues 問題清單 + 原始檔 → ZIP
+ *   POST /api/projects/:id/daily-logs/vendor-issues   廠商問題 → 原格式紅框標註 ZIP
  *   POST /api/projects/:id/daily-logs/confirm         無硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
  *   POST /api/projects/:id/daily-logs/confirm-scanned 承辦人逐格確認後才寫入
@@ -43,13 +44,14 @@ const { mergeDays } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('./daily-log-write');
-const { scanDays, scanCoverage } = require('./daily-log-scan');
+const { scanDays, scanDaysWithItems, scanCoverage } = require('./daily-log-scan');
 const { resizeOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
+const { annotateFile, verifiedProblems } = require('./daily-log-annotate');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -93,7 +95,7 @@ async function parseFiles(files, parser) {
       throw 讀取失敗(realName(f), err);
     }
   }
-  return mergeDays(lists);
+  return { ...mergeDays(lists), lists };
 }
 
 /**
@@ -143,6 +145,32 @@ async function recognitionIssuesZip(files, problems) {
   const folder = zip.folder('原始檔案');
   const used = new Set();
   for (const file of files) folder.file(uniqueZipName(realName(file), used), file.buffer);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+async function vendorIssuesZip(files, dayLists, problems, extractedPagesByFile = []) {
+  const zip = new JSZip();
+  const folder = zip.folder('已標註施工日誌');
+  const used = new Set();
+  const results = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const name = realName(file);
+    const ext = path.extname(name);
+    const marked = await annotateFile(
+      { name, buffer: file.buffer }, dayLists[i] || [], problems,
+      { extractedPages: extractedPagesByFile[i] },
+    );
+    folder.file(uniqueZipName(`${path.basename(name, ext)}_廠商問題${ext}`, used), marked.buffer);
+    results.push(marked.statuses || []);
+  }
+  const header = ['級別', '代碼', '日期', '項次', '標註結果', '說明'];
+  const rows = problems.map((p, index) => [
+    p.級別, p.code, p.日期, p.項次,
+    results.some((statuses) => statuses[index] === '已畫紅框') ? '已畫紅框' : '未唯一定位，請依摘要確認',
+    p.訊息,
+  ]);
+  zip.file('廠商問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -508,6 +536,57 @@ function registerRoutes(app) {
       } catch (err) {
         console.error('[daily-log] 產生辨識問題下載包失敗:', err);
         res.status(500).json({ error: '產生辨識問題下載包失敗' });
+      }
+    });
+
+  app.post('/api/projects/:id/daily-logs/vendor-issues', verifyToken,
+    upload.array('daily_log'), async (req, res) => {
+      try {
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌原始檔' });
+        if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+        const ctx = await loadContext(req.params.id);
+        if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
+
+        let selected;
+        try { selected = JSON.parse(req.body.problems || 'null'); }
+        catch { return res.status(400).json({ error: '廠商問題列表格式不合法' }); }
+        if (!Array.isArray(selected) || !selected.length || selected.some((p) => !p || typeof p !== 'object')) {
+          return res.status(400).json({ error: '請至少選擇一項廠商問題' });
+        }
+
+        // 與 confirm 相同，重新解析與驗證；前端只能選問題，不能自行製造標註內容。
+        let parsed;
+        try {
+          parsed = await parseFiles(files, ctx.parser);
+        } catch (err) {
+          const scannedPdf = files.length === 1 && /\.pdf$/i.test(realName(files[0]))
+            && /文字層|掃描件/.test(err.message || '');
+          if (!scannedPdf) throw err;
+          const scanned = await withTempFile(files[0], (p) => scanDaysWithItems(p, {
+            ocr, extractItemsOcr, filetypes, parser: ctx.parser,
+          }));
+          if (!scanned.days.length) throw new Error('掃描件沒有辨識出可標註的施工日誌內容');
+          parsed = { days: scanned.days, lists: [scanned.days], extractedPagesByFile: [scanned.pages] };
+        }
+        const { days, lists, extractedPagesByFile } = parsed;
+        const rows = flatten(days, ctx.contract);
+        const result = validateDailyLog({
+          days, contract: ctx.contract, project: ctx.project,
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+        });
+        const problems = verifiedProblems(selected, result);
+        if (problems.length !== selected.length) {
+          return res.status(400).json({ error: '問題內容已變更，請重新檢查施工日誌後再下載' });
+        }
+
+        const buffer = await vendorIssuesZip(files, lists, problems, extractedPagesByFile);
+        res.attachment('廠商問題標註.zip');
+        res.send(buffer);
+      } catch (err) {
+        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
+        console.error('[daily-log] 產生廠商問題標註失敗:', err);
+        res.status(500).json({ error: '產生廠商問題標註失敗，請稍後重試' });
       }
     });
 

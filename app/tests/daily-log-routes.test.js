@@ -16,16 +16,22 @@ const db = require('../server/db');
 // 後者由 SP0 整合測涵蓋。這裡驗的是路由的把關與落庫。
 jest.mock('../server/parsers/registry', () => ({ getParser: jest.fn() }));
 jest.mock('../server/template-engine', () => ({ fillTemplate: jest.fn() }));
+jest.mock('../server/daily-log-annotate', () => ({
+  ...jest.requireActual('../server/daily-log-annotate'),
+  annotateFile: jest.fn(),
+}));
 // OCR 同理:真跑一頁要好幾秒,而且結果隨模型/機器而異。這裡驗的是路由怎麼處理
 // 「OCR 讀得出來」與「讀取器整份 throw」這兩種結局,不是 OCR 本身準不準。
 jest.mock('../server/daily-log-scan', () => ({
   scanDays: jest.fn(),
+  scanDaysWithItems: jest.fn(),
   scanCoverage: jest.fn(async () => ({ pages: [], days: 0, 日期: [], 缺日期頁: [] })),
 }));
 
 const registry = require('../server/parsers/registry');
 const { fillTemplate } = require('../server/template-engine');
-const { scanDays, scanCoverage } = require('../server/daily-log-scan');
+const { annotateFile } = require('../server/daily-log-annotate');
+const { scanDays, scanDaysWithItems, scanCoverage } = require('../server/daily-log-scan');
 const { TEMPLATE_PATH, workbookPath } = require('../server/report-workbook');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
 const { registerRoutes: registerDailyLogRoutes } = require('../server/daily-log-routes');
@@ -94,6 +100,7 @@ beforeEach(() => {
     fs.writeFileSync(tmp, 'xlsm');
     return { ok: true, outPath: tmp };
   });
+  annotateFile.mockResolvedValue({ buffer: Buffer.from('marked-file'), statuses: ['已畫紅框'] });
 });
 afterAll(() => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ } });
 
@@ -140,6 +147,76 @@ describe('辨識問題下載包', () => {
     const csv = await zip.file('辨識問題列表.csv').async('string');
     expect(csv.charCodeAt(0)).toBe(0xFEFF);
     expect(csv).toContain('"硬錯","E6","2026-07-15","三","單價「讀錯」"');
+  });
+});
+
+describe('廠商問題標註下載包', () => {
+  test('未帶 token 回 401', async () => {
+    const { app, id } = await makeApp();
+    await request(app).post(`/api/projects/${id}/daily-logs/vendor-issues`).expect(401);
+  });
+
+  test('重新驗證問題後才產生原格式標註副本與 CSV', async () => {
+    const { app, token, id } = await makeApp();
+    feed([day('2026-07-15', [r('1', 1, { 單位: '公尺' })])]);
+    const checked = await post(app, token, id, 'parse').expect(200);
+    const problem = checked.body.errors.find((p) => p.code === 'E4');
+    expect(problem).toBeTruthy();
+
+    const res = await asBinary(request(app)
+      .post(`/api/projects/${id}/daily-logs/vendor-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify([{ ...problem, 級別: '硬錯' }]))
+      .attach('daily_log', Buffer.from('source-file'), '施工日誌.xlsx'));
+
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(res.body);
+    expect(Object.keys(zip.files)).toEqual(expect.arrayContaining([
+      '廠商問題列表.csv', '已標註施工日誌/施工日誌_廠商問題.xlsx',
+    ]));
+    expect(await zip.file('已標註施工日誌/施工日誌_廠商問題.xlsx').async('string')).toBe('marked-file');
+    expect(await zip.file('廠商問題列表.csv').async('string')).toContain('已畫紅框');
+  });
+
+  test('拒絕前端自行改寫的問題內容', async () => {
+    const { app, token, id } = await makeApp();
+    feed([day('2026-07-15', [r('1', 1, { 單位: '公尺' })])]);
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/vendor-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify([{
+        級別: '硬錯', code: 'E4', 日期: '2026-07-15', 項次: '1', 訊息: '偽造內容',
+      }]))
+      .attach('daily_log', Buffer.from('source-file'), '施工日誌.xlsx')
+      .expect(400);
+    expect(res.body.error).toMatch(/重新檢查/);
+    expect(annotateFile).not.toHaveBeenCalled();
+  });
+
+  test('掃描 PDF 沿用同一次 OCR 的解析結果與座標產生標註', async () => {
+    const { app, token, id } = await makeApp();
+    const scannedDays = [day('2026-07-15', [r('1', 1, { 單位: '公尺' })])];
+    registry.getParser.mockReturnValue({ parseAll: jest.fn(async () => { throw new Error('PDF 沒有文字層(掃描件)'); }) });
+    scanDays.mockResolvedValueOnce(scannedDays);
+    const checked = await asBinary(request(app)
+      .post(`/api/projects/${id}/daily-logs/scan`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('daily_log', Buffer.from('%PDF-scan'), '掃描施工日誌.pdf'));
+    const scanBody = JSON.parse(checked.body.toString('utf8'));
+    const problem = scanBody.errors.find((p) => p.code === 'E4');
+    expect(problem).toBeTruthy();
+
+    const pages = [{ page: 1, items: [{ x: 1, y: 2, w: 3, s: '混凝土' }] }];
+    scanDaysWithItems.mockResolvedValueOnce({ days: scannedDays, pages });
+    const res = await asBinary(request(app)
+      .post(`/api/projects/${id}/daily-logs/vendor-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify([{ ...problem, 級別: '硬錯' }]))
+      .attach('daily_log', Buffer.from('%PDF-scan'), '掃描施工日誌.pdf'));
+    expect(res.status).toBe(200);
+    expect(annotateFile).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '掃描施工日誌.pdf' }), scannedDays, expect.any(Array), { extractedPages: pages },
+    );
   });
 });
 

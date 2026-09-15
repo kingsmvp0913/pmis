@@ -64,7 +64,12 @@ const FindingGroups = (() => {
     .flatMap((group) => group.findings)
     .map(({ 級別, code, 日期, 項次, 訊息 }) => ({ 級別, code, 日期, 項次, 訊息 }));
 
-  return { groupFindings, formatFindingDates, recognitionProblems };
+  const vendorProblems = (groups) => (groups || [])
+    .filter((group) => group.問題歸屬 === '廠商問題')
+    .flatMap((group) => group.findings)
+    .map(({ 級別, code, 日期, 項次, 訊息 }) => ({ 級別, code, 日期, 項次, 訊息 }));
+
+  return { groupFindings, formatFindingDates, recognitionProblems, vendorProblems };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = FindingGroups;

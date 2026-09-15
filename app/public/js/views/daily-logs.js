@@ -126,6 +126,9 @@ const DailyLogs = (() => {
     const issueDownloadBtn = el('button', {
       class: 'btn btn-outline', type: 'button', style: 'display:none;margin-top:var(--space-3)',
     }, '下載辨識問題 ZIP');
+    const vendorDownloadBtn = el('button', {
+      class: 'btn btn-outline', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
+    }, '下載廠商問題標註');
     const diffBox = el('div', { class: 'table-wrap' });
     const scanBox = el('div', {});
     const hint = el('div', { class: 'hint' },
@@ -139,15 +142,22 @@ const DailyLogs = (() => {
     function renderFindings(errors, warnings) {
       listBox.innerHTML = '';
       issueDownloadBtn.style.display = 'none';
+      vendorDownloadBtn.style.display = 'none';
       const all = FindingGroups.groupFindings(errors, warnings);
       if (!all.length) return;
       const updateDownload = () => {
         const 有辨識問題 = all.some((f) => f.問題歸屬 === '辨識問題');
+        const 有廠商問題 = all.some((f) => f.問題歸屬 === '廠商問題');
         issueDownloadBtn.style.display = '';
+        vendorDownloadBtn.style.display = '';
         issueDownloadBtn.disabled = !有辨識問題;
+        vendorDownloadBtn.disabled = !有廠商問題;
         issueDownloadBtn.textContent = 有辨識問題
           ? '下載辨識問題 ZIP'
           : '下載辨識問題 ZIP（請先指定問題歸屬）';
+        vendorDownloadBtn.textContent = 有廠商問題
+          ? '下載廠商問題標註'
+          : '下載廠商問題標註（請先指定問題歸屬）';
       };
       const trs = all.map((f) => {
         const owner = el('select', { class: 'form-control issue-owner' }, [
@@ -190,6 +200,21 @@ const DailyLogs = (() => {
           const form = fd();
           form.append('problems', JSON.stringify(problems));
           await Api.uploadDownload(`projects/${projectId}/daily-logs/recognition-issues`, form);
+        } catch (e) {
+          showErr(e.message);
+        } finally {
+          updateDownload();
+        }
+      };
+
+      vendorDownloadBtn.onclick = async () => {
+        const problems = FindingGroups.vendorProblems(all);
+        if (!problems.length) return;
+        vendorDownloadBtn.disabled = true;
+        try {
+          const form = fd();
+          form.append('problems', JSON.stringify(problems));
+          await Api.uploadDownload(`projects/${projectId}/daily-logs/vendor-issues`, form);
         } catch (e) {
           showErr(e.message);
         } finally {
@@ -390,6 +415,7 @@ const DailyLogs = (() => {
       skipBox.style.display = 'none';
       clearScan();
       issueDownloadBtn.style.display = 'none';
+      vendorDownloadBtn.style.display = 'none';
       if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
       files = [...fileI.files];
       parseBtn.disabled = true;
@@ -541,6 +567,7 @@ const DailyLogs = (() => {
       scanBox,
       listBox,
       issueDownloadBtn,
+      vendorDownloadBtn,
       openingCard(projectId),
     ]);
   }

@@ -5,7 +5,7 @@
  * 讀取器」。注入少一個鍵,那個讀取器就整份 throw——而錯誤訊息長得像讀取器壞掉
  * (「缺少注入的 filetypes.extractItemsOcr」),沒人會想到是這裡漏接的。
  */
-const { scanDays } = require('../server/daily-log-scan');
+const { scanDays, scanDaysWithItems } = require('../server/daily-log-scan');
 
 const PAGES = [{ page: 1, items: [{ x: 1, y: 2, w: 3, s: 'A' }] }];
 const deps = (parser) => ({
@@ -53,4 +53,10 @@ test('掃描件讀取器拿到的是同一份 items', async () => {
     parseAll: async (p, ctx) => { got = await ctx.filetypes.extractItemsOcr(p); return []; },
   }));
   expect(got).toBe(PAGES);
+});
+
+test('標註流程可沿用同一次 OCR 的 days 與座標', async () => {
+  const days = [{ header: { 填報日期: '2026-07-15' }, dailyRows: [] }];
+  const result = await scanDaysWithItems('x.pdf', deps({ parseAll: async () => days }));
+  expect(result).toEqual({ days, pages: PAGES });
 });

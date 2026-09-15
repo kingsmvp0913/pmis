@@ -112,14 +112,14 @@ const SCAN_WIDTH = 2200;
  * @param {{ocr:object, extractItemsOcr:Function, filetypes:object, parser:object, width?:number}} deps
  * @returns {Promise<Array<{header:object, dailyRows:Array}>>}
  */
-async function scanDays(pdfPath, deps = {}) {
+async function scanDaysWithItems(pdfPath, deps = {}) {
   const {
     ocr, extractItemsOcr, filetypes, parser, width,
   } = deps;
   if (typeof extractItemsOcr !== 'function') throw new Error('scanDays 需要注入 extractItemsOcr');
   if (!parser || typeof parser.parseAll !== 'function') throw new Error('scanDays 需要注入 parser.parseAll');
   const pages = await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
-  return parser.parseAll(pdfPath, {
+  const days = await parser.parseAll(pdfPath, {
     filetypes: {
       ...(filetypes || {}),
       extractItems: async () => pages,
@@ -130,8 +130,13 @@ async function scanDays(pdfPath, deps = {}) {
       extractItemsOcr: async () => pages,
     },
   });
+  return { days, pages };
+}
+
+async function scanDays(pdfPath, deps = {}) {
+  return (await scanDaysWithItems(pdfPath, deps)).days;
 }
 
 module.exports = {
-  scanCoverage, scanDays, pageHeader, SCAN_WIDTH,
+  scanCoverage, scanDays, scanDaysWithItems, pageHeader, SCAN_WIDTH,
 };

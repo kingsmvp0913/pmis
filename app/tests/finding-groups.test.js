@@ -1,4 +1,6 @@
-const { groupFindings, formatFindingDates, recognitionProblems } = require('../public/js/finding-groups');
+const {
+  groupFindings, formatFindingDates, recognitionProblems, vendorProblems,
+} = require('../public/js/finding-groups');
 
 test('相同規則、項次與說明合併，日期連續時顯示範圍', () => {
   const errors = ['01', '02', '03'].map((d) => ({
@@ -38,4 +40,16 @@ test('整組標成辨識問題時，ZIP 問題列表展開回每個原始日期'
   groups[0].問題歸屬 = '辨識問題';
   expect(recognitionProblems(groups).map((p) => p.日期))
     .toEqual(['2026-08-01', '2026-08-02', '2026-08-03']);
+});
+
+test('只把標成廠商問題的群組送去產生標註檔', () => {
+  const groups = groupFindings([
+    { code: 'E4', 日期: '2026-08-01', 項次: '1', 訊息: '單位不一致' },
+    { code: 'E6', 日期: '2026-08-01', 項次: '2', 訊息: '單價不一致' },
+  ], []);
+  groups[0].問題歸屬 = '廠商問題';
+  groups[1].問題歸屬 = '辨識問題';
+  expect(vendorProblems(groups)).toEqual([{
+    級別: '硬錯', code: 'E4', 日期: '2026-08-01', 項次: '1', 訊息: '單位不一致',
+  }]);
 });
