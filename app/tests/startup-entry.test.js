@@ -27,3 +27,9 @@ describe('啟動入口必須執行讀取器 onboarding', () => {
     expect(bat).toMatch(/app[\\/]scripts[\\/]start\.js/);
   });
 });
+
+test('使用者啟動入口會先同步 lockfile 對應的 npm 套件', () => {
+  const src = fs.readFileSync(ENTRIES[0], 'utf8');
+  expect(src).toMatch(/syncDependencies\s*\(/);
+  expect(src.indexOf('syncDependencies()')).toBeLessThan(src.indexOf("require(path.join(ROOT, 'app', 'server', 'index.js'))"));
+});

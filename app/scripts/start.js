@@ -12,6 +12,14 @@ const { spawn } = require('child_process');
 const ROOT = path.resolve(__dirname, '..', '..');           // C:\pmis
 const CONFIG_PATH = path.join(ROOT, 'data', 'config.json');
 
+try {
+  require('./sync-dependencies').syncDependencies();
+} catch (err) {
+  console.error(`[依賴] ${err.message}`);
+  console.error('請確認網路連線後重新啟動 PMIS。');
+  process.exit(1);
+}
+
 if (!fs.existsSync(CONFIG_PATH)) {
   console.error('找不到 data/config.json,請先雙擊「安裝.bat」完成安裝。');
   process.exit(1);
