@@ -57,3 +57,28 @@ test.each([['changze', 'changze.pdf'], ['dexin', 'dexin.xlsx']])('%s 可定位�
   });
   expect(source).toEqual(expect.objectContaining({ field: '填報日期' }));
 }, 120000);
+
+test('PDF 工程項目跨多個文字片段時以合併範圍定位', async () => {
+  const extractedPages = [{ page: 1, items: [
+    { x: 30, y: 760, w: 90, h: 12, s: '115年8月4日' },
+    { x: 20, y: 680, w: 8, h: 12, s: '4' },
+    { x: 50, y: 700, w: 210, h: 12, s: '既有牆面、地坪、磁磚、衛生設備、給排水設施' },
+    { x: 50, y: 680, w: 260, h: 12, s: '及天花板等拆除(含切割)及運棄(含合法證明);環境保護' },
+  ] }];
+  const parser = { parseAll: async (_file, ctx) => {
+    const pages = await ctx.filetypes.extractItems();
+    const parts = pages[0].items.filter((item) => item.x === 50).map((item) => item.s);
+    return [{
+      header: { 填報日期: '2026-08-04' },
+      dailyRows: [{ 項次: '4', 工程項目: parts.join('') }],
+    }];
+  } };
+  const days = await parser.parseAll(null, { filetypes: { extractItems: async () => extractedPages } });
+  const source = await traceSource({
+    parser, name: '明禮8月施工日誌.pdf', buffer: Buffer.from('%PDF'), extractedPages, days,
+    problem: { code: 'E3', 日期: '2026-08-04', 項次: '4', 訊息: '項目名稱與契約表不一致' },
+  });
+  expect(source).toEqual(expect.objectContaining({
+    kind: 'pdf', page: 1, field: '工程項目', x: 48, y: 677, width: 264, height: 36,
+  }));
+});

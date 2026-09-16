@@ -329,6 +329,16 @@ async function tracePdf(parser, filePath, pages, problem, days, field) {
   for (const p of pagePool) for (let i = 0; i < p.items.length; i++) {
     if (fieldValueMatches(p.items[i].s, value, field)) allCandidates.push({ page: p.page, index: i, item: p.items[i] });
   }
+  // PDF 會把跨行的工程項目切成多個文字 item。單一 item 不含完整名稱時，改以
+  // 「來源片段是解析名稱的一部分」找候選，再由下方的讀取器重播確認哪些片段真的
+  // 影響該欄位。限制在工程項目且至少 4 字，避免短字詞把整頁都列為候選。
+  if (!allCandidates.length && field === '工程項目' && value != null) {
+    const wanted = norm(value);
+    for (const p of pagePool) for (let i = 0; i < p.items.length; i++) {
+      const part = norm(p.items[i].s);
+      if (part.length >= 4 && wanted.includes(part)) allCandidates.push({ page: p.page, index: i, item: p.items[i] });
+    }
+  }
   let candidates = allCandidates;
   const { row } = before;
   if (row) {
@@ -362,7 +372,20 @@ async function tracePdf(parser, filePath, pages, problem, days, field) {
     const tried = new Set(candidates.map((c) => `${c.page}:${c.index}`));
     await tryCandidates(allCandidates.filter((c) => !tried.has(`${c.page}:${c.index}`)));
   }
-  if (causal.length !== 1) return null;
+  if (!causal.length) return null;
+  if (causal.length > 1) {
+    // 同一工程項目的跨行片段都會通過因果重播；將同頁片段合成一個紅框，仍可精確
+    // 指向完整來源。若跨頁則無法判定是同一欄位，維持未唯一定位。
+    if (field !== '工程項目' || new Set(causal.map((c) => c.page)).size !== 1) return null;
+    const rects = causal.map((c) => ({
+      x: c.item.x - 2, y: c.item.y - 3,
+      width: Math.max(10, (c.item.w || 8) + 4), height: 16,
+    }));
+    const left = Math.min(...rects.map((r) => r.x)); const bottom = Math.min(...rects.map((r) => r.y));
+    const right = Math.max(...rects.map((r) => r.x + r.width)); const top = Math.max(...rects.map((r) => r.y + r.height));
+    return { kind: 'pdf', page: causal[0].page, x: left, y: bottom,
+      width: right - left, height: top - bottom, field };
+  }
   const c = causal[0]; const rect = tokenRect(c.item, value)
     || { x: c.item.x - 2, y: c.item.y - 3, width: Math.max(10, (c.item.w || 8) + 4), height: 16 };
   return { kind: 'pdf', page: c.page, ...rect, field };
