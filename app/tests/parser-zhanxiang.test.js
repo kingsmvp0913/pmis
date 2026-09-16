@@ -132,6 +132,12 @@ describe('zhanxiang parseAll', () => {
     expect(項次.slice(-5)).toEqual(['貳', '參', '肆', '伍', '陸']);
   });
 
+  test('總計表尾不會接到營業稅名稱', () => {
+    for (const day of all) {
+      expect(day.dailyRows.find((r) => r.項次 === '陸').工程項目).toBe('營業稅((壹~伍)*5%)');
+    }
+  });
+
   // 逐格對過紙本:項次 7 是 28 M2(曾被單位裡的 2 蓋掉)、15 是 50 M(單位曾變 null)
   test('契約數量與單位與紙本一致', () => {
     const by = new Map(all[0].dailyRows.map((r) => [r.項次, r]));

@@ -33,6 +33,7 @@ const X = { 名稱: 220, 單位: 262, 契約數量: 330, 本日: 415, 累計: 51
 const ITEM_HEAD_RE = /^(\d+|[壹貳參参肆伍陸柒捌玖拾])[.、．]\s*(.*)$/;
 // 明細區的結束:接下來是材料管理、人員機具等段落,欄位配置與施工項目一樣
 const SECTION_END_RE = /^[二三四五六七八九十]、/;
+const TOTAL_ROW_RE = /^總\s*計/;
 const DASH_RE = /^[-－—–]+$/;
 
 const text = (v) => {
@@ -76,6 +77,7 @@ function collectRows(rows) {
     if (/施工項目/.test(head)) { started = true; continue; }   // 表頭
     if (!started) continue;
     if (SECTION_END_RE.test(head)) break;
+    if (TOTAL_ROW_RE.test(head)) break;
     const m = ITEM_HEAD_RE.exec(head);
     if (!m) {
       // 名稱過長時原檔會拆列,而**單位與數字欄印在續行那一列**(實測項次 4:
@@ -210,6 +212,7 @@ function parseSecondPage(rows) {
     const head = row.items.filter((i) => i.x < 名稱右界).map((i) => i.s).join('').trim();
     if (!started) { if (/施工項目/.test(head)) started = true; continue; }
     if (SECTION_END_RE.test(head)) break;
+    if (TOTAL_ROW_RE.test(head)) break;
 
     const 單位 = text(row.items.filter((i) => i.x >= 名稱右界 && i.x < 值左界)
       .map((i) => i.s).join('').trim());
@@ -318,7 +321,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '2.0.0',
+    version: '2.0.1',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
