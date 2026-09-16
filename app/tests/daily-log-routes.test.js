@@ -692,14 +692,14 @@ describe('期初累計', () => {
 
   // 這條是整組的重點:同一份日誌,填期初之前被擋、填了之後就過。
   // 情境同久木:前期已做 3,這批的第一天做 2、累計欄印 5。系統看不到那 3 的話,
-  // 累計 5 對不上「0 + 2」,也對不上金額 5×100——B3(金額)與 F4(期末累計)一起噴。
+  // 累計 5 對不上金額 5×100，所以會報 B3；F4 可由「累計 5－本日 2」反推期初 3。
   const 久木情境 = () => day('2026-04-08', [r('1', 2, { 累計完成數量: 5 })]);
 
   test('填了期初累計之後,累計對不起來的假硬錯會消失', async () => {
     const { app, token, id } = await makeApp();
     feed([久木情境()]);
     const 前 = await post(app, token, id, 'parse').expect(200);
-    expect(前.body.errors.map((e) => e.code)).toEqual(expect.arrayContaining(['B3', 'F4']));
+    expect(前.body.errors.map((e) => e.code)).toEqual(['B3']);
 
     await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
     feed([久木情境()]);

@@ -346,8 +346,98 @@ function parseExcelDay(grid, a, serialToISO) {
   };
 }
 
+const CONTENT_WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+const CONTENT_WEATHER = ['雨天', '晴天', '陰天'];
+
+function contentWeekday(v) {
+  const n = numOf(v);
+  return n != null && n >= 1 && n <= 7 ? CONTENT_WEEKDAYS[n - 1] : null;
+}
+
+function contentWeather(v) {
+  const n = numOf(v);
+  return n != null && n >= 0 && n < CONTENT_WEATHER.length ? CONTENT_WEATHER[n] : null;
+}
+
+function roundProgress(v) {
+  const n = progressNum(v);
+  return n == null ? null : Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * 此版活頁簿的「施工日誌」只顯示 I6 指定的一天；完整逐日資料在「內容」工作表，
+ * 日期由 J 欄起橫向排列。日期列含未來公式，因此必須再確認該日已有實際填寫內容。
+ */
+function parseContentWorkbook(wb, serialToISO) {
+  const grid = wb.sheets['內容'];
+  if (!grid || compact(at(grid, 13, 5)) !== '日期'
+    || !compact(at(grid, 17, 2)).includes('重要施工項目完成數量')) return null;
+
+  const itemRows = [];
+  for (let r = 19; r <= 53; r++) {
+    const no = text(at(grid, r, 1));
+    const name = text(at(grid, r, 2));
+    if (no && name && /^(?:\d+|[貳參肆伍陸柒])$/.test(no)) itemRows.push(r);
+  }
+  if (!itemRows.length) return null;
+
+  const crewRows = [61, 62, 63, 64, 65];
+  const machineRows = [68, 69, 70, 71, 72];
+  const hasValue = (v) => v != null && String(v).trim() !== '';
+  const firstDate = numOf(at(grid, 13, 9));
+  const days = [];
+
+  for (let c = 9; c < (grid[13] || []).length; c++) {
+    const dateSerial = numOf(at(grid, 13, c));
+    const filled = [58, 59, 76, ...itemRows, ...crewRows, ...machineRows]
+      .some((r) => hasValue(at(grid, r, c)));
+    if (dateSerial == null || !filled) continue;
+
+    const dailyRows = itemRows.map((r) => {
+      let cumulative = 0;
+      for (let k = 9; k <= c; k++) cumulative += numOf(at(grid, r, k)) || 0;
+      return {
+        項次: text(at(grid, r, 1)),
+        工程項目: text(at(grid, r, 2)),
+        單位: text(at(grid, r, 3)),
+        契約單價: null,
+        契約數量: numOf(at(grid, r, 4)),
+        本日完成數量: numOf(at(grid, r, c)),
+        本日完成金額: null,
+        累計完成數量: Math.round((cumulative + Number.EPSILON) * 1000) / 1000,
+      };
+    });
+    const 出工明細 = crewRows.map((r) => ({ 工別: text(at(grid, r, 7)), 人數: numOf(at(grid, r, c)) }))
+      .filter((x) => x.工別);
+    const 主要機具 = machineRows.map((r) => ({ 名稱: text(at(grid, r, 7)), 數量: numOf(at(grid, r, c)) }))
+      .filter((x) => x.名稱);
+    const 有人數 = 出工明細.filter((x) => x.人數 != null);
+    days.push({
+      header: {
+        工程名稱: text(at(grid, 5, 3)),
+        填報日期: serialToISO(dateSerial),
+        星期: contentWeekday(at(grid, 14, c)),
+        天氣_上午: contentWeather(at(grid, 58, c)),
+        天氣_下午: contentWeather(at(grid, 59, c)),
+        預定進度: roundProgress(at(grid, 12, c)),
+        實際進度: roundProgress(at(grid, 9, c)),
+        出工總人數: 有人數.length ? 有人數.reduce((sum, x) => sum + x.人數, 0) : null,
+        本日累計金額: null,
+        承包廠商: text(at(grid, 13, 2)),
+        開工日期: firstDate == null ? null : serialToISO(firstDate),
+      },
+      dailyRows,
+      extras: { 出工明細, 主要機具 },
+    });
+  }
+  if (!days.length) throw new Error('「內容」工作表沒有已填寫的施工日誌');
+  return days;
+}
+
 async function parseExcelAll(filePath, ft) {
   const wb = ft.readWorkbook(filePath);
+  const contentDays = parseContentWorkbook(wb, ft.excelSerialToISO);
+  if (contentDays) return contentDays;
   const grid = wb.sheets['施工日誌'];
   const starts = grid ? excelBlockStarts(grid) : [];
   if (!starts.length) throw new Error('找不到「施工日誌/表報編號」區塊(此檔非銘佑 Excel 格式)');
@@ -419,7 +509,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.1.0',
+    version: '1.2.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
@@ -429,5 +519,7 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { parsePage, columnRows, rocToISO, parseExcelDay, excelBlockStarts },
+  _internal: {
+    parsePage, columnRows, rocToISO, parseExcelDay, parseContentWorkbook, excelBlockStarts,
+  },
 };

@@ -125,11 +125,21 @@ describe('parseAll(龍井國小廁所,廠商第二版 Excel)', () => {
   let days;
   beforeAll(async () => { days = await mod.parseAll(EXCEL, { filetypes }); });
 
-  test('可獨立讀出 8/29 日誌與完整 35 項', () => {
-    expect(days).toHaveLength(1);
-    expect(days[0].header).toMatchObject({
+  test('從內容工作表讀出 7/29～8/31 全部 34 天與完整 35 項', () => {
+    expect(days).toHaveLength(34);
+    expect(days.map((d) => d.header.填報日期)).toEqual([
+      '2026-07-29', '2026-07-30', '2026-07-31', '2026-08-01', '2026-08-02',
+      '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07',
+      '2026-08-08', '2026-08-09', '2026-08-10', '2026-08-11', '2026-08-12',
+      '2026-08-13', '2026-08-14', '2026-08-15', '2026-08-16', '2026-08-17',
+      '2026-08-18', '2026-08-19', '2026-08-20', '2026-08-21', '2026-08-22',
+      '2026-08-23', '2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27',
+      '2026-08-28', '2026-08-29', '2026-08-30', '2026-08-31',
+    ]);
+    expect(days[31].header).toMatchObject({
       工程名稱: '龍井國小114-116年公立國民中小學老舊廁所整修工程',
       填報日期: '2026-08-29',
+      星期: '星期六',
       天氣_上午: '陰天',
       天氣_下午: '陰天',
       預定進度: 9.87,
@@ -137,16 +147,24 @@ describe('parseAll(龍井國小廁所,廠商第二版 Excel)', () => {
       承包廠商: '銘佑營造有限公司',
       開工日期: '2026-07-29',
     });
-    expect(days[0].dailyRows).toHaveLength(35);
-    expect(days[0].dailyRows.map((r) => [r.項次, r.單位, r.契約數量])).toEqual(契約);
+    expect(days.every((d) => d.dailyRows.length === 35)).toBe(true);
+    expect(days[31].dailyRows.map((r) => [r.項次, r.單位, r.契約數量])).toEqual(契約);
+    expect(days[0].dailyRows[0]).toMatchObject({ 本日完成數量: 0.5, 累計完成數量: 0.5 });
+    expect(days[31].dailyRows[2]).toMatchObject({ 本日完成數量: null, 累計完成數量: 0.6 });
+    expect(days[33].header).toMatchObject({
+      填報日期: '2026-08-31', 星期: '星期一', 預定進度: 10.78, 實際進度: 12.97,
+    });
+    expect(days[33].dailyRows[2]).toMatchObject({ 本日完成數量: 0.1, 累計完成數量: 0.7 });
   });
 
   test('Excel 沒有單價與金額欄，不回推', () => {
-    expect(days[0].dailyRows.every((r) => r.契約單價 === null && r.本日完成金額 === null)).toBe(true);
+    expect(days.every((d) => d.dailyRows.every(
+      (r) => r.契約單價 === null && r.本日完成金額 === null,
+    ))).toBe(true);
   });
 
   test('人員區止於第四項，不會把段落標題收成工別', () => {
-    expect(days[0].extras.出工明細.map((x) => x.工別))
+    expect(days[31].extras.出工明細.map((x) => x.工別))
       .toEqual(['工程師', '小工', '鋼筋工', '模板工', '技工']);
   });
 });
