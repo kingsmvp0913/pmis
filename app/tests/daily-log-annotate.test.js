@@ -4,6 +4,7 @@ const {
 } = require('../server/daily-log-annotate');
 const { locateExcel } = require('../server/daily-log-source-locator');
 const XLSX = require('xlsx');
+const JSZip = require('jszip');
 
 test('只接受後端重新驗證後完全相同的問題', () => {
   const result = { errors: [{ code: 'E4', 日期: '2026-07-15', 項次: '1', 訊息: '單位不一致' }], warnings: [] };
@@ -25,6 +26,25 @@ test('Excel 依日期、項目列及欄位表頭定位到實際錯誤格', () =>
   const days = [{ header: { 填報日期: '2026-07-15' }, dailyRows: [{ 項次: '1', 工程項目: '混凝土澆置工程', 單位: '公尺' }] }];
   expect(locateExcel(buffer, { code: 'E4', 日期: '2026-07-15', 項次: '1', 訊息: '單位不一致' }, days))
     .toEqual({ kind: 'excel', sheet: '日誌', address: 'D2', field: '單位' });
+});
+
+test('標註受保護的 OOXML 工作表後恢復原保護設定', async () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['單位'], ['公尺']]), '日誌');
+  const zip = await JSZip.loadAsync(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  const sheet = await zip.file('xl/worksheets/sheet1.xml').async('string');
+  const protection = '<sheetProtection password="ABCD" sheet="1" objects="1"/>';
+  zip.file('xl/worksheets/sheet1.xml', sheet.replace('</sheetData>', `</sheetData>${protection}`));
+  const protectedBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const jobs = [{ source: { kind: 'excel', sheet: '日誌', address: 'A2' } }];
+
+  const prepared = await _internal.removeTargetSheetProtection(protectedBuffer, jobs);
+  const preparedZip = await JSZip.loadAsync(prepared.buffer);
+  expect(await preparedZip.file('xl/worksheets/sheet1.xml').async('string')).not.toContain('<sheetProtection');
+
+  const restored = await _internal.restoreTargetSheetProtection(prepared.buffer, prepared.protections);
+  const restoredZip = await JSZip.loadAsync(restored);
+  expect(await restoredZip.file('xl/worksheets/sheet1.xml').async('string')).toContain(protection);
 });
 
 test('PDF 唯一命中時畫紅框並附上問題摘要頁', async () => {

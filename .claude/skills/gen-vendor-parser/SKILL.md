@@ -145,6 +145,8 @@ module.exports = {
 
 每一支讀取器、每一種支援載體都要加入 `tests/daily-log-source-locator.test.js` 的真實 fixture 驗證。多聯、多頁、同值重複、合併儲存格及 OCR 載體各自都要跑；只測該廠商其中一個檔型不算完成。若驗證規則是跨日／全案彙總，或來源本身沒有可框選的空白文字，標註摘要須明列「未唯一定位」，不得把相似文字框成問題來源。
 
+XLSX／XLSM 的目標工作表可能有密碼保護。標註只能在輸出副本暫時移除該工作表的 `sheetProtection`，畫框並儲存後必須依工作表名稱恢復原始完整標籤（含 hash、salt、spinCount 與鎖定旗標）；稽核須比較輸入與輸出的保護設定，不能以內部 `sheetN.xml` 編號判斷，因 Excel 新增摘要工作表時可能重新編號。
+
 ### 檔型工具「注入」(硬規則:讀取器不得自己摸路徑)
 讀取器**絕不** `require` 檔型檔或用 `process.cwd()`/寫死 app 路徑取檔型工具——那在裝到
 `data/vendor-parsers/`(app 原始碼樹外)時會斷。改由 **registry 注入**:

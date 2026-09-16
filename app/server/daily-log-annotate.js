@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
+const JSZip = require('jszip');
 const { PDFDocument, rgb } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 const { traceSource } = require('./daily-log-source-locator');
@@ -85,6 +86,64 @@ function execOffice(driver, args) {
   });
 }
 
+const xmlAttr = (tag, name) => {
+  const match = new RegExp(`\\b${name.replace(':', '\\:')}="([^"]*)"`).exec(tag);
+  return match && match[1];
+};
+
+const decodeXml = (value) => String(value || '').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+  .replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+
+async function workbookSheetPaths(zip) {
+  const workbook = await zip.file('xl/workbook.xml')?.async('string');
+  const rels = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+  if (!workbook || !rels) return new Map();
+  const targets = new Map([...rels.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => [
+    xmlAttr(match[0], 'Id'), xmlAttr(match[0], 'Target'),
+  ]));
+  return new Map([...workbook.matchAll(/<sheet\b[^>]*\/>/g)].map((match) => {
+    const target = targets.get(xmlAttr(match[0], 'r:id')) || '';
+    const file = target.startsWith('/') ? target.slice(1) : path.posix.normalize(path.posix.join('xl', target));
+    return [decodeXml(xmlAttr(match[0], 'name')), file];
+  }));
+}
+
+async function removeTargetSheetProtection(buffer, jobs) {
+  const zip = await JSZip.loadAsync(buffer);
+  const sheetPaths = await workbookSheetPaths(zip);
+  const targets = new Set(jobs.map((job) => job.source)
+    .filter((source) => source && source.kind === 'excel').map((source) => source.sheet));
+  const protections = [];
+  for (const sheet of targets) {
+    const file = sheetPaths.get(sheet); const entry = file && zip.file(file);
+    if (!entry) continue;
+    const xml = await entry.async('string');
+    const match = /<sheetProtection\b[^>]*(?:\/>|>[\s\S]*?<\/sheetProtection>)/.exec(xml);
+    if (!match) continue;
+    protections.push({ sheet, tag: match[0] });
+    zip.file(file, xml.replace(match[0], ''));
+  }
+  return {
+    buffer: protections.length ? await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }) : buffer,
+    protections,
+  };
+}
+
+async function restoreTargetSheetProtection(buffer, protections) {
+  if (!protections.length) return buffer;
+  const zip = await JSZip.loadAsync(buffer); const sheetPaths = await workbookSheetPaths(zip);
+  for (const protection of protections) {
+    const file = sheetPaths.get(protection.sheet); const entry = file && zip.file(file);
+    if (!entry) throw new Error(`找不到要恢復保護的工作表：${protection.sheet}`);
+    const xml = await entry.async('string');
+    if (!xml.includes('<sheetProtection')) {
+      if (!xml.includes('</sheetData>')) throw new Error(`工作表結構不完整：${protection.sheet}`);
+      zip.file(file, xml.replace('</sheetData>', `</sheetData>${protection.tag}`));
+    }
+  }
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 async function annotateOffice(buffer, extension, jobs) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sp3-mark-'));
   const input = path.join(dir, `input${extension}`);
@@ -92,14 +151,17 @@ async function annotateOffice(buffer, extension, jobs) {
   const json = path.join(dir, 'problems.json');
   const driver = path.join(dir, 'daily-log-annotate.ps1');
   try {
-    fs.writeFileSync(input, buffer);
+    const prepared = /^\.(xlsx|xlsm)$/i.test(extension)
+      ? await removeTargetSheetProtection(buffer, jobs) : { buffer, protections: [] };
+    fs.writeFileSync(input, prepared.buffer);
     fs.writeFileSync(json, JSON.stringify(jobs), 'utf8');
     // Windows PowerShell 5.1 會把沒有 BOM 的 UTF-8 腳本當成本機 ANSI，中文屬性名稱會直接變成語法錯誤。
     fs.writeFileSync(driver, `\uFEFF${fs.readFileSync(DRIVER, 'utf8')}`, 'utf8');
     const kind = /^\.docx?$/i.test(extension) ? 'Word' : 'Excel';
     const raw = await execOffice(driver, ['-InputPath', input, '-OutputPath', output, '-ProblemsPath', json, '-Kind', kind]);
     const statuses = JSON.parse(raw || '[]').map((s) => s === 'marked' ? '已畫紅框' : '未定位');
-    return { buffer: fs.readFileSync(output), statuses };
+    const outputBuffer = await restoreTargetSheetProtection(fs.readFileSync(output), prepared.protections);
+    return { buffer: outputBuffer, statuses };
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
@@ -123,5 +185,7 @@ async function annotateFile(file, days, problems, options = {}) {
 
 module.exports = {
   annotateFile, findingKey, verifiedProblems,
-  _internal: { annotatePdf },
+  _internal: {
+    annotatePdf, workbookSheetPaths, removeTargetSheetProtection, restoreTargetSheetProtection,
+  },
 };

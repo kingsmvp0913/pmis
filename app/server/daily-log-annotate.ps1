@@ -31,7 +31,9 @@ if ($Kind -eq 'Excel') {
         $cell = $sheet.Range([string]$job.source.address)
         foreach ($edge in 7,8,9,10) {
           $border = $cell.Borders.Item($edge)
-          $border.LineStyle = 1; $border.Weight = 4; $border.Color = 255
+          $stage = "excel-border-$edge-style"; $border.LineStyle = 1
+          $stage = "excel-border-$edge-weight"; $border.Weight = 4
+          $stage = "excel-border-$edge-color"; $border.Color = 255
           Release-Com $border
         }
         $statuses += 'marked'
