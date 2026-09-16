@@ -9,7 +9,6 @@ $ErrorActionPreference = 'Stop'
 $stage = 'load-json'
 trap { Write-Error "$stage | line $($_.InvocationInfo.ScriptLineNumber) | hresult $($_.Exception.HResult)"; exit 1 }
 $jobs = @(Get-Content -Raw -Encoding UTF8 -LiteralPath $ProblemsPath | ConvertFrom-Json)
-$missing = [Type]::Missing
 Copy-Item -LiteralPath $InputPath -Destination $OutputPath -Force
 
 function Release-Com($obj) {
@@ -25,34 +24,19 @@ if ($Kind -eq 'Excel') {
     $book = $app.Workbooks.Open($OutputPath, 0, $false)
     $statuses = @()
     foreach ($job in $jobs) {
-      $stage = 'excel-find'
-      $hits = @()
-      if ($job.relevant -and $job.searchText) {
-        foreach ($sheet in @($book.Worksheets)) {
-          $range = $null; $found = $null; $first = $null
-          try {
-            $range = $sheet.UsedRange
-            $found = $range.Find([string]$job.searchText, $missing, -4163, 2, 1, 1, $false, $false, $false)
-            if ($null -ne $found) {
-              $first = $found.Address()
-              do {
-                $hits += $found
-                $found = $range.FindNext($found)
-              } while ($null -ne $found -and $found.Address() -ne $first -and $hits.Count -lt 20)
-            }
-          } finally { Release-Com $range; Release-Com $sheet }
-        }
-      }
-      if ($hits.Count -eq 1) {
+      $cell = $null; $sheet = $null
+      if ($null -ne $job.source -and $job.source.kind -eq 'excel') {
         $stage = 'excel-border'
+        $sheet = $book.Worksheets.Item([string]$job.source.sheet)
+        $cell = $sheet.Range([string]$job.source.address)
         foreach ($edge in 7,8,9,10) {
-          $border = $hits[0].Borders.Item($edge)
+          $border = $cell.Borders.Item($edge)
           $border.LineStyle = 1; $border.Weight = 4; $border.Color = 255
           Release-Com $border
         }
         $statuses += 'marked'
       } else { $statuses += 'unlocated' }
-      foreach ($hit in $hits) { Release-Com $hit }
+      Release-Com $cell; Release-Com $sheet
     }
 
     $stage = 'excel-summary'
@@ -89,25 +73,18 @@ if ($Kind -eq 'Excel') {
     $doc = $app.Documents.Open($OutputPath, $false, $false)
     $statuses = @()
     foreach ($job in $jobs) {
-      $stage = 'word-find'
-      $range = $doc.Content; $hits = @()
-      if ($job.relevant -and $job.searchText) {
-        $find = $range.Find; $find.ClearFormatting(); $find.Text = [string]$job.searchText
-        $find.Forward = $true; $find.Wrap = 0; $find.MatchCase = $false; $find.MatchWholeWord = $false
-        while ($find.Execute() -and $hits.Count -lt 20) {
-          $hits += $range.Duplicate
-          $range.Start = $range.End; $range.End = $doc.Content.End
-          $find = $range.Find; $find.Text = [string]$job.searchText; $find.Forward = $true; $find.Wrap = 0
-        }
-      }
-      if ($hits.Count -eq 1) {
+      $range = $null; $table = $null; $cell = $null
+      if ($null -ne $job.source -and $job.source.kind -eq 'word') {
         $stage = 'word-border'
-        $hits[0].Borders.Enable = 1
-        foreach ($border in @($hits[0].Borders)) { $border.Color = 255; $border.LineWidth = 18; Release-Com $border }
+        $table = $doc.Tables.Item([int]$job.source.table)
+        $cell = $table.Range.Cells.Item([int]$job.source.cell)
+        $range = $cell.Range; $range.Borders.Enable = 1
+        $range.Borders.OutsideLineStyle = 1
+        $range.Borders.OutsideLineWidth = 18
+        $range.Borders.OutsideColor = 255
         $statuses += 'marked'
       } else { $statuses += 'unlocated' }
-      foreach ($hit in $hits) { Release-Com $hit }
-      Release-Com $range
+      Release-Com $range; Release-Com $cell; Release-Com $table
     }
     $stage = 'word-summary'
     $end = $doc.Content; $end.Collapse(0); $end.InsertBreak(7); $end.InsertAfter("廠商問題摘要`r")

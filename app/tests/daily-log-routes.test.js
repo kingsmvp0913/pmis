@@ -215,7 +215,8 @@ describe('廠商問題標註下載包', () => {
       .attach('daily_log', Buffer.from('%PDF-scan'), '掃描施工日誌.pdf'));
     expect(res.status).toBe(200);
     expect(annotateFile).toHaveBeenCalledWith(
-      expect.objectContaining({ name: '掃描施工日誌.pdf' }), scannedDays, expect.any(Array), { extractedPages: pages },
+      expect.objectContaining({ name: '掃描施工日誌.pdf' }), scannedDays, expect.any(Array),
+      expect.objectContaining({ parser: expect.any(Object), extractedPages: pages }),
     );
   });
 });

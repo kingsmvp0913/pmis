@@ -148,7 +148,7 @@ async function recognitionIssuesZip(files, problems) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-async function vendorIssuesZip(files, dayLists, problems, extractedPagesByFile = []) {
+async function vendorIssuesZip(files, dayLists, problems, parser, extractedPagesByFile = []) {
   const zip = new JSZip();
   const folder = zip.folder('已標註施工日誌');
   const used = new Set();
@@ -159,7 +159,7 @@ async function vendorIssuesZip(files, dayLists, problems, extractedPagesByFile =
     const ext = path.extname(name);
     const marked = await annotateFile(
       { name, buffer: file.buffer }, dayLists[i] || [], problems,
-      { extractedPages: extractedPagesByFile[i] },
+      { parser, extractedPages: extractedPagesByFile[i] },
     );
     folder.file(uniqueZipName(`${path.basename(name, ext)}_廠商問題${ext}`, used), marked.buffer);
     results.push(marked.statuses || []);
@@ -580,7 +580,7 @@ function registerRoutes(app) {
           return res.status(400).json({ error: '問題內容已變更，請重新檢查施工日誌後再下載' });
         }
 
-        const buffer = await vendorIssuesZip(files, lists, problems, extractedPagesByFile);
+        const buffer = await vendorIssuesZip(files, lists, problems, ctx.parser, extractedPagesByFile);
         res.attachment('廠商問題標註.zip');
         res.send(buffer);
       } catch (err) {
