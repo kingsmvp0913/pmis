@@ -103,6 +103,13 @@ function isCategoryRow(r) {
   return isBlank(r.單位) && r.契約單價 == null && r.契約數量 == null;
 }
 
+// 小計列的完成金額是子項加總，數量欄不一定與該列單價相乘（展翔實測：
+// 「門窗與雜項工程小計」累加金額 376870、累計數量 0.3、單價 97000）。
+// 這類列仍參與當日總額等檢查，但不能套用一般工程項目的量價交叉核對。
+function isSubtotalRow(r) {
+  return squash(r.工程項目).endsWith('小計');
+}
+
 // 契約表的大類標題沒有單位、數量、單價；它不是施工日誌應列的明細，不能因為日誌
 // 沒有這一列而判 E2 或 D5。契約欄位名稱與日誌不同，不能直接重用 isCategoryRow。
 function isContractCategory(c) {
@@ -582,7 +589,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
 
       // B3 兩種算法交叉核對:逐日累加的本日完成金額 vs 累計完成數量×契約單價。
       // 讀取器不提供「累計完成金額」,故累計金額一律由前者推導(總覽 spec §5)。
-      if (!skippedCodes.has('B3') && 本日金額 != null) {
+      if (!skippedCodes.has('B3') && 本日金額 != null && !isSubtotalRow(r)) {
         const 累計金額 = (cumAmount.get(狀態項次) || 0) + 本日金額;
         cumAmount.set(狀態項次, 累計金額);
         const 筆數 = (amountTerms.get(狀態項次) || 0) + 1;
