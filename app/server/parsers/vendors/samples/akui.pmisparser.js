@@ -171,6 +171,86 @@ function blockStarts(grid) {
   return out;
 }
 
+const CONTENT_WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+const CONTENT_WEATHER = ['雨天', '晴天', '陰天'];
+
+function contentWord(values, v) {
+  const n = numOf(v);
+  return n != null && n >= 0 && n < values.length ? values[n] : null;
+}
+
+function round2(v) {
+  const n = numOf(v);
+  return n == null ? null : Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+// ── 新社高中 Excel：單日顯示頁底下的橫向逐日資料 ────────────
+function parseLegacyContentWorkbook(wb, serialToISO) {
+  const grid = wb.sheets['內容'];
+  if (!grid || despace(at(grid, 13, 5)) !== '日期'
+    || !despace(at(grid, 21, 2)).includes('重要施工項目完成數量')) return null;
+
+  const itemRows = [];
+  for (let r = 24; r <= 59; r++) {
+    const no = text(at(grid, r, 0));
+    const name = text(at(grid, r, 2));
+    if (no && name && /^\d+$/.test(no)) itemRows.push(r);
+  }
+  if (!itemRows.length) return null;
+
+  const crewRows = [122, 123, 124, 125, 126];
+  const machineRows = [128, 129, 130, 131, 132, 133];
+  const firstDate = numOf(at(grid, 10, 3));
+  const days = [];
+  for (let c = 9; c < (grid[117] || []).length; c++) {
+    const dateSerial = numOf(at(grid, 117, c));
+    const hasWeather = numOf(at(grid, 119, c)) != null || numOf(at(grid, 120, c)) != null;
+    const hasEntry = [...itemRows, ...crewRows, ...machineRows, 138]
+      .some((r) => text(at(grid, r, c)) != null);
+    // 這份範本在遠端未來欄又預填天氣；第一個完全空白日就是本次已填區間的結尾。
+    if (dateSerial == null || (!hasWeather && !hasEntry)) break;
+
+    const dailyRows = itemRows.map((r) => {
+      let cumulative = 0;
+      for (let k = 9; k <= c; k++) cumulative += numOf(at(grid, r, k)) || 0;
+      return {
+        項次: text(at(grid, r, 0)),
+        工程項目: text(at(grid, r, 2)),
+        單位: unitText(at(grid, r, 3)),
+        契約單價: null,
+        契約數量: numOf(at(grid, r, 4)),
+        本日完成數量: numOf(at(grid, r, c)),
+        本日完成金額: null,
+        累計完成數量: cumulative,
+      };
+    });
+    const 出工明細 = crewRows.map((r) => ({ 工別: text(at(grid, r, 7)), 人數: numOf(at(grid, r, c)) }))
+      .filter((x) => x.工別);
+    const 主要機具 = machineRows.map((r) => ({ 名稱: text(at(grid, r, 7)), 數量: numOf(at(grid, r, c)) }))
+      .filter((x) => x.名稱);
+    const 有人數 = 出工明細.filter((x) => x.人數 != null);
+    days.push({
+      header: {
+        工程名稱: text(at(grid, 0, 3)),
+        填報日期: serialToISO(dateSerial),
+        星期: contentWord(CONTENT_WEEKDAYS, numOf(at(grid, 118, c)) - 1),
+        天氣_上午: contentWord(CONTENT_WEATHER, at(grid, 119, c)),
+        天氣_下午: contentWord(CONTENT_WEATHER, at(grid, 120, c)),
+        預定進度: round2(at(grid, 12, c)),
+        實際進度: round2(at(grid, 9, c)),
+        出工總人數: 有人數.length ? 有人數.reduce((sum, x) => sum + x.人數, 0) : null,
+        本日累計金額: null,
+        承包廠商: META_VENDOR_KEY,
+        開工日期: firstDate == null ? null : serialToISO(firstDate),
+      },
+      dailyRows,
+      extras: { 出工明細, 主要機具 },
+    });
+  }
+  if (!days.length) throw new Error('「內容」工作表沒有已填寫的施工日誌');
+  return days;
+}
+
 // ── 外埔 Excel：橫向逐日資料 ───────────────────────────────
 // 「日誌」只顯示目前選取的一天；完整資料在「數量表」(每欄一天)與「出工表」(每列一天)。
 function parseHorizontalWorkbook(wb, serialToISO) {
@@ -361,6 +441,8 @@ async function parseAll(filePath, ctx) {
   if (wb.sheets['數量表'] && wb.sheets['出工表']) {
     return parseHorizontalWorkbook(wb, ft.excelSerialToISO);
   }
+  const contentDays = parseLegacyContentWorkbook(wb, ft.excelSerialToISO);
+  if (contentDays) return contentDays;
   const grid = wb.sheets[SHEET];
   const starts = grid ? blockStarts(grid) : [];
   if (!starts.length) {
@@ -427,7 +509,7 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.1.0',
+    version: '1.2.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',
@@ -438,7 +520,7 @@ module.exports = {
   parseAll,
   selfTest,
   _internal: {
-    parseDay, blockStarts, numInSpan, unitOf, parseHorizontalWorkbook,
+    parseDay, blockStarts, numInSpan, unitOf, parseLegacyContentWorkbook, parseHorizontalWorkbook,
     parsePdfMainPage, parsePdfSupplement,
   },
 };

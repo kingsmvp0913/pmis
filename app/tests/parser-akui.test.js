@@ -1,7 +1,7 @@
 /**
  * 阿奎營造(新社高中弘揚樓廁所)施工日誌讀取器測試。
  *
- * 舊版新社高中 xls 一個檔一天；外埔國小另有可獨立讀取的橫向 xlsm 與雙頁 PDF。
+ * 新社高中與外埔國小 Excel 都是單日顯示頁加底層逐日矩陣；外埔另有雙頁 PDF。
  */
 const path = require('path');
 const mod = require('../server/parsers/vendors/samples/akui.pmisparser.js');
@@ -25,13 +25,15 @@ describe('parseAll(新社高中)', () => {
   let days;
   beforeAll(async () => { days = await mod.parseAll(FIXTURE, ctx); }, 120000);
 
-  test('一個檔就是一天', () => {
-    expect(days.length).toBe(1);
-    expect(days[0].header.填報日期).toBe('2024-07-28');
+  test('從內容工作表讀出 7/1～7/31 全部 31 天', () => {
+    expect(days).toHaveLength(31);
+    expect(days[0].header.填報日期).toBe('2024-07-01');
+    expect(days[27].header.填報日期).toBe('2024-07-28');
+    expect(days.at(-1).header.填報日期).toBe('2024-07-31');
   });
 
   test('header 逐欄', () => {
-    const h = days[0].header;
+    const h = days[27].header;
     expect(h.工程名稱).toBe('113年度弘揚樓廁所整修工程');
     expect(h.承包廠商).toBe('阿奎營造有限公司');
     expect(h.開工日期).toBe('2024-07-01');
@@ -39,20 +41,20 @@ describe('parseAll(新社高中)', () => {
     expect(h.天氣_下午).toBe('雨天');
     expect(h.預定進度).toBe(9.42);
     expect(h.出工總人數).toBe(4);
-    expect(h.星期).toBeNull();
+    expect(h.星期).toBe('星期日');
   });
 
   // 明細區的結尾是一整排數字 0,不是空白列。用「名稱為空」當停止條件會多收
   // 一堆項目名稱叫「0」的列。
   test('明細止於那排 0,不會多收', () => {
-    expect(days[0].dailyRows.length).toBe(36);
-    for (const r of days[0].dailyRows) expect(r.工程項目).not.toMatch(/^\d+$/);
+    expect(days.every((d) => d.dailyRows.length === 36)).toBe(true);
+    for (const r of days[27].dailyRows) expect(r.工程項目).not.toMatch(/^\d+$/);
   });
 
   // 表頭的「預算數量」橫跨欄 3~4,但合併範圍逐列不同:多數列欄 4 是單位「式」
   // 跨進來的、費用項那幾列欄 4 卻是數量。只讀合併起點欄會在某些列讀到字串而變 null。
   test('契約數量往右掃到第一個數字', () => {
-    const rows = days[0].dailyRows;
+    const rows = days[27].dailyRows;
     expect(rows[1]).toMatchObject({ 單位: '式', 契約數量: 1 });
     const 職安 = rows.find((r) => r.項次 === '32');
     expect(職安).toMatchObject({
@@ -61,22 +63,22 @@ describe('parseAll(新社高中)', () => {
     });
   });
 
-  // 第 1 列那天整列沒填(來源就空著),但它仍是一個項目、要佔項次——
-  // 此格式**沒有大類列**(費用項就是一般明細),出現序不排除任何列。
-  test('沒填的那一列仍佔項次', () => {
-    const r = days[0].dailyRows[0];
+  // 單日顯示頁會把未施作列的契約資料整列留白；底層矩陣仍有正式項目資料。
+  test('未施作列仍保留底層契約資料與項次', () => {
+    const r = days[27].dailyRows[0];
     expect(r.項次).toBe('1');
     expect(r.工程項目).toMatch(/^工程告示牌/);
-    expect(r.單位).toBeNull();
-    expect(r.契約數量).toBeNull();
+    expect(r).toMatchObject({ 單位: '式', 契約數量: 1, 本日完成數量: null, 累計完成數量: 1 });
   });
 
   test('此格式沒有單價與金額,一律 null', () => {
-    for (const r of days[0].dailyRows) {
-      expect(r.契約單價).toBeNull();
-      expect(r.本日完成金額).toBeNull();
+    for (const d of days) {
+      for (const r of d.dailyRows) {
+        expect(r.契約單價).toBeNull();
+        expect(r.本日完成金額).toBeNull();
+      }
+      expect(d.header.本日累計金額).toBeNull();
     }
-    expect(days[0].header.本日累計金額).toBeNull();
   });
 });
 
