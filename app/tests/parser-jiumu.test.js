@@ -10,6 +10,7 @@ const mod = require('../server/parsers/vendors/samples/jiumu.pmisparser.js');
 const filetypes = require('../server/parsers/filetypes');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'jiumu.xls');
+const SHIGUI_PDF = path.join(__dirname, 'fixtures', 'jiumu-shigui.pdf');
 const ctx = { filetypes };
 
 test('selfTest 通過', () => {
@@ -64,6 +65,46 @@ test('PDF 分開的本日與累計金額表頭仍能切出本日金額', () => {
     mk(440, [[62.8, 84.6, '累計(本日完成金額合計)']]),
   ];
   expect(mod._internal.parsePdfItemRows(rows)[0].本日完成金額).toBe(136);
+});
+
+test('PDF 費用母項下未填施作值的拆價列不當成獨立契約工項', () => {
+  const row = (項次, 工程項目, extra = {}) => ({
+    項次, 工程項目, 單位: '式', 契約數量: 1, 契約單價: 100,
+    本日完成數量: null, 本日完成金額: null, 累計完成數量: null, ...extra,
+  });
+  const source = [
+    row('貳', '職業安全衛生管理費(壹*1%)', { 契約數量: null, 契約單價: null }),
+    row('一', '產品,勞工安全衛生,管理計畫製作費'),
+    row('二', '工地清理,環境保護與清潔費'),
+    row('参', '工程品質管制作業與材料試驗費(壹*1.6%)', { 契約數量: null, 契約單價: null }),
+    row('一', '品質管理,品質管理計畫書'),
+    row('二', '品質管理,品質管理計畫執行費'),
+    row('肆', '包商管理及利潤費'),
+  ];
+  expect(mod._internal.omitUnreportedFeeBreakdowns(source).map((r) => r.項次))
+    .toEqual(['貳', '参', '肆']);
+
+  source[1].本日完成數量 = 0.1;
+  expect(mod._internal.omitUnreportedFeeBreakdowns(source).map((r) => r.項次))
+    .toEqual(['貳', '一', '二', '参', '肆']);
+});
+
+describe('parseAll(石龜防災公園 115.08 PDF)', () => {
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(SHIGUI_PDF, ctx); }, 120000);
+
+  test('22 天皆保留契約母項，排除 11 筆未填施作值的拆價列', () => {
+    expect(days).toHaveLength(22);
+    expect(days[0].header.填報日期).toBe('2026-08-10');
+    expect(days.at(-1).header.填報日期).toBe('2026-08-31');
+    for (const day of days) {
+      expect(day.dailyRows).toHaveLength(46); // 契約 44 項 +「壹／一」兩個分類列
+      expect(day.dailyRows.find((r) => r.項次 === '貳').工程項目).toContain('職業安全衛生管理費');
+      expect(day.dailyRows.find((r) => ['參', '参'].includes(r.項次)).工程項目).toContain('品質管制作業');
+      expect(day.dailyRows.some((r) => /^[一二三四五六]$/.test(String(r.項次 || ''))
+        && r.契約單價 != null)).toBe(false);
+    }
+  });
 });
 
 // vendorKey 的權威來源是決標公告的得標廠商;名字對不上 vendors 表的話,

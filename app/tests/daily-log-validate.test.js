@@ -614,6 +614,16 @@ test('E3 項目名稱與契約表不一致是軟警告', () => {
   expect(r.warnings.map((e) => e.code)).toContain('E3');
 });
 
+test('E3 帶回可供人工核准的日誌與契約名稱', () => {
+  const r = validateDailyLog({
+    days: [day('2026-08-01', [row('1', { 工程項目: '日誌別名' })])],
+    contract: [{ 項次: '1', 項目: '契約名稱', 單位: '式', 數量: 10, 單價: 100 }],
+  });
+  expect(r.warnings.find((e) => e.code === 'E3')).toMatchObject({
+    項次: '1', 契約項次: '1', 契約名稱: '契約名稱', 日誌原名稱: '日誌別名',
+  });
+});
+
 test.each([
   ['E4', { 單位: 'KG' }],
   ['E5', { 契約數量: 999 }],

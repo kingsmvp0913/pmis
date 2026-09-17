@@ -1,5 +1,5 @@
 const {
-  groupFindings, formatFindingDates, recognitionProblems, vendorProblems,
+  groupFindings, formatFindingDates, recognitionProblems, vendorProblems, nameApprovals,
 } = require('../public/js/finding-groups');
 
 test('相同規則、項次與說明合併，日期連續時顯示範圍', () => {
@@ -52,4 +52,15 @@ test('只把標成廠商問題的群組送去產生標註檔', () => {
   expect(vendorProblems(groups)).toEqual([{
     級別: '硬錯', code: 'E4', 日期: '2026-08-01', 項次: '1', 訊息: '單位不一致',
   }]);
+});
+
+test('只有 E3 被指定通過時才產生名稱核准資料', () => {
+  const groups = groupFindings([], [{
+    code: 'E3', 日期: '2026-08-01', 項次: '1', 訊息: '名稱不同',
+    契約項次: '壹.1', 契約名稱: '契約名稱', 日誌原名稱: '日誌名稱',
+  }]);
+  groups[0].問題歸屬 = '通過';
+  expect(nameApprovals(groups)).toEqual([
+    { 契約項次: '壹.1', 契約名稱: '契約名稱', 日誌原名稱: '日誌名稱' },
+  ]);
 });

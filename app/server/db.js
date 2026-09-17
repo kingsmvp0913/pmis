@@ -193,6 +193,20 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
 
+    // 承辦人確認「日誌名稱與契約名稱雖不同，但實為同一工項」的紀錄。
+    // project_id 保留本案核准依據；vendor_id 則讓同廠商的其他工程能提出沿用建議。
+    `CREATE TABLE IF NOT EXISTS daily_log_name_approvals (
+      id                 SERIAL PRIMARY KEY,
+      vendor_id          INTEGER NOT NULL REFERENCES vendors(id),
+      project_id         INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      contract_item_no   TEXT NOT NULL,
+      contract_item_name TEXT NOT NULL,
+      log_item_name      TEXT NOT NULL,
+      approved_by        INTEGER REFERENCES users(id),
+      created_at         TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE (project_id, contract_item_no, contract_item_name, log_item_name)
+    )`,
+
     // 工程投保的險種(多選)。一個工程常同時投營造綜合保險與意外責任險等數種,
     // 原本 projects.insurance_type_id 是單一 FK,只存得下一種——承辦人得挑一個
     // 填、其餘的沒有地方記。

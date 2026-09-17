@@ -96,6 +96,7 @@ const DailyLogs = (() => {
   function card(projectId) {
     let files = [];
     let scanned = null;          // scan 回來的草稿(承辦人編輯的對象)
+    let findingGroups = [];
 
     // 可多選:明德那家的兩聯分在**兩個 PDF 檔**(第一聯有天氣與進度、第二聯有
     // 完整明細含單價金額),只送一個檔不是少了天氣就是少了單價,而 SP3 只會說
@@ -144,6 +145,7 @@ const DailyLogs = (() => {
       issueDownloadBtn.style.display = 'none';
       vendorDownloadBtn.style.display = 'none';
       const all = FindingGroups.groupFindings(errors, warnings);
+      findingGroups = all;
       if (!all.length) return;
       const updateDownload = () => {
         const 有辨識問題 = all.some((f) => f.問題歸屬 === '辨識問題');
@@ -160,11 +162,23 @@ const DailyLogs = (() => {
           : '下載廠商問題標註（請先指定問題歸屬）';
       };
       const trs = all.map((f) => {
+        let approvalNote = null;
         const owner = el('select', { class: 'form-control issue-owner' }, [
           el('option', { value: '待確認' }, '待確認'),
           el('option', { value: '廠商問題' }, '廠商問題'),
           el('option', { value: '辨識問題' }, '辨識問題'),
+          ...(f.code === 'E3'
+            ? [el('option', { value: '通過' }, '通過（名稱視為相同）')]
+            : []),
         ]);
+        if (f.code === 'E3' && f.名稱核准) {
+          f.問題歸屬 = '通過';
+          owner.value = '通過';
+          const source = f.名稱核准.來源工程 ? `；曾於「${f.名稱核准.來源工程}」核准` : '';
+          const note = `${f.名稱核准.狀態}${source}，送出報表時才會確認套用`;
+          owner.title = note;
+          approvalNote = el('div', { class: 'hint' }, note);
+        }
         owner.addEventListener('change', () => {
           f.問題歸屬 = owner.value;
           updateDownload();
@@ -177,7 +191,7 @@ const DailyLogs = (() => {
           el('td', {}, f.code),
           el('td', { title: f.日期.join('、') }, f.日期顯示),
           el('td', {}, f.項次 || '—'),
-          el('td', {}, f.訊息),
+          el('td', {}, approvalNote ? [f.訊息, approvalNote] : f.訊息),
           el('td', {}, owner),
         ]);
       });
@@ -470,7 +484,9 @@ const DailyLogs = (() => {
       confirmBtn.disabled = true;
       confirmBtn.textContent = '寫入中(Excel 需數秒)…';
       try {
-        const r = await Api.upload(`projects/${projectId}/daily-logs/confirm`, fd());
+        const form = fd();
+        form.append('name_approvals', JSON.stringify(FindingGroups.nameApprovals(findingGroups)));
+        const r = await Api.upload(`projects/${projectId}/daily-logs/confirm`, form);
         showToast(`已寫入 ${r.天數} 天、${r.筆數} 筆逐日資料`, 'success');
         confirmBtn.style.display = 'none';
         diffBox.innerHTML = '';

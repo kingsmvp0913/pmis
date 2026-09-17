@@ -225,6 +225,7 @@ async function loadContext(projectId) {
     contract: items.map((i) => ({ ...i, 數量: Number(i.數量), 單價: Number(i.單價) })),
     開工日,
     parser,
+    vendorId: p[0].vendor_id,
     project: {
       工程名稱: p[0].name,
       承包廠商: vendorKey,
@@ -233,6 +234,69 @@ async function loadContext(projectId) {
       竣工日期: toISODate(p[0].contract_completion_date),
     },
   };
+}
+
+const nameApprovalKey = (p) => JSON.stringify([
+  String(p.契約項次 == null ? '' : p.契約項次),
+  String(p.契約名稱 == null ? '' : p.契約名稱),
+  String(p.日誌原名稱 == null ? '' : p.日誌原名稱),
+]);
+
+async function addNameApprovalHints(projectId, vendorId, warnings) {
+  const e3 = (warnings || []).filter((w) => w.code === 'E3' && w.契約項次
+    && w.契約名稱 && w.日誌原名稱);
+  if (!vendorId || !e3.length) return warnings;
+  const { rows } = await query(
+    `SELECT a.project_id, a.contract_item_no, a.contract_item_name, a.log_item_name,
+            p.name AS project_name
+       FROM daily_log_name_approvals a
+       JOIN projects p ON p.id = a.project_id
+      WHERE a.vendor_id = $1`, [vendorId]);
+  return warnings.map((warning) => {
+    if (warning.code !== 'E3') return warning;
+    const exact = rows.find((a) => String(a.project_id) === String(projectId)
+      && a.contract_item_no === String(warning.契約項次)
+      && a.contract_item_name === warning.契約名稱
+      && a.log_item_name === warning.日誌原名稱);
+    if (exact) return { ...warning, 名稱核准: { 狀態: '已核准' } };
+    const prior = rows.find((a) => String(a.project_id) !== String(projectId)
+      && a.contract_item_name === warning.契約名稱
+      && a.log_item_name === warning.日誌原名稱);
+    return prior
+      ? { ...warning, 名稱核准: { 狀態: '建議通過', 來源工程: prior.project_name } }
+      : warning;
+  });
+}
+
+function requestedNameApprovals(raw, warnings) {
+  let selected;
+  try { selected = JSON.parse(raw || '[]'); }
+  catch { throw new Error('送出的名稱核准內容不是有效 JSON'); }
+  if (!Array.isArray(selected)) throw new Error('送出的名稱核准內容格式不正確');
+  const valid = new Map((warnings || [])
+    .filter((w) => w.code === 'E3' && w.契約項次 && w.契約名稱 && w.日誌原名稱)
+    .map((w) => [nameApprovalKey(w), w]));
+  const out = [];
+  const seen = new Set();
+  for (const item of selected) {
+    const key = nameApprovalKey(item || {});
+    const warning = valid.get(key);
+    if (!warning) throw new Error('名稱核准內容已變更，請重新檢查施工日誌');
+    if (!seen.has(key)) out.push(warning);
+    seen.add(key);
+  }
+  return out;
+}
+
+async function saveNameApprovals(projectId, vendorId, userId, approvals) {
+  for (const a of approvals) {
+    await query(
+      `INSERT INTO daily_log_name_approvals
+         (vendor_id, project_id, contract_item_no, contract_item_name, log_item_name, approved_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (project_id, contract_item_no, contract_item_name, log_item_name) DO NOTHING`,
+      [vendorId, projectId, a.契約項次, a.契約名稱, a.日誌原名稱, userId]);
+  }
 }
 
 /** 已寫入的逐日逐項紀錄(供跨批次差異)。 */
@@ -491,6 +555,7 @@ function registerRoutes(app) {
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
+        result.warnings = await addNameApprovalHints(req.params.id, ctx.vendorId, result.warnings);
         const diff = diffDays(records, rows);
 
         res.json({
@@ -606,6 +671,12 @@ function registerRoutes(app) {
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
+        let approvals;
+        try {
+          approvals = requestedNameApprovals(req.body.name_approvals, result.warnings);
+        } catch (e) {
+          return res.status(400).json({ error: e.message });
+        }
         if (result.errors.length) {
           // 一次列全:逐條修正會讓承辦人與廠商來回好幾趟
           return res.status(400).json({
@@ -613,6 +684,8 @@ function registerRoutes(app) {
             ...result,
           });
         }
+
+        await saveNameApprovals(req.params.id, ctx.vendorId, req.userId, approvals);
 
         await writeDays({
           projectId: req.params.id,

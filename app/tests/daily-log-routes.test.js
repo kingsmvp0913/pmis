@@ -255,6 +255,116 @@ test('parse 回驗證結果與差異,且不落庫', async () => {
   expect(rows[0].n).toBe(0);
 });
 
+test('E3 核准綁定本工程，且同廠商其他工程只預告可沿用', async () => {
+  const { app, token, id } = await makeApp();
+  const days = [day('2026-04-08', [r('1', 3, { 工程項目: '日誌別名' })])];
+  feed(days);
+  const first = await post(app, token, id, 'parse').expect(200);
+  const warning = first.body.warnings.find((w) => w.code === 'E3');
+  expect(warning).toMatchObject({
+    契約項次: '1', 契約名稱: '項目1', 日誌原名稱: '日誌別名',
+  });
+  expect(warning.名稱核准).toBeUndefined();
+
+  feed(days);
+  await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('name_approvals', JSON.stringify([warning]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(200);
+
+  feed(days);
+  const sameProject = await post(app, token, id, 'parse').expect(200);
+  expect(sameProject.body.warnings.find((w) => w.code === 'E3').名稱核准)
+    .toEqual({ 狀態: '已核准' });
+
+  const { rows: source } = await db.query('SELECT vendor_id FROM projects WHERE id = $1', [id]);
+  const { rows: projects } = await db.query(
+    `INSERT INTO projects (name, vendor_id, start_date, award_amount, contract_completion_date)
+     VALUES ('另一工程', $1, '2026-04-08', 100000, '2026-12-31') RETURNING id`,
+    [source[0].vendor_id]);
+  const otherId = projects[0].id;
+  await db.query(
+    `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+     VALUES ($1, 1, 'A-1', '項目1', '式', 10, 100)`, [otherId]);
+
+  const otherDays = [day('2026-04-08', [r('A-1', 3, { 工程項目: '日誌別名' })])];
+  feed(otherDays);
+  const suggested = await post(app, token, otherId, 'parse').expect(200);
+  const suggestedWarning = suggested.body.warnings.find((w) => w.code === 'E3');
+  expect(suggestedWarning.名稱核准)
+    .toEqual({ 狀態: '建議通過', 來源工程: '測試工程' });
+
+  feed(otherDays);
+  await request(app).post(`/api/projects/${otherId}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('name_approvals', JSON.stringify([suggestedWarning]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '另一工程施工日誌.pdf')
+    .expect(200);
+  const { rows: approvals } = await db.query(
+    'SELECT project_id FROM daily_log_name_approvals ORDER BY project_id');
+  expect(approvals.map((a) => Number(a.project_id))).toEqual([Number(id), Number(otherId)]);
+});
+
+test('名稱核准不跨廠商，也不把不同契約名稱或不同日誌原名稱當成同一規則', async () => {
+  const { app, token, id } = await makeApp();
+  const approvedDays = [day('2026-04-08', [r('1', 3, { 工程項目: '日誌別名' })])];
+  feed(approvedDays);
+  const parsed = await post(app, token, id, 'parse').expect(200);
+  const approved = parsed.body.warnings.find((w) => w.code === 'E3');
+  feed(approvedDays);
+  await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('name_approvals', JSON.stringify([approved]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(200);
+
+  const { rows: vendorRows } = await db.query(
+    `INSERT INTO vendors (name) VALUES ('另一家營造') RETURNING id`);
+  const anotherVendorId = vendorRows[0].id;
+  const { rows: currentVendorRows } = await db.query(
+    'SELECT vendor_id FROM projects WHERE id = $1', [id]);
+  const currentVendorId = currentVendorRows[0].vendor_id;
+  const addProject = async (name, vendorId, contractName) => {
+    const { rows } = await db.query(
+      `INSERT INTO projects (name, vendor_id, start_date, award_amount, contract_completion_date)
+       VALUES ($1, $2, '2026-04-08', 100000, '2026-12-31') RETURNING id`,
+      [name, vendorId]);
+    await db.query(
+      `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+       VALUES ($1, 1, '1', $2, '式', 10, 100)`, [rows[0].id, contractName]);
+    return rows[0].id;
+  };
+
+  const differentVendorProject = await addProject('不同廠商工程', anotherVendorId, '項目1');
+  feed(approvedDays);
+  const differentVendor = await post(app, token, differentVendorProject, 'parse').expect(200);
+  expect(differentVendor.body.warnings.find((w) => w.code === 'E3').名稱核准).toBeUndefined();
+
+  const differentContractProject = await addProject('不同契約名稱工程', currentVendorId, '另一契約名稱');
+  feed(approvedDays);
+  const differentContract = await post(app, token, differentContractProject, 'parse').expect(200);
+  expect(differentContract.body.warnings.find((w) => w.code === 'E3').名稱核准).toBeUndefined();
+
+  const differentLogProject = await addProject('不同日誌名稱工程', currentVendorId, '項目1');
+  feed([day('2026-04-08', [r('1', 3, { 工程項目: '另一日誌名稱' })])]);
+  const differentLog = await post(app, token, differentLogProject, 'parse').expect(200);
+  expect(differentLog.body.warnings.find((w) => w.code === 'E3').名稱核准).toBeUndefined();
+});
+
+test('confirm 不接受目前驗證結果不存在的名稱核准', async () => {
+  const { app, token, id } = await makeApp();
+  feed([day('2026-04-08', [r('1', 3, { 工程項目: '日誌別名' })])]);
+  const res = await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('name_approvals', JSON.stringify([{
+      契約項次: '1', 契約名稱: '項目1', 日誌原名稱: '被竄改的名稱',
+    }]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(400);
+  expect(res.body.error).toMatch(/內容已變更/);
+});
+
 // 硬錯整份擋下(2026-08-05 裁決):只跳過有問題的那幾天,報表會停在「進度不完整」
 // 的狀態,而累計金額與完成百分比都是公式自算——數字會是錯的,但看起來完全正常。
 test('有硬錯時整份不寫入', async () => {

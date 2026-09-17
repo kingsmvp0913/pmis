@@ -396,6 +396,51 @@ function parsePdfHeader(rows) {
   };
 }
 
+const TOP_LEVEL_FEE_NO_RE = /^[壹貳參参肆伍陸柒捌玖拾]$/;
+const BREAKDOWN_ITEM_NO_RE = /^[一二三四五六七八九十]$/;
+
+/**
+ * 新版石龜 PDF 會在貳、參兩個費用母項下印出「單價分析」子列，但契約詳細價目表
+ * 只有母項。這些子列的複價已與原始契約表交叉核對（兩組各 148,825 元），且來源
+ * 沒有替它們填本日／累計施作值；若送進 SP3，每天都會被誤判成不存在的契約項次。
+ *
+ * 只在整組都符合特定費用類型、中文子項次、完整量價且完全沒有施作值時排除。
+ * 任一列真的有施工值或名稱不像該費用的拆價內容，就保留整組交給驗證層判斷。
+ */
+function omitUnreportedFeeBreakdowns(rows) {
+  const feeKind = (row) => {
+    const no = String(row && row.項次 || '').trim();
+    const name = squash(row && row.工程項目);
+    if (no === '貳' && name.includes('職業安全衛生管理費')) return 'safety';
+    if ((no === '參' || no === '参') && name.includes('品質管制作業')) return 'quality';
+    return null;
+  };
+  const matchesKind = (row, kind) => {
+    const name = squash(row.工程項目);
+    if (kind === 'safety') return /勞工安全衛生|環境保護|清潔費/.test(name);
+    return name.startsWith('品質管理,');
+  };
+  const isUnreportedBreakdown = (row, kind) => BREAKDOWN_ITEM_NO_RE.test(String(row.項次 || '').trim())
+    && row.契約數量 != null && row.契約單價 != null
+    && row.本日完成數量 == null && row.本日完成金額 == null && row.累計完成數量 == null
+    && matchesKind(row, kind);
+
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    out.push(row);
+    const kind = feeKind(row);
+    if (!kind) continue;
+    let end = i + 1;
+    while (end < rows.length && !TOP_LEVEL_FEE_NO_RE.test(String(rows[end].項次 || '').trim())) end++;
+    const children = rows.slice(i + 1, end);
+    if (children.length >= 2 && children.every((child) => isUnreportedBreakdown(child, kind))) {
+      i = end - 1;
+    }
+  }
+  return out;
+}
+
 function parsePdfItemRows(rows) {
   const header = rows.find((row) => {
     const s = squash(pdfLine(row));
@@ -499,7 +544,7 @@ function parsePdfItemRows(rows) {
     }
     nearest.fragments.push(fragment);
   }
-  return anchors.map((anchor) => {
+  return omitUnreportedFeeBreakdowns(anchors.map((anchor) => {
     const valueRow = { items: anchor.valueItems };
     return {
       項次: anchor.項次,
@@ -511,7 +556,7 @@ function parsePdfItemRows(rows) {
       本日完成金額: pdfFirstNum(pdfBetween(valueRow, columns.本日金額起, columns.累計金額起)),
       累計完成數量: pdfFirstNum(pdfBetween(valueRow, columns.累計數量起, columns.本日金額起)),
     };
-  });
+  }));
 }
 
 async function parsePdfAll(filePath, ft) {
@@ -673,7 +718,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.2.0',
+    version: '1.2.1',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '出工總人數', '承包廠商', '開工日期',
@@ -686,6 +731,6 @@ module.exports = {
   selfTest,
   _internal: {
     parseSheet, parseItemRows, itemColumns, rocTextToISO, numOf, unitOf,
-    pdfGroupRows, parsePdfHeader, parsePdfItemRows,
+    pdfGroupRows, parsePdfHeader, parsePdfItemRows, omitUnreportedFeeBreakdowns,
   },
 };

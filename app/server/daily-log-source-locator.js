@@ -10,7 +10,7 @@ const path = require('path');
 const filetypes = require('./parsers/filetypes');
 
 const PROFILES = Object.fromEntries(
-  'akui baorong baoshu changze chengsheng chenhongjun cilifa dexin dongzhen fusen guoqian hejie hewen hongen huisheng jiayuan jinda jingwei jinlin jiumu kunyao licheng lilong mingde mingyou qiquan shangren shenglong xianghe xincheng yiding yile yiqian youhe youqian yuanfang yuanlong yusen zhanxiang zhendian zhengyu zhidong'
+  'akui baorong baoshu changze chengsheng chenhongjun cilifa dexin dongzhen fusen guoqian hejie hewen hongen huisheng jiayuan jinda jingwei jinlin jiumu kunyao licheng lilong mingde mingyou qiquan shangren shengjie shenglong xianghe xincheng yiding yile yiqian youhe youqian yuanfang yuanlong yusen zhanxiang zhendian zhengyu zhidong'
     .split(' ').map((key) => [key, {}]),
 );
 
@@ -324,8 +324,21 @@ async function tracePdf(parser, filePath, pages, problem, days, field) {
   const before = parsedValue(problem, days, field); const value = before.value; const allCandidates = [];
   const variants = dateVariants(problem.日期);
   let pagePool = pages;
-  const dated = pages.filter((p) => variants.some((d) => norm(p.items.map((x) => x.s).join('')).includes(d)));
-  if (dated.length) pagePool = dated;
+  const pageTexts = pages.map((p) => norm(p.items.map((x) => x.s).join('')));
+  const datedIndexes = pageTexts.map((textValue, index) => (
+    variants.some((variant) => textValue.includes(variant)) ? index : -1
+  )).filter((index) => index >= 0);
+  if (datedIndexes.length) {
+    const selected = new Set();
+    for (const start of datedIndexes) {
+      let end = pages.length;
+      for (let i = start + 1; i < pages.length; i++) {
+        if (pageTexts[i].includes(norm('填報日期'))) { end = i; break; }
+      }
+      for (let i = start; i < end; i++) selected.add(i);
+    }
+    pagePool = pages.filter((_page, index) => selected.has(index));
+  }
   for (const p of pagePool) for (let i = 0; i < p.items.length; i++) {
     if (fieldValueMatches(p.items[i].s, value, field)) allCandidates.push({ page: p.page, index: i, item: p.items[i] });
   }

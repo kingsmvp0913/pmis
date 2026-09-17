@@ -269,7 +269,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     }
     errors.push({ code, 日期, 項次, 訊息 });
   };
-  const soft = (code, 日期, 項次, 訊息) => warnings.push({ code, 日期, 項次, 訊息 });
+  const soft = (code, 日期, 項次, 訊息, details = {}) => {
+    warnings.push({ code, 日期, 項次, 訊息, ...details });
+  };
 
   const absent = absentHeaderFields(days);
   for (const { fields, code, label } of HEADER_FIELD_RULES) {
@@ -525,7 +527,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
           soft('E1', 日期, 項次, `項次與契約表不同(契約表為「${c.項次}」),已依項目名稱對應`);
         }
         if (itemNameKey(r.工程項目) !== itemNameKey(c.項目)) {
-          soft('E3', 日期, 項次, `項目名稱與契約表不一致(契約表:${c.項目})`);
+          soft('E3', 日期, 項次,
+            `項目名稱與契約表不一致(日誌:${r.工程項目};契約表:${c.項目})`, {
+              日誌原名稱: String(r.工程項目),
+              契約項次: String(c.項次),
+              契約名稱: String(c.項目),
+            });
         }
         if (!isBlank(r.單位) && squash(r.單位) !== squash(c.單位)) {
           hard('E4', 日期, 項次, `單位與契約表不一致(契約表:${c.單位})`);

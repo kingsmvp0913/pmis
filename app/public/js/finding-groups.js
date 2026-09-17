@@ -42,6 +42,10 @@ const FindingGroups = (() => {
           code: finding.code,
           項次: finding.項次,
           訊息: finding.訊息,
+          契約項次: finding.契約項次,
+          契約名稱: finding.契約名稱,
+          日誌原名稱: finding.日誌原名稱,
+          名稱核准: finding.名稱核准,
           日期: [],
           findings: [],
           問題歸屬: '待確認',
@@ -69,7 +73,11 @@ const FindingGroups = (() => {
     .flatMap((group) => group.findings)
     .map(({ 級別, code, 日期, 項次, 訊息 }) => ({ 級別, code, 日期, 項次, 訊息 }));
 
-  return { groupFindings, formatFindingDates, recognitionProblems, vendorProblems };
+  const nameApprovals = (groups) => (groups || [])
+    .filter((group) => group.code === 'E3' && group.問題歸屬 === '通過')
+    .map(({ 契約項次, 契約名稱, 日誌原名稱 }) => ({ 契約項次, 契約名稱, 日誌原名稱 }));
+
+  return { groupFindings, formatFindingDates, recognitionProblems, vendorProblems, nameApprovals };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = FindingGroups;
