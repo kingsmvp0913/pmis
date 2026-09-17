@@ -418,6 +418,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // D5 要用它而不是原始項次:見下面 D5 的說明。
   const 當日契約項次 = new Map();
   const seenDates = new Set();
+  let b4FeeSkipped = false;
 
   for (const d of days) {
     const h = d.header || {};
@@ -570,7 +571,8 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // 費用項目(貳~陸)的數量欄語意各家不一:金大填「完成比例」、玉森的累計欄
       // 填的是本日值(天1 與天2 都是 0.012233,而同一天的施工項目正確累加)。
       // 硬套會生出 238 個假硬錯,把施工項目真正的累計錯誤淹掉。
-      const 是費用項目 = !/^\d+$/.test(tailNo(狀態項次)) || FEE_NAME.test(squash(r.工程項目));
+      const 是費用項目 = /^[貳參参肆伍陸柒捌玖拾]+$/.test(tailNo(狀態項次))
+        || FEE_NAME.test(squash(r.工程項目));
       const 前一日 = prevCum.get(狀態項次);
       if (累計量 != null && 本日量 != null && 前一日 != null
         && !approx(累計量, 前一日 + 本日量)) {
@@ -633,7 +635,21 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     // 會小於真正的各項累計金額,把正確資料誤判為 B4 錯誤。累計數量是每一天
     // 明細列本身提供的完整累計,乘上單價才是同一時間點、可直接與表尾相比的值。
     if (!skippedCodes.has('B4') && h.本日累計金額 != null) {
-      const 累計金額列 = (d.dailyRows || []).filter((r) => !isCategoryRow(r))
+      const 明細列 = (d.dailyRows || []).filter((r) => !isCategoryRow(r));
+      const 有費用項 = 明細列.some((r) => {
+        const 項次 = normNo(r.項次);
+        return !/^\d+$/.test(tailNo(項次)) || FEE_NAME.test(squash(r.工程項目));
+      });
+      // 費用項的完成數量欄有比例、金額等多種語意，不能一律乘單價。齊全實測來源
+      // 逐項累計金額加總與表尾完全一致，但營業稅的「累計量×單價」差 428.86 元。
+      // schema 沒有來源累計金額欄時，這天的 B4 無法可靠驗證，必須明列 skipped。
+      if (有費用項) {
+        if (!b4FeeSkipped) {
+          skipped.push({ code: 'B4', 原因: '明細含費用項，其完成數量欄無法可靠推導累計金額，已跳過 B4' });
+          b4FeeSkipped = true;
+        }
+      } else {
+        const 累計金額列 = 明細列
         .map((r) => {
           const 累計量 = num(r.累計完成數量);
           const 單價 = num(r.契約單價);
@@ -641,18 +657,19 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         });
       // 有任何一個明細缺少推導所需數字時不能只拿部分列相加,否則會把「讀不到」
       // 誤報成「金額不符」。這種情況仍由 A7/E6/B3 等各自的規則指出原因。
-      const 可比對 = 累計金額列.length > 0 && 累計金額列.every((v) => v != null);
-      const 總和 = 可比對 ? 累計金額列.reduce((s, v) => s + v, 0) : null;
+        const 可比對 = 累計金額列.length > 0 && 累計金額列.every((v) => v != null);
+        const 總和 = 可比對 ? 累計金額列.reduce((s, v) => s + v, 0) : null;
       // 容差隨累加的項目數放寬(同 B3 隨筆數放寬的理由)。header 這個值是廠商把
       // M 個「各自四捨五入成整數」的累計金額相加,與真值的距離上界就是 0.5 × M。
       // 固定 0.5 元的話,賜利發實測 33 項 21 天裡有 19 天被判硬錯(最大差 4 元)——
       // 整份日誌永遠歸不了檔,而承辦人怎麼查都查不出哪裡錯,因為根本沒錯。
       // 放寬到 0.5 × M(33 項 = 16.5 元)不會藏住真問題:漏一個項目的金額是
       // 幾千到幾十萬,遠在這個上界之外。
-      const 容差 = Math.max(0.5, 0.5 * 累計金額列.length);
-      if (總和 != null && Math.abs(Number(h.本日累計金額) - 總和) >= 容差) {
-        hard('B4', 日期, null,
-          `本日累計金額 ${顯示數(h.本日累計金額)} 與各項累計金額總和 ${顯示數(總和)} 不符`);
+        const 容差 = Math.max(0.5, 0.5 * 累計金額列.length);
+        if (總和 != null && Math.abs(Number(h.本日累計金額) - 總和) >= 容差) {
+          hard('B4', 日期, null,
+            `本日累計金額 ${顯示數(h.本日累計金額)} 與各項累計金額總和 ${顯示數(總和)} 不符`);
+        }
       }
     }
 

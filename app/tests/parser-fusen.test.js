@@ -149,13 +149,15 @@ describe('fusen parseAll', () => {
     expect(all[0].header.填報日期).toBe('2026-04-23');
   });
 
-  // 廠商只列有施工的項目並逐天重新編號:同一個「砌1/2B磚牆」在 4/23 是項次 7、
-  // 在 8/12 是項次 6。這是廠商的填表方式,讀取器照實反映,由 E4/E5 抓出來。
-  test('項次編號各天不同時照實反映,不自行對齊', () => {
+  // 廠商只列有施工的項目並逐天重新編號:同一名稱在不同日期會拿到不同流水號。
+  // 若照收流水號，SP3 會把不同項目的累計混在一起；逐日型必須用名稱作穩定 key。
+  test('逐日重編的來源以完整工程名稱作穩定項次', () => {
     const d1 = all.find((d) => d.header.填報日期 === '2026-04-23');
     const d2 = all.find((d) => d.header.填報日期 === '2025-08-12');
-    expect(d1.dailyRows.find((r) => r.項次 === '7').工程項目).toMatch(/^砌1\/2B磚牆/);
-    expect(d2.dailyRows.find((r) => r.項次 === '6').工程項目).toMatch(/^砌1\/2B磚牆/);
+    const r1 = d1.dailyRows.find((r) => /^砌1\/2B磚牆/.test(r.工程項目));
+    const r2 = d2.dailyRows.find((r) => /^砌1\/2B磚牆/.test(r.工程項目));
+    expect(r1.項次).toBe(r1.工程項目);
+    expect(r2.項次).toBe(r2.工程項目);
   });
 
   test('每一個非大類列都解析得出單位與契約數量', () => {

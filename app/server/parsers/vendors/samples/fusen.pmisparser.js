@@ -287,7 +287,15 @@ async function parseAll(filePath, ctx) {
       current._pageCount++;
     }
   }
-  for (const day of days) delete day._pageCount;
+  for (const day of days) {
+    delete day._pageCount;
+    // 此格式逐日只列當天施作項目，來源項次每天重新從 1 編號；同一個數字跨日會
+    // 指向不同工程項目。統一 schema 必須用完整名稱作穩定 key，否則 SP3 會把
+    // 不同項目的累計數量混在一起。
+    for (const row of day.dailyRows) {
+      if (row.工程項目 && (row.單位 != null || row.契約數量 != null)) row.項次 = row.工程項目;
+    }
+  }
   return days;
 }
 
@@ -334,7 +342,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.1.1',
+    version: '1.2.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
