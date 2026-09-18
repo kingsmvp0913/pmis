@@ -13,7 +13,7 @@ const fixtureCases = fixtureNames.map((name) => {
   return [key, name];
 }).filter(([key]) => key);
 
-test('42 間廠商讀取器都有來源定位設定與真實 fixture', () => {
+test('43 間廠商讀取器都有來源定位設定與真實 fixture', () => {
   expect(Object.keys(PROFILES).sort()).toEqual(parserKeys);
   for (const key of parserKeys) expect(fixtureCases.some(([fixtureKey]) => fixtureKey === key)).toBe(true);
 });
@@ -21,7 +21,14 @@ test('42 間廠商讀取器都有來源定位設定與真實 fixture', () => {
 test.each(fixtureCases)('%s 來源定位：%s', async (key, name) => {
     const parser = require(path.join(PARSER_DIR, `${key}.pmisparser.js`));
     const ext = path.extname(name).toLowerCase(); const file = path.join(FIXTURE_DIR, name);
-    const days = await parser.parseAll(file, { filetypes });
+    // 銘佑 PDF 是無文字層掃描件；使用由同一真實 PDF 產生並保存的 OCR 座標重播，
+    // 避免每次測試重跑約 38 秒且結果隨 OCR 模型版本漂移。
+    const cachedOcr = key === 'mingyou' && ext === '.pdf'
+      ? JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, 'mingyou-ocr.json'), 'utf8'))
+        .map((page, index) => ({ ...page, page: index + 1 })) : null;
+    const injectedFiletypes = cachedOcr
+      ? { ...filetypes, extractItemsOcr: async () => cachedOcr } : filetypes;
+    const days = await parser.parseAll(file, { filetypes: injectedFiletypes });
     const usableUnit = (r) => r.單位 != null && r.單位 !== '' && !Number.isFinite(Number(r.單位));
     const day = days.find((d) => (d.dailyRows || []).some((r) => r.項次 != null && r.工程項目 && usableUnit(r)))
       || days.find((d) => (d.dailyRows || []).some((r) => r.項次 != null && r.工程項目));
@@ -41,7 +48,8 @@ test.each(fixtureCases)('%s 來源定位：%s', async (key, name) => {
     const buffer = fs.readFileSync(file);
     const source = await traceSource({
       parser, name, buffer, problem, days,
-      extractedPages: ext === '.pdf' ? await filetypes.extractItems(buffer) : undefined,
+      extractedPages: ext === '.pdf'
+        ? (cachedOcr || await filetypes.extractItems(buffer)) : undefined,
     });
     expect(source).toEqual(expect.objectContaining({ field }));
 }, 120000);

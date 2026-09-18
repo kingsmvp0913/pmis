@@ -126,15 +126,25 @@ function parseBlock(grid, r0, ft) {
     for (let r = r0 + OFF_FIRST_ITEM; r < grid.length; r++) {
       const 工程項目 = cell(grid, r, g.工程項目);
       if (工程項目 == null) break; // 該組結束;各月項目數不同,不用固定列數
+      const 項次 = cell(grid, r, g.項次);
+      const rawUnit = cell(grid, r, g.單位);
+      const 契約單價 = num(grid, r, g.契約單價);
+      const 契約數量 = num(grid, r, g.契約數量);
+      const 本日完成數量 = num(grid, r, g.本日完成數量);
+      const 累計完成數量 = num(grid, r, g.累計完成數量);
+      // 大類「壹／直接工程」的空公式格在來源會算成數字 0；它不是單位「0」或
+      // 零元明細。量價欄全為 0 時還原成大類空欄，讓共用層正確排除。
+      const 是零值大類 = /^[壹貳參肆伍陸柒捌玖拾]+$/.test(String(項次 || ''))
+        && rawUnit === 0 && 契約單價 === 0 && 契約數量 === 0;
       dailyRows.push({
-        項次: cell(grid, r, g.項次) == null ? null : String(cell(grid, r, g.項次)),
+        項次: 項次 == null ? null : String(項次),
         工程項目: String(工程項目),
-        單位: cell(grid, r, g.單位) == null ? null : String(cell(grid, r, g.單位)),
-        契約單價: num(grid, r, g.契約單價),
-        契約數量: num(grid, r, g.契約數量),
-        本日完成數量: num(grid, r, g.本日完成數量),
+        單位: 是零值大類 || rawUnit == null ? null : String(rawUnit),
+        契約單價: 是零值大類 ? null : 契約單價,
+        契約數量: 是零值大類 ? null : 契約數量,
+        本日完成數量: 是零值大類 ? null : 本日完成數量,
         本日完成金額: num(grid, r, g.本日完成金額),
-        累計完成數量: num(grid, r, g.累計完成數量),
+        累計完成數量: 是零值大類 ? null : 累計完成數量,
       });
     }
   }
@@ -221,7 +231,7 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.0.1',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度', '本日累計金額',
       '項次', '工程項目', '單位', '契約單價', '契約數量', '本日完成數量', '本日完成金額', '累計完成數量',

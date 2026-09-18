@@ -345,7 +345,7 @@ describe('bundled parsers', () => {
 
     const b = byKey['晉林土木包工業'];
     expect(b.file).toBe('jinlin.pmisparser.js');
-    expect(b.version).toBe('1.0.0');
+    expect(b.version).toBe('1.0.1');
     expect(Array.isArray(b.targetFields)).toBe(true);
     expect(typeof b.vendorExists).toBe('boolean');
     expect(typeof b.installed).toBe('boolean');

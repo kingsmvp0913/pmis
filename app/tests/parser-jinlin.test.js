@@ -55,10 +55,10 @@ describe('晉林 parse(第一實日 = 2026-03-18 開工日)', () => {
     expect(out.header.星期).toBe('三');
   });
 
-  test('header:天氣(上/下午)、預定/實際進度(so 逐日,非 snapshot 髒值)', () => {
+  test('header:天氣(上/下午)、預定/實際累計進度(so 逐日,非 snapshot 髒值)', () => {
     expect(out.header.天氣_上午).toBe('晴');
     expect(out.header.天氣_下午).toBe('晴');
-    // 本日百分比(H)=實際進度 0.73;預定百分比(I)=0.75(保留原值,不硬乘 100)
+    // 首日的本日與累計相同；進度保留來源值，不硬乘 100。
     expect(out.header.實際進度).toBeCloseTo(0.73, 5);
     expect(out.header.預定進度).toBeCloseTo(0.75, 5);
   });
@@ -153,6 +153,15 @@ describe('晉林 parseAll(逐日彙總,只回實日;排除範本預生成空白�
     const d16 = all.find((d) => d.header.填報日期 === '2026-06-16');
     expect(d16.header.本日累計金額).toBeGreaterThan(d15.header.本日累計金額);
     expect(d16.header.本日累計金額).toBeCloseTo(1548739.557, 2);
+  });
+
+  test('進度取累計列，不可把每日增量當累計進度', () => {
+    expect(all[1].header.實際進度).toBeCloseTo(0.73, 5);
+    expect(all[1].header.預定進度).toBeCloseTo(1.5, 5);
+    for (let i = 1; i < all.length; i++) {
+      expect(all[i].header.實際進度).toBeGreaterThanOrEqual(all[i - 1].header.實際進度);
+      expect(all[i].header.預定進度).toBeGreaterThanOrEqual(all[i - 1].header.預定進度);
+    }
   });
 });
 

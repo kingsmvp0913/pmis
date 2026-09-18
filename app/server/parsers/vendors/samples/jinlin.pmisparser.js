@@ -17,7 +17,7 @@
  *         Block2 = EE..FO(同 37 欄,名稱與 Block1 一字不差);每日格 = 本日/累計「完成金額」。
  *       兩區塊欄序 1:1 對齊(已驗證 0 mismatch),故同一 item 的「數量」取 Block1、「金額」取 Block2。
  *   • header:工程名稱/契約金額/工期 取自 `監造表頭`(單日監造抬頭,零 error);
- *       天氣/預定進度/實際進度/星期 取自 `so` 當日列(逐日,較 snapshot 可靠)。
+ *       天氣/星期取自 `so` 本日列；預定/實際進度取同日的「累計」列(較 snapshot 可靠)。
  *
  * ── 略過的 sheet(髒/殘留/公式錯)──
  *   • `預定進度表 `:殘留與本案無關的舊範本(「98年莫拉克颱風—中埔鄉…道路」「瑤池橋」)→ 完全不讀。
@@ -57,7 +57,8 @@ const SO_BLOCK2_START = 'EE';
 const SO_BLOCK2_END = 'FO';
 const SO_TOTAL_AMT_COL = 'IA'; // 金額合計(每日彙總)
 
-// so 逐日欄(本日列):日期 A、星期 B、天氣上午 C、天氣下午 D、本日% H、預定% I。
+// so 逐日欄:本日列有日期 A、星期 B、天氣 C/D；累計列 H/I 才是統一 schema 所需
+// 的累計實際／預定進度。本日列 H/I 是當日增量，不可拿來當進度。
 const SO_DATE_COL = 'A';
 const SO_WEEK_COL = 'B';
 const SO_WX_AM_COL = 'C';
@@ -222,8 +223,8 @@ function parseDay(soGrid, todayR, itemDefs, headInfo, ft) {
     星期: weekName(cell(soGrid, todayR, colToIndex(SO_WEEK_COL))),
     天氣_上午: toStr(cell(soGrid, todayR, colToIndex(SO_WX_AM_COL))),
     天氣_下午: toStr(cell(soGrid, todayR, colToIndex(SO_WX_PM_COL))),
-    預定進度: toNum(cell(soGrid, todayR, colToIndex(SO_PLAN_PCT_COL))),
-    實際進度: toNum(cell(soGrid, todayR, colToIndex(SO_TODAY_PCT_COL))),
+    預定進度: toNum(cell(soGrid, cumR, colToIndex(SO_PLAN_PCT_COL))),
+    實際進度: toNum(cell(soGrid, cumR, colToIndex(SO_TODAY_PCT_COL))),
     出工總人數: null, // so 出工分工別、無單一總數格 → null(不加總編造)
     本日累計金額: toNum(cell(soGrid, cumR, totalAmtCol)), // 金額合計(IA)累計列
   };
@@ -313,12 +314,14 @@ function selfTest(ft) {
     setS('EF8', 5000); setS('EG8', 42500);      // block2 本日金額
     setS('IA8', 47500);
     // day1 累計列 R9。
-    setS('E9', '累計'); setS('AJ9', 1); setS('AK9', 25); setS('IA9', 47500);
+    setS('E9', '累計'); setS('H9', 0.73); setS('I9', 0.75);
+    setS('AJ9', 1); setS('AK9', 25); setS('IA9', 47500);
     // day2 本日列 R10:日期 46100、星期5。
     setS('A10', 46100); setS('B10', 5); setS('C10', '晴'); setS('D10', '晴');
     setS('H10', 1.0); setS('I10', 1.5); setS('AK10', 10);
     setS('EG10', 17000); setS('IA10', 17000);
-    setS('E11', '累計'); setS('AK11', 35); setS('IA11', 64500);
+    setS('E11', '累計'); setS('H11', 1.73); setS('I11', 2.25);
+    setS('AK11', 35); setS('IA11', 64500);
     // day3 佔位空白日(無天氣)→ 應被排除。
     setS('A12', 46101); setS('B12', 6); setS('E12', '本日');
     setS('E13', '累計');
@@ -369,6 +372,7 @@ function selfTest(ft) {
     // day2:累計數量 35(累計列)、累計金額 64500、星期五。
     const d2 = days[1];
     if (d2.header.填報日期 !== '2026-03-19' || d2.header.星期 !== '四') return false;
+    if (d2.header.實際進度 !== 1.73 || d2.header.預定進度 !== 2.25) return false;
     const d2r2 = d2.dailyRows.find((x) => x.項次 === '2');
     if (!d2r2 || d2r2.本日完成數量 !== 10 || d2r2.累計完成數量 !== 35) return false;
     if (d2.header.本日累計金額 !== 64500) return false;
@@ -386,7 +390,7 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: '晉林土木包工業',
-    version: '1.0.0',
+    version: '1.0.1',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '本日累計金額', '項次', '工程項目', '單位', '契約單價', '契約數量',

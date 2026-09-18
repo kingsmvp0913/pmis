@@ -1,11 +1,10 @@
 /**
  * 銘佑營造有限公司(龍井國小廁所)施工日誌讀取器測試。
  *
- * ── fixture 為什麼是 OCR 輸出而不是 PDF ──
+ * ── 掃描 PDF 與 OCR fixture ──
  * 來源 `龍井國小七月份施工日誌.pdf` 是**無文字層的掃描件**,跑一次 OCR 要 38 秒。
- * 把它放進單元測試會讓整組測試慢到沒人願意跑,而且結果會隨模型版本漂移
- * ——那時測到的是「OCR 準不準」,不是「版面規則對不對」。
- * 故 fixture 存 `extractItemsOcr` 的輸出(`mingyou-ocr.json`,3 天 + 封面),
+ * repo 同時保留真實 PDF 與 `extractItemsOcr` 的輸出(`mingyou-ocr.json`,3 天 + 封面)；
+ * 測試先確認 PDF 確實沒有文字層，再用快取避免結果隨 OCR 模型版本漂移。
  * 版面規則全部照跑,`parseAll` 也用注入的假 filetypes 走完整條路。
  *
  * ── 斷言集中在三個「錯了不會有任何欄位變 null」的地方 ──
@@ -22,6 +21,7 @@ const filetypes = require('../server/parsers/filetypes');
 const OCR = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'mingyou-ocr.json'), 'utf8'));
 // 注入假的檔型工具:讀取器只透過 ctx.filetypes 取檔型能力,這裡回快取的 OCR 輸出。
 const ctx = { filetypes: { extractItemsOcr: async () => OCR } };
+const SCAN_PDF = path.join(__dirname, 'fixtures', 'mingyou-scan.pdf');
 const EXCEL = path.join(__dirname, 'fixtures', 'mingyou.xlsm');
 
 // 發包後經費總表(SP2)的 35 項。項次/單位/數量抄自
@@ -44,6 +44,13 @@ test('selfTest 以內建座標樣本通過,不需注入', () => {
 // 那一案是經緯營造,兩案的日誌別搞混。
 test('vendorKey 是決標公告上的得標廠商名', () => {
   expect(mod.meta.vendorKey).toBe('銘佑營造有限公司');
+});
+
+test('掃描 PDF 真實 fixture 無文字層，OCR 快取可重播同一載體', async () => {
+  const pages = await filetypes.extractItems(SCAN_PDF);
+  expect(pages.every((p) => (p.items || []).length === 0)).toBe(true);
+  const days = await mod.parseAll(SCAN_PDF, ctx);
+  expect(days.map((d) => d.header.填報日期)).toEqual(['2026-07-29', '2026-07-30', '2026-07-31']);
 });
 
 describe('parseAll(龍井國小廁所,掃描件)', () => {
