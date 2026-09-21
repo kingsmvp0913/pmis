@@ -412,6 +412,32 @@ test('寫日誌時順手把多出來的範本殘留列刪掉', async () => {
   ]);
 });
 
+test('寫日誌擴充舊報表時會以契約內容覆寫新增列', async () => {
+  const { app, token, id } = await makeApp();
+  for (let seq = 2; seq <= 44; seq++) {
+    await db.query(
+      `INSERT INTO contract_items (project_id, seq, item_no, name, unit, quantity, unit_price)
+       VALUES ($1, $2, $3, $4, '式', 10, 100)`,
+      [id, seq, String(seq), `項目${seq}`],
+    );
+  }
+  fs.mkdirSync(path.dirname(workbookPath(id)), { recursive: true });
+  fs.copyFileSync(TEMPLATE_PATH, workbookPath(id));
+  feed([day('2026-04-08', [r('1', 3)])]);
+
+  await post(app, token, id, 'confirm').expect(200);
+
+  const ops = fillTemplate.mock.calls[0][2];
+  expect(ops).toContainEqual({
+    type: 'copyRowDown', sheet: '契約詳細價目表', srcRow: 37, count: 8,
+  });
+  const 寫契約 = ops.find((o) => o.type === 'setRange'
+    && o.sheet === '契約詳細價目表' && o.startAddr === 'A2');
+  expect(寫契約.values).toHaveLength(44);
+  expect(寫契約.values[36]).toEqual(['37', '項目37', '式', 10, 100]);
+  expect(寫契約.values[43]).toEqual(['44', '項目44', '式', 10, 100]);
+});
+
 // 「後面才發現前面錯了」是真實流程:同一天重送修正版要能蓋掉舊值
 test('重送同一天時覆蓋舊紀錄', async () => {
   const { app, token, id } = await makeApp();

@@ -45,7 +45,7 @@ const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('./daily-log-write');
 const { scanDays, scanDaysWithItems, scanCoverage } = require('./daily-log-scan');
-const { resizeOperations } = require('./contract-items');
+const { itemsToOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
@@ -384,11 +384,10 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
   let tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
   try {
     await fillTemplate(dest, tmp, applyProtection(dest, [
-      // 先把項目列數對齊這份契約(見 resizeOperations)。SP2 寫價目表時已經做過一次,
-      // 這裡再做是為了**修舊報表**:刪列是後來才加的,在那之前建的常駐檔還留著範本
-      // 自己的費用公式列,會在每日施工紀錄印出一整排 #N/A 並把合計與進度算爆。
-      // 承辦人日常只上傳日誌,不會重跑 SP2——不在這裡修就永遠修不好。
-      ...resizeOperations(ctx.contract, itemRowCounts(dest)),
+      // 先把項目列數對齊,再以資料庫契約完整覆寫價目表。只擴列會把最後一個既有項目
+      // 一併複製到新增列；例如舊報表 36 列、契約 44 項時,第 36 項會重複八次。
+      // SP3 必須自己修復常駐舊報表,因為承辦人日常上傳日誌時不會重跑 SP2。
+      ...itemsToOperations(ctx.contract, 0, itemRowCounts(dest)),
       ...legacyFormulaOperations(ctx.contract),
       ...daysToOperations(days, ctx.contract, ctx.開工日, ctx.project.竣工日期),
       ...weatherToOperations(days, ctx.開工日),
