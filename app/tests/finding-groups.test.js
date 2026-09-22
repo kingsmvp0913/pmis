@@ -1,5 +1,6 @@
 const {
   groupFindings, formatFindingDates, recognitionProblems, vendorProblems, nameApprovals,
+  hardErrorApprovals, hasBlockingErrors,
 } = require('../public/js/finding-groups');
 
 test('相同規則、項次與說明合併，日期連續時顯示範圍', () => {
@@ -63,4 +64,31 @@ test('只有 E3 被指定通過時才產生名稱核准資料', () => {
   expect(nameApprovals(groups)).toEqual([
     { 契約項次: '壹.1', 契約名稱: '契約名稱', 日誌原名稱: '日誌名稱' },
   ]);
+});
+
+test('只送出後端標示可通過且由使用者選擇通過的硬錯', () => {
+  const groups = groupFindings([
+    { code: 'A2', 日期: '2026-08-01', 項次: null, 訊息: '天氣未填', 可通過: true },
+    { code: 'A2', 日期: '2026-08-02', 項次: null, 訊息: '天氣未填', 可通過: true },
+    { code: 'A7', 日期: '2026-08-01', 項次: '1', 訊息: '契約數量未填' },
+  ], []);
+  groups[0].問題歸屬 = '通過';
+  groups[1].問題歸屬 = '通過';
+
+  expect(hardErrorApprovals(groups)).toEqual([
+    { code: 'A2', 日期: '2026-08-01', 項次: null, 訊息: '天氣未填' },
+    { code: 'A2', 日期: '2026-08-02', 項次: null, 訊息: '天氣未填' },
+  ]);
+  expect(hasBlockingErrors(groups)).toBe(true);
+  groups[1].問題歸屬 = '廠商問題';
+  expect(hasBlockingErrors(groups)).toBe(true);
+});
+
+test('所有硬錯都獲准通過時不再阻擋送出', () => {
+  const groups = groupFindings([
+    { code: 'A2', 日期: '2026-08-01', 項次: null, 訊息: '天氣未填', 可通過: true },
+  ], []);
+  expect(hasBlockingErrors(groups)).toBe(true);
+  groups[0].問題歸屬 = '通過';
+  expect(hasBlockingErrors(groups)).toBe(false);
 });

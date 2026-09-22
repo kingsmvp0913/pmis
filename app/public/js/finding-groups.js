@@ -46,6 +46,7 @@ const FindingGroups = (() => {
           契約名稱: finding.契約名稱,
           日誌原名稱: finding.日誌原名稱,
           名稱核准: finding.名稱核准,
+          可通過: finding.可通過 === true,
           日期: [],
           findings: [],
           問題歸屬: '待確認',
@@ -77,7 +78,19 @@ const FindingGroups = (() => {
     .filter((group) => group.code === 'E3' && group.問題歸屬 === '通過')
     .map(({ 契約項次, 契約名稱, 日誌原名稱 }) => ({ 契約項次, 契約名稱, 日誌原名稱 }));
 
-  return { groupFindings, formatFindingDates, recognitionProblems, vendorProblems, nameApprovals };
+  const hardErrorApprovals = (groups) => (groups || [])
+    .filter((group) => group.級別 === '硬錯' && group.可通過 && group.問題歸屬 === '通過')
+    .flatMap((group) => group.findings)
+    .map(({ code, 日期, 項次, 訊息 }) => ({ code, 日期, 項次, 訊息 }));
+
+  const hasBlockingErrors = (groups) => (groups || [])
+    .some((group) => group.級別 === '硬錯'
+      && !(group.可通過 && group.問題歸屬 === '通過'));
+
+  return {
+    groupFindings, formatFindingDates, recognitionProblems, vendorProblems, nameApprovals,
+    hardErrorApprovals, hasBlockingErrors,
+  };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = FindingGroups;

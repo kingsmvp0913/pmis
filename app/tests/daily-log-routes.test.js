@@ -34,7 +34,9 @@ const { annotateFile } = require('../server/daily-log-annotate');
 const { scanDays, scanDaysWithItems, scanCoverage } = require('../server/daily-log-scan');
 const { TEMPLATE_PATH, workbookPath } = require('../server/report-workbook');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
-const { registerRoutes: registerDailyLogRoutes } = require('../server/daily-log-routes');
+const {
+  registerRoutes: registerDailyLogRoutes, APPROVABLE_HARD_ERROR_CODES,
+} = require('../server/daily-log-routes');
 
 const day = (填報日期, rows) => ({
   header: {
@@ -255,6 +257,24 @@ test('parse 回驗證結果與差異,且不落庫', async () => {
   expect(rows[0].n).toBe(0);
 });
 
+test('人工通過白名單與管理者核准的九個代碼完全一致', () => {
+  expect([...APPROVABLE_HARD_ERROR_CODES].sort()).toEqual([
+    'A2', 'A4', 'A8', 'B4', 'C1', 'C2', 'D3', 'D5', 'E1',
+  ]);
+});
+
+test('parse 只標示管理者核准的硬錯代碼可以人工通過', async () => {
+  const { app, token, id } = await makeApp();
+  const days = [day('2026-04-08', [r('1', 3, { 契約數量: null })])];
+  days[0].header.天氣_上午 = null;
+  feed(days);
+
+  const res = await post(app, token, id, 'parse').expect(200);
+
+  expect(res.body.errors.find((e) => e.code === 'A2').可通過).toBe(true);
+  expect(res.body.errors.find((e) => e.code === 'A7').可通過).toBeUndefined();
+});
+
 test('E3 核准綁定本工程，且同廠商其他工程只預告可沿用', async () => {
   const { app, token, id } = await makeApp();
   const days = [day('2026-04-08', [r('1', 3, { 工程項目: '日誌別名' })])];
@@ -363,6 +383,64 @@ test('confirm 不接受目前驗證結果不存在的名稱核准', async () => 
     .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
     .expect(400);
   expect(res.body.error).toMatch(/內容已變更/);
+});
+
+test('confirm 接受白名單內且與重新驗證結果完全相符的硬錯通過', async () => {
+  const { app, token, id } = await makeApp();
+  const days = [day('2026-04-08', [r('1', 3)])];
+  days[0].header.天氣_上午 = null; // A2
+  feed(days);
+  const parsed = await post(app, token, id, 'parse').expect(200);
+  const approval = parsed.body.errors.find((e) => e.code === 'A2');
+
+  feed(days);
+  const res = await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('hard_error_approvals', JSON.stringify([approval]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(200);
+
+  expect(res.body.人工通過硬錯).toBe(1);
+  expect(fillTemplate).toHaveBeenCalledTimes(1);
+});
+
+test('confirm 不接受非白名單硬錯或被竄改的硬錯內容', async () => {
+  const { app, token, id } = await makeApp();
+  const days = [day('2026-04-08', [r('1', 3, { 契約數量: null })])]; // A7
+  feed(days);
+  const parsed = await post(app, token, id, 'parse').expect(200);
+  const a7 = parsed.body.errors.find((e) => e.code === 'A7');
+
+  feed(days);
+  let res = await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('hard_error_approvals', JSON.stringify([a7]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(400);
+  expect(res.body.error).toMatch(/不允許人工通過/);
+
+  days[0].header.天氣_上午 = null;
+  feed(days);
+  const withA2 = await post(app, token, id, 'parse').expect(200);
+  const a2 = withA2.body.errors.find((e) => e.code === 'A2');
+  feed(days);
+  res = await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('hard_error_approvals', JSON.stringify([a2]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(400);
+  expect(res.body.error).toMatch(/仍有 1 項未通過硬錯/);
+  expect(res.body.errors.map((e) => e.code)).toContain('A7');
+
+  const tampered = { ...a2, 訊息: '被竄改' };
+  feed(days);
+  res = await request(app).post(`/api/projects/${id}/daily-logs/confirm`)
+    .set('Authorization', `Bearer ${token}`)
+    .field('hard_error_approvals', JSON.stringify([tampered]))
+    .attach('daily_log', Buffer.from('%PDF-1.4'), '施工日誌.pdf')
+    .expect(400);
+  expect(res.body.error).toMatch(/內容已變更/);
+  expect(fillTemplate).not.toHaveBeenCalled();
 });
 
 // 硬錯整份擋下(2026-08-05 裁決):只跳過有問題的那幾天,報表會停在「進度不完整」
@@ -656,6 +734,23 @@ describe('掃描件(OCR 預填 → 逐格確認)', () => {
     }).expect(400);
     expect(res.body.errors.map((e) => e.code)).toContain('A7');
     expect(fillTemplate).not.toHaveBeenCalled();
+  });
+
+  test('掃描件確認也接受白名單內且完全相符的硬錯通過', async () => {
+    const { app, token, id } = await makeApp();
+    const days = [day('2026-04-08', [r('1', 3)])];
+    days[0].header.天氣_上午 = null; // A2
+    const approval = {
+      code: 'A2', 日期: '2026-04-08', 項次: null, 訊息: '天氣(上午/下午)未填',
+    };
+    const res = await scanned(app, token, id, {
+      confirmed: 'true',
+      days: JSON.stringify(days),
+      hard_error_approvals: JSON.stringify([approval]),
+    }).expect(200);
+
+    expect(res.body.人工通過硬錯).toBe(1);
+    expect(res.body.來源).toBe('ocr_confirmed');
   });
 
   // 事後查帳只剩這個欄位能指出「這個數字是 OCR 讀的,該回頭看紙本」

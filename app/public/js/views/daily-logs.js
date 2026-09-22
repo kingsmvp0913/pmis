@@ -134,7 +134,7 @@ const DailyLogs = (() => {
     const scanBox = el('div', {});
     const hint = el('div', { class: 'hint' },
       '上傳廠商提供的施工日誌,系統會自動判斷文字層或掃描件,再依 42 條規則檢查後才寫入監造報表。' +
-      '有硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。' +
+      '有未人工通過的硬錯時整份不寫入——只寫沒問題的那幾天,累計金額與完成百分比會算出錯的數字卻看起來正常。' +
       '掃描件會以 OCR 預填,仍須逐格核對才可寫入。');
 
     const showErr = (m) => { err.textContent = m; err.style.display = ''; };
@@ -146,7 +146,10 @@ const DailyLogs = (() => {
       vendorDownloadBtn.style.display = 'none';
       const all = FindingGroups.groupFindings(errors, warnings);
       findingGroups = all;
-      if (!all.length) return;
+      if (!all.length) {
+        if (!scanned) confirmBtn.style.display = '';
+        return;
+      }
       const updateDownload = () => {
         const 有辨識問題 = all.some((f) => f.問題歸屬 === '辨識問題');
         const 有廠商問題 = all.some((f) => f.問題歸屬 === '廠商問題');
@@ -160,6 +163,9 @@ const DailyLogs = (() => {
         vendorDownloadBtn.textContent = 有廠商問題
           ? '下載廠商問題標註'
           : '下載廠商問題標註（請先指定問題歸屬）';
+        if (!scanned) {
+          confirmBtn.style.display = FindingGroups.hasBlockingErrors(all) ? 'none' : '';
+        }
       };
       const trs = all.map((f) => {
         let approvalNote = null;
@@ -169,7 +175,9 @@ const DailyLogs = (() => {
           el('option', { value: '辨識問題' }, '辨識問題'),
           ...(f.code === 'E3'
             ? [el('option', { value: '通過' }, '通過（名稱視為相同）')]
-            : []),
+            : (f.級別 === '硬錯' && f.可通過
+              ? [el('option', { value: '通過' }, '通過（人工放行）')]
+              : [])),
         ]);
         if (f.code === 'E3' && f.名稱核准) {
           f.問題歸屬 = '通過';
@@ -401,6 +409,8 @@ const DailyLogs = (() => {
           const f = fd();
           f.append('confirmed', 'true');
           f.append('days', JSON.stringify(scanned.days));
+          f.append('hard_error_approvals',
+            JSON.stringify(FindingGroups.hardErrorApprovals(findingGroups)));
           const res = await Api.upload(`projects/${projectId}/daily-logs/confirm-scanned`, f);
           showToast(`已寫入 ${res.天數} 天、${res.筆數} 筆逐日資料(來源:OCR + 人工確認)`, 'success');
           clearScan();
@@ -469,8 +479,7 @@ const DailyLogs = (() => {
         renderFindings(d.errors, d.warnings);
         renderSkipped(d.skipped);
         renderDiff(d.diff);
-        // 有硬錯就不給寫:整份擋下是裁決,前端不另開後門
-        confirmBtn.style.display = d.errors.length ? 'none' : '';
+        confirmBtn.style.display = FindingGroups.hasBlockingErrors(findingGroups) ? 'none' : '';
       } catch (e) {
         showErr(e.message);
       } finally {
@@ -486,6 +495,8 @@ const DailyLogs = (() => {
       try {
         const form = fd();
         form.append('name_approvals', JSON.stringify(FindingGroups.nameApprovals(findingGroups)));
+        form.append('hard_error_approvals',
+          JSON.stringify(FindingGroups.hardErrorApprovals(findingGroups)));
         const r = await Api.upload(`projects/${projectId}/daily-logs/confirm`, form);
         showToast(`已寫入 ${r.天數} 天、${r.筆數} 筆逐日資料`, 'success');
         confirmBtn.style.display = 'none';

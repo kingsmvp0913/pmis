@@ -5,7 +5,7 @@
  *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
  *   POST /api/projects/:id/daily-logs/recognition-issues 問題清單 + 原始檔 → ZIP
  *   POST /api/projects/:id/daily-logs/vendor-issues   廠商問題 → 原格式紅框標註 ZIP
- *   POST /api/projects/:id/daily-logs/confirm         無硬錯才寫入 .xlsm 並落庫
+ *   POST /api/projects/:id/daily-logs/confirm         無未放行硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
  *   POST /api/projects/:id/daily-logs/confirm-scanned 承辦人逐格確認後才寫入
  *
@@ -241,6 +241,49 @@ const nameApprovalKey = (p) => JSON.stringify([
   String(p.契約名稱 == null ? '' : p.契約名稱),
   String(p.日誌原名稱 == null ? '' : p.日誌原名稱),
 ]);
+
+// 2026-09-22 使用者依「施工日誌硬錯通過白名單.xlsx」裁決。前端只負責顯示；
+// confirm 仍會重新解析、重新驗證，並逐筆核對代碼、日期、項次與訊息。
+const APPROVABLE_HARD_ERROR_CODES = new Set([
+  'A2', 'A4', 'A8', 'B4', 'C1', 'C2', 'D3', 'D5', 'E1',
+]);
+const hardErrorKey = (p) => JSON.stringify([
+  String(p && p.code != null ? p.code : ''),
+  p && p.日期 != null ? String(p.日期) : null,
+  p && p.項次 != null ? String(p.項次) : null,
+  String(p && p.訊息 != null ? p.訊息 : ''),
+]);
+const markApprovableErrors = (errors) => (errors || []).map((error) => (
+  APPROVABLE_HARD_ERROR_CODES.has(error.code) ? { ...error, 可通過: true } : error
+));
+
+function requestedHardErrorApprovals(raw, errors) {
+  let selected;
+  try { selected = JSON.parse(raw || '[]'); }
+  catch { throw new Error('送出的硬錯通過內容不是有效 JSON'); }
+  if (!Array.isArray(selected)) throw new Error('送出的硬錯通過內容格式不正確');
+  const valid = new Map((errors || [])
+    .filter((error) => APPROVABLE_HARD_ERROR_CODES.has(error.code))
+    .map((error) => [hardErrorKey(error), error]));
+  const out = [];
+  const seen = new Set();
+  for (const item of selected) {
+    if (!APPROVABLE_HARD_ERROR_CODES.has(item && item.code)) {
+      throw new Error(`硬錯 ${item && item.code ? item.code : '（無代碼）'} 不允許人工通過`);
+    }
+    const key = hardErrorKey(item);
+    const error = valid.get(key);
+    if (!error) throw new Error('硬錯通過內容已變更，請重新檢查施工日誌');
+    if (!seen.has(key)) out.push(error);
+    seen.add(key);
+  }
+  return out;
+}
+
+const unapprovedHardErrors = (errors, approvals) => {
+  const approved = new Set((approvals || []).map(hardErrorKey));
+  return (errors || []).filter((error) => !approved.has(hardErrorKey(error)));
+};
 
 async function addNameApprovalHints(projectId, vendorId, warnings) {
   const e3 = (warnings || []).filter((w) => w.code === 'E3' && w.契約項次
@@ -554,6 +597,7 @@ function registerRoutes(app) {
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
+        result.errors = markApprovableErrors(result.errors);
         result.warnings = await addNameApprovalHints(req.params.id, ctx.vendorId, result.warnings);
         const diff = diffDays(records, rows);
 
@@ -671,16 +715,22 @@ function registerRoutes(app) {
           prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
         let approvals;
+        let hardErrorApprovals;
         try {
           approvals = requestedNameApprovals(req.body.name_approvals, result.warnings);
+          hardErrorApprovals = requestedHardErrorApprovals(
+            req.body.hard_error_approvals, result.errors,
+          );
         } catch (e) {
           return res.status(400).json({ error: e.message });
         }
-        if (result.errors.length) {
+        const remainingErrors = unapprovedHardErrors(result.errors, hardErrorApprovals);
+        if (remainingErrors.length) {
           // 一次列全:逐條修正會讓承辦人與廠商來回好幾趟
           return res.status(400).json({
-            error: `施工日誌有 ${result.errors.length} 項硬錯,未寫入監造報表`,
+            error: `施工日誌仍有 ${remainingErrors.length} 項未通過硬錯,未寫入監造報表`,
             ...result,
+            errors: markApprovableErrors(result.errors),
           });
         }
 
@@ -701,6 +751,7 @@ function registerRoutes(app) {
           天數: days.length,
           筆數: rows.length,
           warnings: result.warnings,
+          人工通過硬錯: hardErrorApprovals.length,
         });
       } catch (err) {
         if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
@@ -779,6 +830,7 @@ function registerRoutes(app) {
           days: out.days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
+        result.errors = markApprovableErrors(result.errors);
 
         res.json({
           掃描件: true,
@@ -824,12 +876,22 @@ function registerRoutes(app) {
           days, contract: ctx.contract, project: ctx.project,
           prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
         });
-        if (result.errors.length) {
+        let hardErrorApprovals;
+        try {
+          hardErrorApprovals = requestedHardErrorApprovals(
+            req.body.hard_error_approvals, result.errors,
+          );
+        } catch (e) {
+          return res.status(400).json({ error: e.message });
+        }
+        const remainingErrors = unapprovedHardErrors(result.errors, hardErrorApprovals);
+        if (remainingErrors.length) {
           // 「人確認過」不等於放行:OCR 漏掉的格子承辦人也可能漏補,
           // 42 條驗證照擋——這正是它存在的理由。
           return res.status(400).json({
-            error: `確認後的內容仍有 ${result.errors.length} 項硬錯,未寫入監造報表`,
+            error: `確認後的內容仍有 ${remainingErrors.length} 項未通過硬錯,未寫入監造報表`,
             ...result,
+            errors: markApprovableErrors(result.errors),
           });
         }
 
@@ -849,6 +911,7 @@ function registerRoutes(app) {
           筆數: rows.length,
           warnings: result.warnings,
           來源: 'ocr_confirmed',
+          人工通過硬錯: hardErrorApprovals.length,
         });
       } catch (err) {
         if (/projectId 不合法/.test(err.message || '')) {
@@ -863,4 +926,4 @@ function registerRoutes(app) {
     });
 }
 
-module.exports = { registerRoutes };
+module.exports = { registerRoutes, APPROVABLE_HARD_ERROR_CODES };
