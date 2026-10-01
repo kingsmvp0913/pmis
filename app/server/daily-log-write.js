@@ -258,7 +258,39 @@ function weatherToOperations(days, 開工日) {
   return ops;
 }
 
+// 與 report-workbook.js 的 PROGRESS_LABELS 同序:合計列 +0 起
+const 進度標籤 = ['(合計)', '每日實際進度(%)', '實際進度', '總實際進度(%)', '每日預定進度(%)', '預定進度'];
+// 與現行公版範本 J290 同一條:依工期(B7)與開工日(B8)的直線,兩者缺一為 0
+const 預定進度公式 = '=IF(OR(工程基本資料!$B$7="",工程基本資料!$B$7=0,工程基本資料!$B$8=""),0,'
+  + 'MIN(1,MAX(0,(J$1-工程基本資料!$B$8+1)/工程基本資料!$B$7)))';
+
+/**
+ * 補舊常駐報表的進度區塊(量法見 report-workbook.js 的 progressBlock)。
+ *
+ * 8/11 以前建的專案報表,每日施工紀錄少了「實際進度」「預定進度」等 A 欄標籤與
+ * 預定進度那一列公式:監造報表 B7/F7 以標籤 MATCH 找列,找不到就每天都印空白。
+ * 只補缺的——有值的標籤不重寫,預定進度列有手填值(承辦人照廠商日誌打的)就不蓋。
+ *
+ * ⚠️ 要排在**所有會刪列的指令之前**:列號是寫入前量的,刪項目列會把整段往上帶。
+ *
+ * @param {{合計列:number, 末欄:string, 缺標籤列:number[], 預定列空:boolean}|null} block
+ */
+function progressBlockOperations(block) {
+  if (!block) return [];
+  const ops = [];
+  for (const r of block.缺標籤列 || []) {
+    const i = r - block.合計列;
+    if (i < 0 || i >= 進度標籤.length) continue;
+    ops.push({ type: 'setCell', sheet: SHEET, addr: `${i === 0 ? 'B' : 'A'}${r}`, value: 進度標籤[i] });
+  }
+  if (block.預定列空) {
+    const r = block.合計列 + 6;
+    ops.push({ type: 'setFormula', sheet: SHEET, addr: `J${r}:${block.末欄}${r}`, formula: 預定進度公式 });
+  }
+  return ops;
+}
+
 module.exports = {
   colName, daysToOperations, weatherToOperations, diffDays,
-  legacyFormulaOperations, SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
+  legacyFormulaOperations, progressBlockOperations, SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };

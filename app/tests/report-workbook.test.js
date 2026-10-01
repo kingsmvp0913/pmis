@@ -64,3 +64,56 @@ describe('report-workbook — 專案監造報表常駐檔', () => {
     });
   });
 });
+
+// 8/11 以前的公版範本,每日施工紀錄的進度區塊少了 A 欄標籤與預定進度那一列公式;
+// 監造報表 B7/F7 靠 MATCH("預定進度"/"實際進度", A:A) 找列,找不到就整份 PDF 進度空白。
+// 專案報表是常駐檔,範本修好了舊專案也不會跟著變,只能在寫入時補。
+describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼', () => {
+  const XLSX = require('xlsx');
+  const { progressBlock } = require('../server/report-workbook');
+  const build = (rows) => {
+    const ws = {};
+    let maxR = 0;
+    for (const [addr, cell] of Object.entries(rows)) {
+      ws[addr] = cell;
+      maxR = Math.max(maxR, Number(addr.replace(/[A-Z]+/, '')));
+    }
+    ws['!ref'] = `A1:L${maxR}`;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '每日施工紀錄');
+    const p = path.join(TMP, `pb-${Math.random().toString(36).slice(2)}.xlsx`);
+    XLSX.writeFile(wb, p);
+    return p;
+  };
+  // 合計列的位置會因刪項目列而上移,只能用 F 欄的 ROUND(SUM(F2:…)) 公式認
+  const 合計 = (r) => ({
+    [`F${r}`]: { t: 'n', v: 0, f: `ROUND(SUM(F2:F${r - 1}),0)` },
+    [`J${r}`]: { t: 'n', v: 0, f: 'ROUND(SUM(SUMPRODUCT($E$2:$E$37,J$2:J$37)),0)' },
+    [`L${r}`]: { t: 'n', v: 0, f: 'ROUND(SUM(SUMPRODUCT($E$2:$E$37,L$2:L$37)),0)' },
+  });
+
+  test('舊範本:標籤與預定進度列都缺', () => {
+    const got = progressBlock(build({ ...合計(283) }));
+    expect(got).toEqual({ 合計列: 283, 末欄: 'L', 缺標籤列: [283, 284, 285, 286, 287, 288], 預定列空: true });
+  });
+
+  test('新範本:什麼都不缺', () => {
+    const got = progressBlock(build({
+      ...合計(284), B284: { t: 's', v: '(合計)' },
+      A285: { t: 's', v: '每日實際進度(%)' }, A286: { t: 's', v: '實際進度' }, A287: { t: 's', v: '總實際進度(%)' },
+      A288: { t: 's', v: '每日預定進度(%)' }, A289: { t: 's', v: '預定進度' },
+      J290: { t: 'n', v: 0, f: 'IF(1,0,0)' },
+    }));
+    expect(got).toEqual({ 合計列: 284, 末欄: 'L', 缺標籤列: [], 預定列空: false });
+  });
+
+  // 承辦人上傳的人工報表,預定進度列是他照廠商日誌手打的數字,不可以被直線公式蓋掉
+  test('預定進度列有手填值就不算空', () => {
+    const got = progressBlock(build({ ...合計(284), K290: { t: 'n', v: 0.0038 } }));
+    expect(got.預定列空).toBe(false);
+  });
+
+  test('找不到合計列回 null', () => {
+    expect(progressBlock(build({ A1: { t: 's', v: '項次' } }))).toBeNull();
+  });
+});

@@ -279,3 +279,25 @@ test('日期越界只跳過那一天,不 throw', () => {
     { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['雨', '雨']] },
   ]);
 });
+
+describe('progressBlockOperations — 補舊常駐報表的進度區塊', () => {
+  const { progressBlockOperations } = require('../server/daily-log-write');
+
+  test('只補缺的標籤與空的預定進度列', () => {
+    const ops = progressBlockOperations({ 合計列: 283, 末欄: 'WF', 缺標籤列: [283, 285, 288], 預定列空: true });
+    expect(ops).toEqual([
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'B283', value: '(合計)' },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'A285', value: '實際進度' },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'A288', value: '預定進度' },
+      expect.objectContaining({ type: 'setFormula', sheet: '每日施工紀錄', addr: 'J289:WF289' }),
+    ]);
+    // 預定進度 = 依工期與開工日的直線;工期或開工日沒填時為 0(與現行範本同一條公式)
+    expect(ops[3].formula).toBe('=IF(OR(工程基本資料!$B$7="",工程基本資料!$B$7=0,工程基本資料!$B$8=""),0,'
+      + 'MIN(1,MAX(0,(J$1-工程基本資料!$B$8+1)/工程基本資料!$B$7)))');
+  });
+
+  test('什麼都不缺或量不到時不出指令', () => {
+    expect(progressBlockOperations({ 合計列: 284, 末欄: 'WF', 缺標籤列: [], 預定列空: false })).toEqual([]);
+    expect(progressBlockOperations(null)).toEqual([]);
+  });
+});

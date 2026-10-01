@@ -42,13 +42,13 @@ const ocr = require('./ocr');
 const { validateDailyLog } = require('./daily-log-validate');
 const { mergeDays } = require('./daily-log-merge');
 const {
-  daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
+  daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations, progressBlockOperations,
 } = require('./daily-log-write');
 const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
 const { nextBatchFolder } = require('./settings');
 const { itemsToOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
-const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
+const { ensureWorkbook, itemRowCounts, progressBlock } = require('./report-workbook');
 const { fillTemplate } = require('./template-engine');
 const { applyProtection } = require('./report-protect');
 const { saveAttachment } = require('./project-attachments-routes');
@@ -435,6 +435,9 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
   let tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
   try {
     await fillTemplate(dest, tmp, applyProtection(dest, [
+      // 舊常駐報表缺進度標籤與預定進度公式(8/11 以前的範本),監造報表的進度整份空白。
+      // 列號是現在量的,必須排在下面會刪項目列的指令之前。
+      ...progressBlockOperations(progressBlock(dest)),
       // 先把項目列數對齊,再以資料庫契約完整覆寫價目表。只擴列會把最後一個既有項目
       // 一併複製到新增列；例如舊報表 36 列、契約 44 項時,第 36 項會重複八次。
       // SP3 必須自己修復常駐舊報表,因為承辦人日常上傳日誌時不會重跑 SP2。

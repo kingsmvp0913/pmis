@@ -113,4 +113,48 @@ function itemRowCounts(xlsmPath) {
   } catch { return 空; }
 }
 
-module.exports = { TEMPLATE_PATH, workbookPath, ensureWorkbook, itemRowCounts };
+// 進度區塊在合計列之下的固定相對位置(合計列 +0 起);監造報表 B7/F7 以 A 欄標籤 MATCH 找列。
+const PROGRESS_LABELS = ['(合計)', '每日實際進度(%)', '實際進度', '總實際進度(%)', '每日預定進度(%)', '預定進度'];
+
+/**
+ * 量每日施工紀錄的進度區塊缺了什麼(供 SP3 補舊常駐報表)。
+ *
+ * 8/11 以前的公版範本少了 A 欄的進度標籤與預定進度那一列公式,監造報表的
+ * B7/F7 找不到列,匯出的每一天進度都是空白;常駐檔不會跟著範本更新。
+ * 合計列會因刪項目列而上移,故以 F 欄的 `ROUND(SUM(F2:…))` 公式認,不寫死列號。
+ *
+ * @returns {{合計列:number, 末欄:string, 缺標籤列:number[], 預定列空:boolean}|null}
+ *   缺標籤列:合計列本身(B 欄「(合計)」)與其下五列中 A 欄沒有標籤的列號;
+ *   預定列空:合計列 +6 那列在 J 欄以後完全沒有內容(有手填值就不是空)。讀不到回 null。
+ */
+function progressBlock(xlsmPath) {
+  let wb;
+  try { wb = x.readFile(xlsmPath, { sheets: ['每日施工紀錄'], cellFormula: true }); }
+  catch { return null; }
+  const ws = wb.Sheets['每日施工紀錄'];
+  if (!ws || !ws['!ref']) return null;
+  const { e } = x.utils.decode_range(ws['!ref']);
+  let r0 = null;
+  for (let r = 2; r <= e.r + 1; r++) {
+    const c = ws[`F${r}`];
+    if (c && c.f && /^ROUND\(SUM\(F2:/i.test(c.f)) { r0 = r; break; }
+  }
+  if (r0 == null) return null;
+  let 末 = 9;
+  for (let c = 9; c <= e.c; c++) if (ws[x.utils.encode_cell({ r: r0 - 1, c })]) 末 = c;
+  const 有值 = (c) => !!(c && (c.f || (c.v != null && String(c.v).trim() !== '')));
+  const 缺標籤列 = [];
+  PROGRESS_LABELS.forEach((label, i) => {
+    const col = i === 0 ? 'B' : 'A';
+    if (!有值(ws[`${col}${r0 + i}`])) 缺標籤列.push(r0 + i);
+  });
+  let 預定列空 = true;
+  for (let c = 9; c <= 末 && 預定列空; c++) {
+    if (有值(ws[x.utils.encode_cell({ r: r0 + 5, c })])) 預定列空 = false;
+  }
+  return { 合計列: r0, 末欄: x.utils.encode_col(末), 缺標籤列, 預定列空 };
+}
+
+module.exports = {
+  TEMPLATE_PATH, workbookPath, ensureWorkbook, itemRowCounts, progressBlock, PROGRESS_LABELS,
+};
