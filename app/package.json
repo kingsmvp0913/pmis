@@ -31,5 +31,8 @@
     "testMatch": [
       "**/tests/**/*.test.js"
     ]
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.27.0": true
   }
 }
