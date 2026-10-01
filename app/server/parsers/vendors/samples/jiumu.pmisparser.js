@@ -330,9 +330,15 @@ function parseSheet(grid, serialToISO) {
   };
 }
 
-/** 日分頁 = 有「本日天氣」與「第二聯」兩個錨的分頁(封面/範本分頁自動排除)。 */
+/**
+ * 日分頁 = 有「本日天氣」與「第二聯」兩個錨的分頁(封面/範本分頁自動排除)。
+ * **隱藏的不算**:石龜 9 月檔是拿 7 月檔改的,7(1)~7(30) 藏起來沒刪,照讀會把
+ * 7 月的錯誤報在 9 月這份上,承辦人在檔案裡找不到那些日期。
+ */
 function daySheetNames(wb) {
+  const hidden = new Set(wb.hiddenSheetNames || []);
   return wb.sheetNames.filter((n) => {
+    if (hidden.has(n)) return false;
     const g = wb.sheets[n];
     return Array.isArray(g) && rowOf(g, '本日天氣') >= 0 && rowOf(g, '第二聯') >= 0;
   });

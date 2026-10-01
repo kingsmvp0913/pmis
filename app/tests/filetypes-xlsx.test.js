@@ -63,3 +63,13 @@ describe('isoToExcelSerial — 開工日期寫進 .xlsm 前的轉換', () => {
     expect(isoToExcelSerial(undefined)).toBe(null);
   });
 });
+
+// 隱藏分頁照樣回傳(晉林的工程名稱就在隱藏的「監造表頭」),另列名單給讀取器判斷。
+test('readWorkbook 列出隱藏分頁,但不把它們拿掉', () => {
+  const path = require('path');
+  const { readWorkbook } = require('../server/parsers/filetypes/xlsx');
+  const wb = readWorkbook(path.join(__dirname, 'fixtures', 'licheng.xlsx'));
+  expect(wb.hiddenSheetNames).toEqual(['12月 (2)']);
+  expect(wb.sheetNames).toContain('12月 (2)');
+  expect(wb.sheets['12月 (2)']).toBeTruthy();
+});

@@ -147,7 +147,11 @@ function readWorkbook(filePath) {
   for (const name of wb.SheetNames) {
     sheets[name] = gridFromWorksheet(wb.Sheets[name]);
   }
-  return { sheetNames: wb.SheetNames.slice(), sheets };
+  // 隱藏分頁照樣回傳(晉林的工程名稱就在隱藏的「監造表頭」),另列名單給讀取器自己決定:
+  // 廠商拿上個月的檔改成本月時,舊月份的日誌分頁常常只是藏起來沒刪(石龜 9 月藏了 7 月 30 頁)。
+  const hiddenSheetNames = ((wb.Workbook && wb.Workbook.Sheets) || [])
+    .filter((x) => x.Hidden).map((x) => x.name);
+  return { sheetNames: wb.SheetNames.slice(), sheets, hiddenSheetNames };
 }
 
 /**

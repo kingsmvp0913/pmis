@@ -232,3 +232,13 @@ test('registry.inspect(沙箱載入 + 跑 selfTest)通過', () => {
   expect(got.ok).toBe(true);
   expect(got.meta.vendorKey).toBe('久木營造有限公司');
 });
+
+// 石龜 9 月檔是拿 7 月檔改的:7(1)~7(30) 三十頁**藏起來沒刪**,畫面上只看得到 9(9)~9(30)。
+// 照讀的話 7 月的 E6 等錯誤全部冒出來,承辦人在檔案裡找不到那些日期。
+test('隱藏的舊月份日分頁不讀', async () => {
+  const days = await mod.parseAll(path.join(__dirname, 'fixtures', 'jiumu-shigui-hidden.xls'), ctx);
+  const dates = days.map((d) => d.header.填報日期);
+  expect(dates).toHaveLength(22);
+  expect(dates[0]).toBe('2026-09-09');
+  expect(dates[21]).toBe('2026-09-30');
+});
