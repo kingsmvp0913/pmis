@@ -178,6 +178,20 @@ test('A8 有施工卻缺數量或金額', () => {
   expect(codes(r)).toContain('A8');
 });
 
+// 明德(東榮)第二聯的「貳 職業安全衛生管理費」整月金額格留白,其他費用項都有印。
+// 費用項目的本日完成金額不寫進監造報表、B3 也不核對它,判硬錯只會擋下整份日誌
+// 而沒有任何下游需要這個值。仍要報(軟警告),讓承辦人知道廠商漏填。
+test('A8 費用項目缺本日完成金額降為軟警告,施工項目仍是硬錯', () => {
+  const contract = [...CONTRACT, { 項次: '貳', 項目: '項目貳', 單位: '式', 數量: 1, 單價: 17558 }];
+  const r = run([day('2026-04-08', [
+    row('1', { 本日完成數量: 5, 本日完成金額: null, 累計完成數量: 5 }),
+    row('貳', { 契約單價: 17558, 契約數量: 1, 本日完成數量: 0.006, 本日完成金額: null, 累計完成數量: 0.348 }),
+  ])], { contract });
+  expect(r.errors).toContainEqual(expect.objectContaining({ code: 'A8', 項次: '1' }));
+  expect(r.errors).not.toContainEqual(expect.objectContaining({ code: 'A8', 項次: '貳' }));
+  expect(r.warnings).toContainEqual(expect.objectContaining({ code: 'A8', 項次: '貳' }));
+});
+
 test('A8 沒施工的日子不觸發', () => {
   const r = run([day('2026-04-08', [row('1', { 本日完成數量: null, 本日完成金額: null })])]);
   expect(codes(r)).not.toContain('A8');
