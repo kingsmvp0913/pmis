@@ -313,6 +313,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 與本次檔案的本日加總相比，否則 8 月檔會把 7 月以前已完成的量誤判為錯誤。
   const f4Base = new Map(Object.entries(prior).map(([k, v]) => [normNo(k), Number(v.數量) || 0]));
   const f4BaseKnown = new Set(f4Base.keys());
+  // 日誌自己推得的期初(第一筆「累計－本日」),只拿來解釋 F4:前期紀錄是舊版讀取器
+  // 寫進去的話,系統的前期合計會與日誌對不上,而那要重傳前一個月才修得掉。
+  const logBase = new Map();
   const dailySum = new Map();
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
@@ -598,6 +601,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       // F4 用的:期初累計 + 各日本日完成的總和 = 期末累計。
       // 若沒有資料庫的前期紀錄，第一筆同時有累計／本日數量的資料可以反推期初。
       // 缺任一欄便不做 F4 部分加總比對，避免把「讀不到」誤報為「不相符」。
+      if (!logBase.has(狀態項次) && 累計量 != null && 本日量 != null) {
+        logBase.set(狀態項次, 累計量 - 本日量);
+      }
       if (!f4BaseKnown.has(狀態項次) && 累計量 != null && 本日量 != null) {
         f4Base.set(狀態項次, 累計量 - 本日量);
         f4BaseKnown.add(狀態項次);
@@ -754,7 +760,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     const 總和 = dailySum.get(項次);
     const 期初 = f4Base.get(項次);
     if (總和 != null && f4BaseKnown.has(項次) && !approx(累計, 期初 + 總和)) {
-      const m = `期末累計 ${顯示數(累計)} 不等於期初累計 ${顯示數(期初)} 加各日本日完成總和 ${顯示數(總和)}`;
+      let m = `期末累計 ${顯示數(累計)} 不等於期初累計 ${顯示數(期初)} 加各日本日完成總和 ${顯示數(總和)}`;
+      const 日誌期初 = logBase.get(項次);
+      if (日誌期初 != null && !approx(日誌期初, 期初)) {
+        m += `;日誌推得的期初為 ${顯示數(日誌期初)},與系統已寫入的前期合計不符,`
+          + '前期月份可能是舊版讀取器寫入或漏傳,請重新上傳前一個月的日誌';
+      }
       if (!/^[0-9]+$/.test(tailNo(項次))) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
       else hard('F4', null, 項次, m);
     }
