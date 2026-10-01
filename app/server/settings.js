@@ -5,6 +5,7 @@
  *   registerRoutes(app)     — 掛載設定路由(verifyToken)
  *   getSettlementDay()      — 讀出結算日(1–28),未設定回預設 5(可獨立測試)
  *   getFirmDefaults()       — 讀出監造/設計單位的系統預設,未設定回 null(可獨立測試)
+ *   nextBatchFolder(now)    — 下載 ZIP 外層資料夾名「YYYYMMDD-NNNN」(當天流水號存 DB)
  *
  * 路由:
  *   GET /api/settings/settlement-day  → { settlement_day }
@@ -101,4 +102,26 @@ function registerRoutes(app) {
   });
 }
 
-module.exports = { registerRoutes, getSettlementDay, getFirmDefaults, DEFAULT_SETTLEMENT_DAY };
+/**
+ * 下載 ZIP 外層資料夾名「YYYYMMDD-NNNN」:年月日 + 當天流水號(0001 起)。
+ * 使用者把解開的資料夾直接放進待修正,不必再自己改名。流水號存 settings 表
+ * (key = batch_folder_seq,value = 「YYYYMMDD:N」),重開系統不會又從 0001 開始而撞名。
+ * 日期取伺服器本機時間(承辦人與伺服器同在台灣)。
+ * @param {Date} [now]
+ * @returns {Promise<string>}
+ */
+async function nextBatchFolder(now = new Date()) {
+  const p = (n, w) => String(n).padStart(w, '0');
+  const day = `${now.getFullYear()}${p(now.getMonth() + 1, 2)}${p(now.getDate(), 2)}`;
+  const { rows } = await query("SELECT value FROM settings WHERE key = 'batch_folder_seq'");
+  const [prevDay, prevN] = String((rows[0] && rows[0].value) || '').split(':');
+  const n = prevDay === day ? (parseInt(prevN, 10) || 0) + 1 : 1;
+  await query(
+    `INSERT INTO settings (key, value) VALUES ('batch_folder_seq', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [`${day}:${n}`]);
+  return `${day}-${p(n, 4)}`;
+}
+
+module.exports = {
+  registerRoutes, getSettlementDay, getFirmDefaults, nextBatchFolder, DEFAULT_SETTLEMENT_DAY,
+};

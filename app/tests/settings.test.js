@@ -5,7 +5,7 @@ const request = require('supertest');
 const { newDb } = require('pg-mem');
 const db = require('../server/db');
 const { registerRoutes: registerAuthRoutes } = require('../server/auth');
-const { registerRoutes: registerSettingsRoutes, getFirmDefaults } = require('../server/settings');
+const { registerRoutes: registerSettingsRoutes, getFirmDefaults, nextBatchFolder } = require('../server/settings');
 
 function freshPool() {
   const mem = newDb();
@@ -128,5 +128,23 @@ describe('migrate 欄位級異動', () => {
     const cols = rows.map((r) => r.column_name);
     expect(cols).toContain('supervisor_firm');
     expect(cols).toContain('designer_firm');
+  });
+});
+
+// 下載 ZIP 外層包一個「年月日-流水號」資料夾(使用者把它直接丟進待修正,不必再改名)。
+// 流水號每天從 0001 起跳、存在 DB:重開系統不可以又從 0001 開始而撞名。
+describe('nextBatchFolder', () => {
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  test('同一天逐次加一,隔天從 0001 重來', async () => {
+    const d1 = new Date(2026, 9, 1, 9, 0);
+    const d2 = new Date(2026, 9, 2, 0, 5);
+    expect(await nextBatchFolder(d1)).toBe('20261001-0001');
+    expect(await nextBatchFolder(d1)).toBe('20261001-0002');
+    expect(await nextBatchFolder(d2)).toBe('20261002-0001');
   });
 });

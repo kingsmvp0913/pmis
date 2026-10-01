@@ -125,6 +125,11 @@ test('未帶 token 回 401', async () => {
   await request(app).post(`/api/projects/${id}/daily-logs/parse`).expect(401);
 });
 
+const 今天 = () => {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+};
+
 describe('辨識問題下載包', () => {
   const problems = [{ 級別: '硬錯', code: 'E6', 日期: '2026-07-15', 項次: '三', 訊息: '單價「讀錯」' }];
 
@@ -156,13 +161,31 @@ describe('辨識問題下載包', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/zip/);
     const zip = await JSZip.loadAsync(res.body);
+    // 外層包一個「年月日-流水號」資料夾,解開後直接丟進待修正不必改名
+    const top = `${今天()}-0001/`;
+    expect(Object.keys(zip.files).every((k) => k.startsWith(top))).toBe(true);
     expect(Object.keys(zip.files)).toEqual(expect.arrayContaining([
-      '辨識問題列表.csv', '原始檔案/第一聯.pdf', '原始檔案/第二聯.xlsx',
+      `${top}辨識問題列表.csv`, `${top}原始檔案/第一聯.pdf`, `${top}原始檔案/第二聯.xlsx`,
     ]));
-    expect(await zip.file('原始檔案/第一聯.pdf').async('string')).toBe('first-file');
-    const csv = await zip.file('辨識問題列表.csv').async('string');
+    expect(await zip.file(`${top}原始檔案/第一聯.pdf`).async('string')).toBe('first-file');
+    const csv = await zip.file(`${top}辨識問題列表.csv`).async('string');
     expect(csv.charCodeAt(0)).toBe(0xFEFF);
     expect(csv).toContain('"硬錯","E6","2026-07-15","三","單價「讀錯」"');
+  });
+
+  test('同一天第二次下載,流水號往上加', async () => {
+    const { app, token, id } = await makeApp();
+    const dl = async () => {
+      const res = await asBinary(request(app)
+        .post(`/api/projects/${id}/daily-logs/recognition-issues`)
+        .set('Authorization', `Bearer ${token}`)
+        .field('problems', JSON.stringify(problems))
+        .attach('daily_log', Buffer.from('f'), '日誌.pdf'));
+      const zip = await JSZip.loadAsync(res.body);
+      return Object.keys(zip.files)[0].split('/')[0];
+    };
+    expect(await dl()).toBe(`${今天()}-0001`);
+    expect(await dl()).toBe(`${今天()}-0002`);
   });
 });
 
@@ -187,11 +210,13 @@ describe('廠商問題標註下載包', () => {
 
     expect(res.status).toBe(200);
     const zip = await JSZip.loadAsync(res.body);
+    const top = `${今天()}-0001/`;
+    expect(Object.keys(zip.files).every((k) => k.startsWith(top))).toBe(true);
     expect(Object.keys(zip.files)).toEqual(expect.arrayContaining([
-      '廠商問題列表.csv', '已標註施工日誌/施工日誌_廠商問題.xlsx',
+      `${top}廠商問題列表.csv`, `${top}已標註施工日誌/施工日誌_廠商問題.xlsx`,
     ]));
-    expect(await zip.file('已標註施工日誌/施工日誌_廠商問題.xlsx').async('string')).toBe('marked-file');
-    expect(await zip.file('廠商問題列表.csv').async('string')).toContain('已畫紅框');
+    expect(await zip.file(`${top}已標註施工日誌/施工日誌_廠商問題.xlsx`).async('string')).toBe('marked-file');
+    expect(await zip.file(`${top}廠商問題列表.csv`).async('string')).toContain('已畫紅框');
   });
 
   test('拒絕前端自行改寫的問題內容', async () => {

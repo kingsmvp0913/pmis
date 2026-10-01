@@ -45,6 +45,7 @@ const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('./daily-log-write');
 const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
+const { nextBatchFolder } = require('./settings');
 const { itemsToOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
@@ -136,21 +137,28 @@ function uniqueZipName(name, used) {
   return candidate;
 }
 
-async function recognitionIssuesZip(files, problems) {
+// 下載包外層一律包一個「年月日-流水號」資料夾(nextBatchFolder):使用者把解開的資料夾
+// 直接放進待修正佇列,不必再自己改名。流水號在組包時才取,被擋下的請求不會吃掉號碼。
+async function batchZip() {
   const zip = new JSZip();
+  return { zip, top: zip.folder(await nextBatchFolder()) };
+}
+
+async function recognitionIssuesZip(files, problems) {
+  const { zip, top } = await batchZip();
   const header = ['級別', '代碼', '日期', '項次', '說明'];
   const rows = problems.map((p) => [p.級別, p.code, p.日期, p.項次, p.訊息]);
-  zip.file('辨識問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
+  top.file('辨識問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
 
-  const folder = zip.folder('原始檔案');
+  const folder = top.folder('原始檔案');
   const used = new Set();
   for (const file of files) folder.file(uniqueZipName(realName(file), used), file.buffer);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 async function vendorIssuesZip(files, dayLists, problems, parser, extractedPagesByFile = []) {
-  const zip = new JSZip();
-  const folder = zip.folder('已標註施工日誌');
+  const { zip, top } = await batchZip();
+  const folder = top.folder('已標註施工日誌');
   const used = new Set();
   const results = [];
   for (let i = 0; i < files.length; i++) {
@@ -170,7 +178,7 @@ async function vendorIssuesZip(files, dayLists, problems, parser, extractedPages
     results.some((statuses) => statuses[index] === '已畫紅框') ? '已畫紅框' : '未唯一定位，請依摘要確認',
     p.訊息,
   ]);
-  zip.file('廠商問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
+  top.file('廠商問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
