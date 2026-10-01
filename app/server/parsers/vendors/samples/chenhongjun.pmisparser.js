@@ -176,7 +176,8 @@ function parseFirstSheet(rows) {
   const wm = /上午[:：]?\s*(\S+)?.*?下午[:：]?\s*(\S+)?/.exec(氣候列.replace(/\s{2,}/g, ' ')) || [];
 
   return {
-    工程名稱: 找(/工\s*程\s*名\s*稱\s+(\S+)/),
+    // 掃描件 OCR 會把「稱」與名稱黏成一框(「稱僑美國小114年…」),不可要求中間有空白
+    工程名稱: 找(/工\s*程\s*名\s*稱\s*(\S+)/),
     填報日期: rocToISO(日期列),
     星期: 找(/(星期[一二三四五六日天])/),
     天氣_上午: text(wm[1]),
@@ -195,6 +196,9 @@ function pageKind(rows) {
   const all = rows.flatMap((r) => r.items.map((i) => String(i.s || ''))).join('');
   if (/第?\s*二\s*聯/.test(all)) return 'second';
   if (/第?\s*一\s*聯/.test(all)) return 'first';
+  // 掃描件的第二聯頁沒印「第二聯」(橋美 9 月),只能認明細表頭
+  const flat = all.replace(/\s/g, '');
+  if (/項次/.test(flat) && /工程項目/.test(flat) && /本日完成數量/.test(flat)) return 'second';
   return null;
 }
 

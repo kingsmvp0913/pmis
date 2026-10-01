@@ -195,3 +195,34 @@ test('registry.inspect(沙箱載入 + 跑 selfTest)通過', () => {
   expect(got.ok).toBe(true);
   expect(got.meta.vendorKey).toBe('禾結土木包工業');
 });
+
+// 明禮 9 月是**掃描件**,走「辨識掃描件」的 OCR 預填。fixture 是該檔前 4 頁(2 天)的
+// 真實 OCR 結果。兩個 OCR 才有的形狀讓整份讀成 0 天:
+//   ① 掃描件的第二聯頁**沒印「第二聯」**,只有「項次/工程項目/…」表頭;
+//   ② 標籤與值黏成一框(「表報編號：63」「日期：115年 9 月1 日 星期二」),
+//      「工程名稱」又被拆成一字一框,精確比對標籤一律落空 → 日期 null → 整天被濾掉。
+describe('parseAll(明禮 9 月掃描件的 OCR 結果)', () => {
+  const pages = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'hejie-ocr-mingli.json'), 'utf8'));
+  let days;
+  beforeAll(async () => {
+    days = await mod.parseAll('scan.pdf', { filetypes: { ...filetypes, extractItems: async () => pages } });
+  });
+
+  test('2 天,每天第一聯配上自己的明細頁', () => {
+    expect(days.map((d) => d.header.填報日期)).toEqual(['2026-09-01', '2026-09-02']);
+    expect(days.every((d) => d.dailyRows.length > 30)).toBe(true);
+  });
+
+  test('黏框的表頭欄位抽得出來', () => {
+    const h = days[0].header;
+    expect(h.星期).toBe('星期二');
+    expect(h.工程名稱).toBe('雲林縣明禮國民小學114-116年公立國民中小學老舊廁所整修工程計畫');
+    expect(h.天氣_上午).toBe('晴');
+    expect(h.天氣_下午).toBe('晴');
+  });
+
+  test('明細數字照 OCR 收(預填草稿,承辦人逐格核對)', () => {
+    const r = days[0].dailyRows.find((x) => x.項次 === '3');
+    expect([r.單位, r.契約單價, r.本日完成數量, r.本日完成金額, r.累計完成數量]).toEqual(['式', 7500, 0.5, 3750, 1]);
+  });
+});

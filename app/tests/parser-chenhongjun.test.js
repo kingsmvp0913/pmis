@@ -109,3 +109,26 @@ describe('chenhongjun parseAll', () => {
     expect(r3).toMatchObject({ 單位: '式', 契約數量: 1, 契約單價: 393773 });
   });
 });
+
+// 橋美 9 月是**掃描件**。fixture 是該檔前 4 頁(2 天)的真實 OCR 結果。
+// 掃描件的第二聯頁沒印「第二聯」,原本整份 throw「第二聯 0 頁」,OCR 預填一列都出不來。
+describe('parseAll(橋美 9 月掃描件的 OCR 結果)', () => {
+  const pages = JSON.parse(require('fs').readFileSync(
+    require('path').join(__dirname, 'fixtures', 'chenhongjun-ocr-qiaomei.json'), 'utf8'));
+  let days;
+  beforeAll(async () => {
+    days = await mod.parseAll('scan.pdf', {
+      filetypes: { ...require('../server/parsers/filetypes'), extractItems: async () => pages },
+    });
+  });
+
+  test('沒印「第二聯」的明細頁也認得出來,2 天各配上自己的明細', () => {
+    expect(days.map((d) => d.header.填報日期)).toEqual(['2026-09-01', '2026-09-02']);
+    expect(days.every((d) => d.dailyRows.length > 20)).toBe(true);
+  });
+
+  // OCR 把「稱」與名稱黏成一框:「工」「程」「名」「稱僑美國小114年老舊廁所整修工程」
+  test('工程名稱與「稱」黏成一框也抽得出', () => {
+    expect(days[0].header.工程名稱).toBe('僑美國小114年老舊廁所整修工程');
+  });
+});

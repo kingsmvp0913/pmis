@@ -149,12 +149,21 @@ function parseCover(items) {
   const dateText = bNo ? (bandText(bNo).match(/\d{2,4}年\d{1,2}月\d{1,2}日/) || [])[0] : null;
   const week = bNo ? (bandText(bNo).match(/星期[一二三四五六日天]/) || [])[0] : null;
 
+  // 掃描件的 OCR 會把標籤與值黏成一框(「表報編號：63」「日期：115年 9 月1 日 星期二」),
+  // 又把「工程名稱」拆成一字一框,上面的精確比對全部落空。退回整帶文字比對;
+  // 文字層照舊走上面那條,這裡只補 null。
+  const 全文 = all.map(bandText);
+  const 找 = (re) => { for (const t of 全文) { const m = t.match(re); if (m) return m; } return null; };
+  const dm2 = dateText ? null : 找(/(?<![開完竣約工])日期[:：]?(\d{2,4}年\d{1,2}月\d{1,2}日)(星期[一二三四五六日天])?/);
+  const wm2 = wm ? null : 找(/上午[:：](.*?)下午[:：](.+?)$/);
+  const nm2 = 找(/工程名稱(.+?)本日氣候/);
+
   return {
-    工程名稱: pick(bName, /^工程名稱$/, /^本日氣候/),
-    填報日期: rocTextToISO(dateText),
-    星期: week || null,
-    天氣_上午: wm ? text(wm[1]) : null,
-    天氣_下午: wm ? text(wm[2]) : null,
+    工程名稱: pick(bName, /^工程名稱$/, /^本日氣候/) || (nm2 ? text(nm2[1]) : null),
+    填報日期: rocTextToISO(dateText || (dm2 && dm2[1])),
+    星期: week || (dm2 && dm2[2]) || null,
+    天氣_上午: wm ? text(wm[1]) : (wm2 ? text(wm2[1]) : null),
+    天氣_下午: wm ? text(wm[2]) : (wm2 ? text(wm2[2]) : null),
     // 累計那一組才是 SP3 的 F3/H1 要驗的語意;PDF 印的是百分數,照收
     預定進度: num(pick(bPlan, /^累計預定進度$/)),
     實際進度: num(pick(bActual, /^累計實際進度$/)),
@@ -287,6 +296,9 @@ const pageKind = (items) => {
     if (s.startsWith('第一聯')) return 'cover';
     if (s.startsWith('第二聯')) return 'detail';
   }
+  // 掃描件的第二聯頁沒印「第二聯」(明禮/土庫 9 月),只能認明細表頭
+  const has = (label) => items.some((it) => despace(it.s) === label);
+  if (has('項次') && has('工程項目') && has('本日完成數量')) return 'detail';
   return null;
 };
 
