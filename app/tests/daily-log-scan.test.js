@@ -5,7 +5,7 @@
  * 讀取器」。注入少一個鍵,那個讀取器就整份 throw——而錯誤訊息長得像讀取器壞掉
  * (「缺少注入的 filetypes.extractItemsOcr」),沒人會想到是這裡漏接的。
  */
-const { scanDays, scanDaysWithItems } = require('../server/daily-log-scan');
+const { scanDays, scanDaysWithItems, scanAll } = require('../server/daily-log-scan');
 
 const PAGES = [{ page: 1, items: [{ x: 1, y: 2, w: 3, s: 'A' }] }];
 const deps = (parser) => ({
@@ -59,4 +59,38 @@ test('標註流程可沿用同一次 OCR 的 days 與座標', async () => {
   const days = [{ header: { 填報日期: '2026-07-15' }, dailyRows: [] }];
   const result = await scanDaysWithItems('x.pdf', deps({ parseAll: async () => days }));
   expect(result).toEqual({ days, pages: PAGES });
+});
+
+// 「辨識掃描件」原本 scanCoverage 與 scanDays 各自 OCR 一次,同一個解析度、同一份檔
+// 跑兩遍:60 頁的掃描件等待時間直接加倍(土庫/明禮/橋美 9 月實測)。
+describe('scanAll:一次 OCR 同時給涵蓋範圍與明細', () => {
+  const HEADER = [{ page: 1, items: [{ x: 1, y: 2, w: 3, s: '填表日期:115年9月1日' }] }];
+  const withCount = (parser) => {
+    let n = 0;
+    return {
+      calls: () => n,
+      deps: { ...deps(parser), extractItemsOcr: async () => { n += 1; return HEADER; } },
+    };
+  };
+
+  test('OCR 只跑一次,涵蓋範圍與讀取器吃同一份 items', async () => {
+    let got = null;
+    const c = withCount({ parseAll: async (p, ctx) => { got = await ctx.filetypes.extractItems(p); return [{ header: {}, dailyRows: [] }]; } });
+    const out = await scanAll('x.pdf', c.deps);
+    expect(c.calls()).toBe(1);
+    expect(got).toBe(HEADER);
+    expect(out.coverage.日期).toEqual(['2026-09-01']);
+    expect(out.days).toHaveLength(1);
+    expect(out.讀取器錯誤).toBeNull();
+  });
+
+  // 讀取器整份 throw 時,涵蓋範圍是唯一答得出來的東西,不可跟著一起丟
+  test('讀取器 throw 時仍回涵蓋範圍,錯誤訊息另外帶出', async () => {
+    const c = withCount({ parseAll: async () => { throw new Error('表頭找不到'); } });
+    const out = await scanAll('x.pdf', c.deps);
+    expect(c.calls()).toBe(1);
+    expect(out.coverage.days).toBe(1);
+    expect(out.days).toBeNull();
+    expect(out.讀取器錯誤).toBe('表頭找不到');
+  });
 });

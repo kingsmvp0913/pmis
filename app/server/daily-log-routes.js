@@ -44,7 +44,7 @@ const { mergeDays } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations,
 } = require('./daily-log-write');
-const { scanDays, scanDaysWithItems, scanCoverage } = require('./daily-log-scan');
+const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
 const { itemsToOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts } = require('./report-workbook');
@@ -789,17 +789,9 @@ function registerRoutes(app) {
             const 天 = (文字層 || []).filter((d) => (d.dailyRows || []).length).length;
             if (天) return { 有文字層: 天 };
           } catch { /* 讀不動 → 往下走 OCR */ }
-          // 涵蓋範圍先算:讀取器整份 throw 時(實測 8 份裡有 2 份會),這是唯一
-          // 還答得出來的東西——至少告訴承辦人這份涵蓋哪些日期、要人工補幾天。
-          const coverage = await scanCoverage(p, { ocr, extractItemsOcr });
-          let days = null;
-          let 讀取器錯誤 = null;
-          try {
-            days = await scanDays(p, { ocr, extractItemsOcr, filetypes, parser: ctx.parser });
-          } catch (e) {
-            讀取器錯誤 = e.message;
-          }
-          return { coverage, days, 讀取器錯誤 };
+          // 涵蓋範圍與明細共用同一次 OCR(scanAll):讀取器整份 throw 時(實測 8 份裡
+          // 有 2 份會),涵蓋範圍是唯一還答得出來的東西。
+          return scanAll(p, { ocr, extractItemsOcr, filetypes, parser: ctx.parser });
         });
 
         if (out.有文字層) {

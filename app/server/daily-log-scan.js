@@ -64,7 +64,10 @@ function toISO(y, m, d) {
  */
 function pageHeader(items) {
   const t = despace((items || []).map((i) => i.s).join(''));
-  const dm = t.match(/填[表報]日期[:：]?(\d{2,4})年(\d{1,2})月(\d{1,2})日/);
+  // 禾結只印「日期:」(沒有填表二字);前面若是開工/完工/竣工/訂約就是別的日期,不取。
+  // 第二聯 OCR 常在「日」前多讀一個「．」。
+  const dm = t.match(/填[表報]日期[:：]?(\d{2,4})年(\d{1,2})月(\d{1,2})[.．]?日/)
+    || t.match(/(?<![開完竣約工])日期[:：]?(\d{2,4})年(\d{1,2})月(\d{1,2})[.．]?日/);
   const wm = t.match(/上午[:：](.{1,4}?)下午[:：](.{1,4}?)(?:填|工程名稱|$)/);
   return {
     填報日期: dm ? toISO(dm[1], dm[2], dm[3]) : null,
@@ -83,7 +86,11 @@ function pageHeader(items) {
 async function scanCoverage(pdfPath, deps = {}) {
   const { ocr, extractItemsOcr, width } = deps;
   if (typeof extractItemsOcr !== 'function') throw new Error('scanCoverage 需要注入 extractItemsOcr');
-  const pages = await extractItemsOcr(pdfPath, { ocr, width: width || 2200 });
+  return coverageOf(await extractItemsOcr(pdfPath, { ocr, width: width || 2200 }));
+}
+
+/** 涵蓋範圍(純函式):OCR 過的 pages → 逐頁表頭與日期清單。 */
+function coverageOf(pages) {
   const rows = pages.map((p) => ({ page: p.page, ...pageHeader(p.items) }));
   const 日期 = [...new Set(rows.map((r) => r.填報日期).filter(Boolean))].sort();
   return {
@@ -118,7 +125,7 @@ async function scanDaysWithItems(pdfPath, deps = {}) {
   } = deps;
   if (typeof extractItemsOcr !== 'function') throw new Error('scanDays 需要注入 extractItemsOcr');
   if (!parser || typeof parser.parseAll !== 'function') throw new Error('scanDays 需要注入 parser.parseAll');
-  const pages = await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
+  const pages = deps.pages || await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
   const days = await parser.parseAll(pdfPath, {
     filetypes: {
       ...(filetypes || {}),
@@ -137,6 +144,28 @@ async function scanDays(pdfPath, deps = {}) {
   return (await scanDaysWithItems(pdfPath, deps)).days;
 }
 
+/**
+ * 「辨識掃描件」用:**OCR 一次**,同一份 pages 同時算涵蓋範圍與明細。
+ * 原本兩者各自 OCR(同解析度、同一份檔),60 頁的掃描件等待時間直接加倍。
+ * 讀取器 throw 不往外丟:涵蓋範圍是那時唯一答得出來的東西。
+ *
+ * @returns {Promise<{coverage:object, days:Array|null, 讀取器錯誤:string|null}>}
+ */
+async function scanAll(pdfPath, deps = {}) {
+  const { ocr, extractItemsOcr, width } = deps;
+  if (typeof extractItemsOcr !== 'function') throw new Error('scanAll 需要注入 extractItemsOcr');
+  const pages = await extractItemsOcr(pdfPath, { ocr, width: width || SCAN_WIDTH });
+  const coverage = coverageOf(pages);
+  let days = null;
+  let 讀取器錯誤 = null;
+  try {
+    days = (await scanDaysWithItems(pdfPath, { ...deps, pages })).days;
+  } catch (e) {
+    讀取器錯誤 = e.message;
+  }
+  return { coverage, days, 讀取器錯誤 };
+}
+
 module.exports = {
-  scanCoverage, scanDays, scanDaysWithItems, pageHeader, SCAN_WIDTH,
+  scanCoverage, scanDays, scanDaysWithItems, scanAll, coverageOf, pageHeader, SCAN_WIDTH,
 };

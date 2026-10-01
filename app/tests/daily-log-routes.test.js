@@ -22,11 +22,25 @@ jest.mock('../server/daily-log-annotate', () => ({
 }));
 // OCR 同理:真跑一頁要好幾秒,而且結果隨模型/機器而異。這裡驗的是路由怎麼處理
 // 「OCR 讀得出來」與「讀取器整份 throw」這兩種結局,不是 OCR 本身準不準。
-jest.mock('../server/daily-log-scan', () => ({
-  scanDays: jest.fn(),
-  scanDaysWithItems: jest.fn(),
-  scanCoverage: jest.fn(async () => ({ pages: [], days: 0, 日期: [], 缺日期頁: [] })),
-}));
+// scanAll 的「一次 OCR」由 daily-log-scan.test.js 驗;這裡讓它照真實語意組合
+// 下面兩個 mock,各測試只需設定涵蓋範圍與明細各自的結局。
+jest.mock('../server/daily-log-scan', () => {
+  const scanDays = jest.fn();
+  const scanCoverage = jest.fn(async () => ({ pages: [], days: 0, 日期: [], 缺日期頁: [] }));
+  return {
+    scanDays,
+    scanDaysWithItems: jest.fn(),
+    scanCoverage,
+    scanAll: jest.fn(async (p, deps) => {
+      const coverage = await scanCoverage(p, deps);
+      try {
+        return { coverage, days: await scanDays(p, deps), 讀取器錯誤: null };
+      } catch (e) {
+        return { coverage, days: null, 讀取器錯誤: e.message };
+      }
+    }),
+  };
+});
 
 const registry = require('../server/parsers/registry');
 const { fillTemplate } = require('../server/template-engine');
