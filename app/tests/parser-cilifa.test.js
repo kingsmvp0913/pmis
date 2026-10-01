@@ -105,6 +105,90 @@ describe('parseAll(元長國小廁所)', () => {
   });
 });
 
+// 2026 年 9 月起廠商改交 PDF(60 頁 = 第一聯 30 頁 + 第二聯 30 頁),欄位與 xls 相同。
+// pdf.js 會把相鄰儲存格黏成一個 item,以下斷言都對著「黏錯也不會有欄位變 null」的坑。
+describe('parseAll(元長國小廁所 9 月 PDF)', () => {
+  const PDF = path.join(__dirname, 'fixtures', 'cilifa.pdf');
+  let days;
+  beforeAll(async () => { days = await mod.parseAll(PDF, ctx); }, 120000);
+  const day = (iso) => days.find((d) => d.header.填報日期 === iso);
+  const item = (iso, no) => day(iso).dailyRows.find((r) => r.項次 === no);
+
+  test('30 天,9/1~9/30 依序', () => {
+    expect(days.map((d) => d.header.填報日期))
+      .toEqual(Array.from({ length: 30 }, (_, i) => `2026-09-${String(i + 1).padStart(2, '0')}`));
+  });
+
+  // 兩聯在同一個檔的前後半,靠填報日期配對
+  test('第一聯的欄位有配對進來', () => {
+    const h = day('2026-09-04').header;
+    expect(h.工程名稱).toBe('元長國小辦理「114-116年公立國民中小學老舊廁所整修工程計畫」');
+    expect(h.承包廠商).toBe('賜利發土木包工業');
+    expect(h.開工日期).toBe('2026-07-11');
+    expect(h.天氣_上午).toBe('晴');
+    expect(h.天氣_下午).toBe('雨');
+    // PDF 印「46.48%」;換成與 xls 版相同的分數,同一家兩種檔才不會差 100 倍
+    expect(h.預定進度).toBeCloseTo(0.4648, 10);
+    expect(h.實際進度).toBeCloseTo(0.3950, 10);
+    expect(days.filter((d) => d.header.天氣_上午 == null)).toHaveLength(0);
+  });
+
+  test('每天 33 項,項次與 xls 版相同', () => {
+    for (const d of days) {
+      expect(d.dailyRows.map((r) => r.項次)).toEqual([
+        ...Array.from({ length: 28 }, (_, i) => String(i + 1)), '貳', '參', '肆', '伍', '陸']);
+    }
+  });
+
+  // 「1-」是契約數量 1 黏上本日數量的「-」,item 寬度被拉到 149pt。
+  // 用 w/字數推位置會把「1」算進單價欄。
+  test('契約數量與單價不被黏連的 item 搞混', () => {
+    const r = item('2026-09-04', '1');
+    expect(r.單位).toBe('式');
+    expect(r.契約數量).toBe(1);
+    expect(r.契約單價).toBe(8500);
+    expect(r.累計完成數量).toBe(1);
+  });
+
+  // 「75   0.448」是本日金額與累計數量黏在同一個 item
+  test('同一 item 裡的兩個欄位拆回各自的欄', () => {
+    const r = item('2026-09-04', '貳');
+    expect(r.契約單價).toBe(9406);
+    expect(r.本日完成數量).toBe(0.008);
+    expect(r.本日完成金額).toBe(75);
+    expect(r.累計完成數量).toBe(0.448);
+    const r24 = item('2026-09-04', '24');
+    expect([r24.契約單價, r24.本日完成數量, r24.本日完成金額, r24.累計完成數量])
+      .toEqual([115000, 0.05, 5750, 0.75]);
+  });
+
+  // 名稱跨三行、數值印在中間那行;只收自己那行名稱會頭尾都不見
+  test('跨行名稱完整收回,與 xls 版逐字相同', () => {
+    expect(item('2026-09-04', '3').工程項目).toBe('施工動線開闢與損壞復原,既有設備管線遷移與復原;測量與放樣');
+    expect(item('2026-09-04', '4').工程項目).toBe('既有牆面、地坪、磁磚、衛生設備、給排水設施、搗擺及天花板等拆除(含切割)'
+      + '及運棄(含合法證明);環境保護與清潔');
+    expect(item('2026-09-04', '25').工程項目).toBe('施做緊急求救按鈕(含閃光與蜂嗚警報器、線材、五金配件, '
+      + '各層樓每間廁所皆有求救鈕,連工帶料,責任施工)');
+    expect(item('2026-09-04', '1').工程項目).toBe('乙種施工圍籬、警示帶、安全警示燈等安全措施(租用)');
+  });
+
+  test('本日累計金額取累計合計那一欄', () => {
+    expect(day('2026-09-04').header.本日累計金額).toBe(431077);
+  });
+
+  test('本日完成金額 = 本日完成數量 × 單價', () => {
+    const rows = days.flatMap((d) => d.dailyRows)
+      .filter((r) => r.本日完成金額 != null && r.本日完成數量 != null && !/^[貳參肆伍陸]$/.test(r.項次));
+    expect(rows.length).toBeGreaterThan(20);
+    expect(rows.filter((r) => Math.abs(r.本日完成金額 - r.本日完成數量 * r.契約單價) >= 1)).toHaveLength(0);
+  });
+
+  test('必要欄位零缺漏', () => {
+    const rows = days.flatMap((d) => d.dailyRows);
+    expect(rows.filter((r) => r.單位 == null || r.契約數量 == null || r.契約單價 == null)).toHaveLength(0);
+  });
+});
+
 // 沒有「第二聯」分頁的檔要明確失敗。回空陣列會被上游當成「這份沒有資料」略過。
 test('不是賜利發的活頁簿要 throw,不可回空陣列', async () => {
   await expect(mod.parseAll(path.join(__dirname, 'fixtures', 'kunyao.xlsx'), ctx))

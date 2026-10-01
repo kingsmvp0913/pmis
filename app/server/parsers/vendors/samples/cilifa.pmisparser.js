@@ -207,6 +207,11 @@ function mergeSheets(g2, g1, serialToISO) {
       if (f.日期 && !firsts.has(f.日期)) firsts.set(f.日期, f);
     }
   }
+  return assemble(seconds, firsts);
+}
+
+/** 第二聯的每一天配上同日期的第一聯(xls 與 PDF 共用)。 */
+function assemble(seconds, firsts) {
   return seconds.map((d) => {
     const f = (d.日期 && firsts.get(d.日期)) || {};
     return {
@@ -229,6 +234,196 @@ function mergeSheets(g2, g1, serialToISO) {
   });
 }
 
+// ── PDF(2026 年 9 月起)───────────────────────────────────────────────
+//
+// 同一套兩聯,印成一個 PDF:前半每頁一天第一聯、後半每頁一天第二聯。
+// 欄位與 xls 相同,但 pdf.js 會把相鄰儲存格黏成一個 item:
+//   「1   乙種施工圍籬…」= 項次 + 名稱;「75   0.448」= 本日金額 + 累計數量;
+//   「1-」= 契約數量 1 + 本日數量的「-」,而它的 w 被拉到 149pt。
+// 數值欄是固定字寬(實測每字 4.2pt),故 token 位置用**本頁數字 item 的字寬**推,
+// 不用該 item 自己的 w/字數——後者會把「1-」的「1」推到單價欄。
+//
+//   第二聯次表頭(y744)依 x 序:數量 單價 數量 金額 數量 金額
+//     = 契約數量 契約單價 本日完成數量 本日完成金額 累計完成數量 累計金額
+// 值靠右對齊但都在欄中心 ±15pt 內,取最近的次表頭中心。
+// 名稱跨行時數值印在名稱區塊的垂直中央(同明德),上下**同時**是名稱帶才收編。
+
+const PDF_BAND = 2;
+const PDF_NAME_MAX_X = 200;                               // 名稱區 item 起點都 < 50,值區 ≥ 249
+const PDF_VALUE_KEYS = ['契約數量', '契約單價', '本日完成數量', '本日完成金額', '累計完成數量', '累計金額'];
+const ITEM_NO = /^(\d+|[壹貳參参肆伍陸柒捌玖拾]+)$/;
+
+const centerOf = (it) => it.x + it.w / 2;
+
+function pdfBands(items) {
+  const sorted = items.filter((it) => String(it.s).trim()).sort((a, b) => b.y - a.y || a.x - b.x);
+  const out = [];
+  for (const it of sorted) {
+    const last = out[out.length - 1];
+    if (last && Math.abs(last.y - it.y) <= PDF_BAND) { last.items.push(it); continue; }
+    out.push({ y: it.y, items: [it] });
+  }
+  for (const b of out) b.items.sort((a, b2) => a.x - b2.x);
+  return out;
+}
+
+const bandText = (b) => b.items.map((i) => i.s).join('');
+
+/** 本頁純數字 item 的字寬中位數(固定字寬字型)。 */
+function digitWidth(items) {
+  const ws = items.filter((it) => /^[\d,.]+$/.test(it.s) && it.w > 0).map((it) => it.w / it.s.length)
+    .sort((a, b) => a - b);
+  return ws.length ? ws[Math.floor(ws.length / 2)] : 4.2;
+}
+
+/** 值區 item → 數字 token(含中心 x)。「-」是 0 的會計格式顯示,與本檔 num() 一樣不收。 */
+function valueTokens(it, cw) {
+  const out = [];
+  const re = /[\d,.]+/g;
+  let m;
+  while ((m = re.exec(it.s)) !== null) {
+    out.push({ v: num(m[0]), cx: it.x + (m.index + m[0].length / 2) * cw });
+  }
+  return out.filter((t) => t.v != null);
+}
+
+function nearestKey(cols, cx, maxDist) {
+  let best = null;
+  let bestD = Infinity;
+  for (const c of cols) {
+    const d = Math.abs(c.cx - cx);
+    if (d < bestD) { bestD = d; best = c.key; }
+  }
+  return bestD <= maxDist ? best : null;
+}
+
+/** 「2026年9月4日」或民國「115年9月4日」→ ISO。 */
+function pdfDate(s) {
+  const m = String(s || '').match(/(\d{3,4})年(\d{1,2})月(\d{1,2})日/);
+  if (!m) return null;
+  const y = Number(m[1]) < 1911 ? Number(m[1]) + 1911 : Number(m[1]);
+  return `${y}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`;
+}
+
+function parseSecondPdf(items) {
+  const bs = pdfBands(items);
+  if (!bs.some((b) => despace(bandText(b)) === '第二聯')) return null;
+  const sub = bs.find((b) => b.items.map((i) => despace(i.s)).join('|') === '數量|單價|數量|金額|數量|金額');
+  if (!sub) throw new Error('第二聯 PDF 找不到「數量/單價/金額」次表頭(版面變了?)');
+  const cols = sub.items.map((it, i) => ({ key: PDF_VALUE_KEYS[i], cx: centerOf(it) }));
+  const unitHead = bs.flatMap((b) => b.items).find((it) => despace(it.s) === '單位');
+  const unitCx = unitHead ? centerOf(unitHead) : 257;
+  const cw = digitWidth(items);
+  const db = bs.find((b) => /日期[:：]/.test(despace(bandText(b))));
+  const 日期 = db ? pdfDate((despace(bandText(db)).match(/日期[:：](.+)$/) || [])[1]) : null;
+
+  const unitIn = (b) => b.items.map((it) => (Math.abs(centerOf(it) - unitCx) <= 15 ? unitOf(it.s) : null))
+    .find((u) => u);
+  const 是名稱帶 = (b) => !!(b && !unitIn(b) && b.items.every((it) => num(it.s) == null)
+    && text(bandText(b)));
+
+  const body = bs.filter((b) => b.y < sub.y);
+  const dailyRows = [];
+  let 本日累計金額 = null;
+  for (let i = 0; i < body.length; i++) {
+    const b = body[i];
+    const values = b.items.filter((it) => it.x >= PDF_NAME_MAX_X).flatMap((it) => valueTokens(it, cw));
+    const own = b.items.filter((it) => it.x < PDF_NAME_MAX_X);
+    if (/^發包工程費合計/.test(despace(own.map((it) => it.s).join('')))) {
+      // 合計列同時有本日合計與累計合計,取累計(同 xls 版取欄9 的理由)
+      const t = values.find((x) => nearestKey(cols, x.cx, 20) === '累計金額');
+      本日累計金額 = t ? t.v : null;
+      continue;
+    }
+    const 單位 = unitIn(b);
+    if (!單位) continue;                                   // 大類、小計與名稱續行
+    let 項次 = null;
+    const parts = [];
+    for (const it of own) {
+      const s = nfkc(it.s);
+      const m = 項次 == null && it.x < 35 ? s.match(/^\s*(\S+)\s*/) : null;
+      if (m && ITEM_NO.test(m[1])) { 項次 = m[1]; parts.push(s.slice(m[0].length)); continue; }
+      parts.push(s);
+    }
+    const ups = []; const dns = [];
+    for (let k = 1; k <= 2; k++) {
+      const up = body[i - k]; const dn = body[i + k];
+      if (!是名稱帶(up) || !是名稱帶(dn)) break;
+      ups.unshift(bandText(up));
+      dns.push(bandText(dn));
+    }
+    const row = {
+      項次, 工程項目: text([...ups, ...parts, ...dns].join('').trim()), 單位,
+      契約單價: null, 契約數量: null,
+      本日完成數量: null, 本日完成金額: null, 累計完成數量: null,
+    };
+    for (const t of values) {
+      const key = nearestKey(cols, t.cx, 20);
+      if (key && key !== '累計金額' && row[key] == null) row[key] = t.v;
+    }
+    dailyRows.push(row);
+  }
+  return { 日期, dailyRows, 本日累計金額 };
+}
+
+/** 第一聯一頁:天氣、進度、廠商、開工日期(明細只列有做的項目,不取)。 */
+function parseFirstPdf(items) {
+  const bs = pdfBands(items);
+  if (!bs.some((b) => /^表報編號/.test(despace(bandText(b))))) return null;
+  const all = items.filter((it) => String(it.s).trim());
+  const label = (name) => all.find((it) => despace(it.s) === name);
+  // 標籤右側、同一列高度(±10pt,工程名稱會折成上下兩行)、到下一個標籤之前的 item
+  const valueRight = (lab, stopX) => {
+    if (!lab) return null;
+    const vs = all.filter((it) => it !== lab && Math.abs(it.y - lab.y) <= 10
+      && it.x > lab.x + lab.w && it.x < stopX)
+      .sort((a, b) => b.y - a.y || a.x - b.x);
+    return text(vs.map((it) => it.s).join(''));
+  };
+  const 名稱標籤 = label('工程名稱');
+  const 廠商標籤 = label('承攬廠商名稱');
+  const 開工標籤 = label('開工日期');
+  const 完工標籤 = label('完工日期');
+
+  const wb = bs.find((b) => /本日天氣/.test(despace(bandText(b))));
+  const wt = wb ? despace(bandText(wb)) : '';
+  const am = wt.match(/上午[:：](.+?)(?=下午|填表|$)/);
+  const pm = wt.match(/下午[:：](.+?)(?=填表|$)/);
+  const pb = bs.find((b) => /^累計預定進度/.test(despace(bandText(b))));
+  const pt = pb ? despace(bandText(pb)) : '';
+  // 印的是百分數「46.48%」;xls 版存的是分數 0.4648,換成同一個尺度
+  const pct = (re) => {
+    const m = pt.match(re);
+    return m ? Number((Number(m[1]) / 100).toFixed(10)) : null;
+  };
+  return {
+    日期: pdfDate((wt.match(/填表日期[:：](.+)$/) || [])[1]),
+    工程名稱: valueRight(名稱標籤, 廠商標籤 ? 廠商標籤.x : Infinity),
+    承包廠商: valueRight(廠商標籤, Infinity),
+    開工日期: rocDate(valueRight(開工標籤, 完工標籤 ? 完工標籤.x : Infinity) || ''),
+    天氣_上午: am ? text(am[1]) : null,
+    天氣_下午: pm ? text(pm[1]) : null,
+    預定進度: pct(/累計預定進度\(%\)([\d.]+)%/),
+    實際進度: pct(/累計實際進度\(%\)([\d.]+)%/),
+  };
+}
+
+async function parsePdfAll(filePath, ft) {
+  if (!ft || typeof ft.extractItems !== 'function') throw new Error('缺少注入的 filetypes.extractItems');
+  const pages = await ft.extractItems(filePath);
+  const seconds = [];
+  const firsts = new Map();
+  for (const p of pages) {
+    const items = (p && p.items) || [];
+    const d2 = parseSecondPdf(items);
+    if (d2) { seconds.push(d2); continue; }
+    const d1 = parseFirstPdf(items);
+    if (d1 && d1.日期 && !firsts.has(d1.日期)) firsts.set(d1.日期, d1);
+  }
+  if (!seconds.length) throw new Error('PDF 裡找不到「第二聯」頁(此檔非賜利發日誌,或是無文字層的掃描件)');
+  return assemble(seconds, firsts);
+}
+
 /** 依填報日期去重(保留有本日完成量的列較多的那一份),並照時序輸出。 */
 function dedupe(days) {
   const byDate = new Map();
@@ -246,14 +441,19 @@ function dedupe(days) {
 
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
-  if (!ft || typeof ft.readWorkbook !== 'function') throw new Error('缺少注入的 filetypes.readWorkbook');
-  const wb = ft.readWorkbook(filePath);
-  const sheets = (wb && wb.sheets) || {};
-  const n2 = Object.keys(sheets).find((n) => SHEET2.test(n));
-  const n1 = Object.keys(sheets).find((n) => SHEET1.test(n));
-  // 回空陣列會被上游當成「這份沒有資料」而靜靜略過
-  if (!n2) throw new Error('找不到「第二聯」分頁(此檔非賜利發日誌,或是無文字層的掃描件)');
-  const days = mergeSheets(sheets[n2], n1 ? sheets[n1] : null, ft.excelSerialToISO);
+  let days;
+  if (/\.pdf$/i.test(String(filePath))) {
+    days = await parsePdfAll(filePath, ft);
+  } else {
+    if (!ft || typeof ft.readWorkbook !== 'function') throw new Error('缺少注入的 filetypes.readWorkbook');
+    const wb = ft.readWorkbook(filePath);
+    const sheets = (wb && wb.sheets) || {};
+    const n2 = Object.keys(sheets).find((n) => SHEET2.test(n));
+    const n1 = Object.keys(sheets).find((n) => SHEET1.test(n));
+    // 回空陣列會被上游當成「這份沒有資料」而靜靜略過
+    if (!n2) throw new Error('找不到「第二聯」分頁(此檔非賜利發日誌,或是無文字層的掃描件)');
+    days = mergeSheets(sheets[n2], n1 ? sheets[n1] : null, ft.excelSerialToISO);
+  }
   if (!days.length) throw new Error('第二聯裡找不到「公共工程施工日誌」區塊');
   // 「還沒填的天」濾掉:沒有日期**且**沒有明細
   const filled = days.filter((d) => d.header.填報日期 != null || d.dailyRows.length > 0);
@@ -359,7 +559,7 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.0.0',
+    version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '本日累計金額', '承包廠商', '開工日期',
@@ -370,5 +570,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { mergeSheets, parseSecond, parseFirst, blockStarts, dedupe },
+  _internal: { mergeSheets, parseSecond, parseFirst, blockStarts, dedupe, parseSecondPdf, parseFirstPdf },
 };
