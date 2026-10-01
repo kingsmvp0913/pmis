@@ -152,7 +152,12 @@ function progressBlock(xlsmPath) {
   for (let c = 9; c <= 末 && 預定列空; c++) {
     if (有值(ws[x.utils.encode_cell({ r: r0 + 5, c })])) 預定列空 = false;
   }
-  return { 合計列: r0, 末欄: x.utils.encode_col(末), 缺標籤列, 預定列空 };
+  // 範本的每日完成金額是 SUMPRODUCT($E$2:$E$37,…),只加到第 37 列:項目超過 36 項時,
+  // 多出來的項目做了也不算進實際進度。範圍沒涵蓋到合計列上一列就算不足。
+  const jf = (ws[`J${r0}`] && ws[`J${r0}`].f) || '';
+  const m = jf.match(/\$E\$2:\$E\$(\d+)/);
+  const 合計範圍不足 = !m || Number(m[1]) < r0 - 1;
+  return { 合計列: r0, 末欄: x.utils.encode_col(末), 缺標籤列, 預定列空, 合計範圍不足 };
 }
 
 module.exports = {

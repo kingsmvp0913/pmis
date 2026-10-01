@@ -283,6 +283,12 @@ function progressBlockOperations(block) {
     if (i < 0 || i >= 進度標籤.length) continue;
     ops.push({ type: 'setCell', sheet: SHEET, addr: `${i === 0 ? 'B' : 'A'}${r}`, value: 進度標籤[i] });
   }
+  if (block.合計範圍不足) {
+    // 加到合計列上一列為止;空列與公式回 "" 的列,SUMPRODUCT 一律當 0
+    const r = block.合計列;
+    ops.push({ type: 'setFormula', sheet: SHEET, addr: `J${r}:${block.末欄}${r}`,
+      formula: `=ROUND(SUMPRODUCT($E$2:$E$${r - 1},J$2:J$${r - 1}),0)` });
+  }
   if (block.預定列空) {
     const r = block.合計列 + 6;
     ops.push({ type: 'setFormula', sheet: SHEET, addr: `J${r}:${block.末欄}${r}`, formula: 預定進度公式 });

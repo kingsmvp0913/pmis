@@ -284,7 +284,7 @@ describe('progressBlockOperations — 補舊常駐報表的進度區塊', () => 
   const { progressBlockOperations } = require('../server/daily-log-write');
 
   test('只補缺的標籤與空的預定進度列', () => {
-    const ops = progressBlockOperations({ 合計列: 283, 末欄: 'WF', 缺標籤列: [283, 285, 288], 預定列空: true });
+    const ops = progressBlockOperations({ 合計列: 283, 末欄: 'WF', 缺標籤列: [283, 285, 288], 預定列空: true, 合計範圍不足: false });
     expect(ops).toEqual([
       { type: 'setCell', sheet: '每日施工紀錄', addr: 'B283', value: '(合計)' },
       { type: 'setCell', sheet: '每日施工紀錄', addr: 'A285', value: '實際進度' },
@@ -296,8 +296,15 @@ describe('progressBlockOperations — 補舊常駐報表的進度區塊', () => 
       + 'MIN(1,MAX(0,(J$1-工程基本資料!$B$8+1)/工程基本資料!$B$7)))');
   });
 
+  // 項目超過 36 項時,範本的 SUMPRODUCT($E$2:$E$37,…) 漏算第 38 列以後的完成金額
+  test('合計公式範圍不足時改成加到合計列上一列', () => {
+    const ops = progressBlockOperations({ 合計列: 284, 末欄: 'WF', 缺標籤列: [], 預定列空: false, 合計範圍不足: true });
+    expect(ops).toEqual([{ type: 'setFormula', sheet: '每日施工紀錄', addr: 'J284:WF284',
+      formula: '=ROUND(SUMPRODUCT($E$2:$E$283,J$2:J$283),0)' }]);
+  });
+
   test('什麼都不缺或量不到時不出指令', () => {
-    expect(progressBlockOperations({ 合計列: 284, 末欄: 'WF', 缺標籤列: [], 預定列空: false })).toEqual([]);
+    expect(progressBlockOperations({ 合計列: 284, 末欄: 'WF', 缺標籤列: [], 預定列空: false, 合計範圍不足: false })).toEqual([]);
     expect(progressBlockOperations(null)).toEqual([]);
   });
 });

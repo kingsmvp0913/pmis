@@ -94,7 +94,7 @@ describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼'
 
   test('舊範本:標籤與預定進度列都缺', () => {
     const got = progressBlock(build({ ...合計(283) }));
-    expect(got).toEqual({ 合計列: 283, 末欄: 'L', 缺標籤列: [283, 284, 285, 286, 287, 288], 預定列空: true });
+    expect(got).toEqual({ 合計列: 283, 末欄: 'L', 缺標籤列: [283, 284, 285, 286, 287, 288], 預定列空: true, 合計範圍不足: true });
   });
 
   test('新範本:什麼都不缺', () => {
@@ -104,13 +104,19 @@ describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼'
       A288: { t: 's', v: '每日預定進度(%)' }, A289: { t: 's', v: '預定進度' },
       J290: { t: 'n', v: 0, f: 'IF(1,0,0)' },
     }));
-    expect(got).toEqual({ 合計列: 284, 末欄: 'L', 缺標籤列: [], 預定列空: false });
+    expect(got).toEqual({ 合計列: 284, 末欄: 'L', 缺標籤列: [], 預定列空: false, 合計範圍不足: true });
   });
 
   // 承辦人上傳的人工報表,預定進度列是他照廠商日誌手打的數字,不可以被直線公式蓋掉
   test('預定進度列有手填值就不算空', () => {
     const got = progressBlock(build({ ...合計(284), K290: { t: 'n', v: 0.0038 } }));
     expect(got.預定列空).toBe(false);
+  });
+
+  // 範本的每日完成金額只加到第 37 列:項目超過 36 項,多出來的項目完成了也不算進實際進度
+  test('合計公式已涵蓋到合計列上一列就不算不足', () => {
+    const got = progressBlock(build({ ...合計(284), J284: { t: 'n', v: 0, f: 'ROUND(SUMPRODUCT($E$2:$E$283,J$2:J$283),0)' } }));
+    expect(got.合計範圍不足).toBe(false);
   });
 
   test('找不到合計列回 null', () => {
