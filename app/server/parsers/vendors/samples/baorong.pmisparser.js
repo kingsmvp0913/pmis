@@ -39,6 +39,9 @@ const META_VENDOR_KEY = '寶嶸營造有限公司';
 const SHEET = '工程進度表';
 // 這家的日期是文字,而且斜線常常打成兩個(「2026//7/31」)
 const DATE_RE = /(\d{4})\/+(\d{1,2})\/+(\d{1,2})/;
+// 9 月起「日期」列改成真正的 Excel 日期(序號 46218 = 2026-07-15)。
+// 下限 30000(1982 年)擋掉同一區的天數、工期這些小數字。
+const MIN_DATE_SERIAL = 30000;
 // 單位一律白名單(禁樣式判定:名稱裡的 RC/PVC 會被當成單位)
 const KNOWN_UNITS = new Set(['式', 'M', 'M2', 'M3', 'CM', 'MM', 'KG', 'kg', '噸', 'T',
   '公尺', '公斤', '平方公尺', '立方公尺', '場', '座', '組', '支', '個', '只', '片',
@@ -66,7 +69,10 @@ const unitOf = (v) => {
   return s && KNOWN_UNITS.has(s) ? s : null;
 };
 
-function isoOf(v) {
+function isoOf(v, serialToISO) {
+  if (typeof v === 'number') {
+    return serialToISO && v >= MIN_DATE_SERIAL ? serialToISO(v) : null;
+  }
   const m = nfkc(v).match(DATE_RE);
   if (!m) return null;
   return `${m[1]}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`;
@@ -90,8 +96,8 @@ function rowOfLabel(grid, label) {
  * 欄 11 是「當前選定日」的快照(日期 7/31),排在逐日欄(7/15 起)的左邊;
  * 從第一個有日期的欄開始收,第一天會變成 7/31,整份時序全錯。
  */
-function dayColumns(dateRow) {
-  const dates = (dateRow || []).map(isoOf);
+function dayColumns(dateRow, serialToISO) {
+  const dates = (dateRow || []).map((v) => isoOf(v, serialToISO));
   let best = [];
   let cur = [];
   for (let c = 0; c < dates.length; c++) {
@@ -123,11 +129,11 @@ function itemRows(grid, hr) {
  * @param {Array<Array>} grid 工程進度表分頁
  * @param {object} [meta] 從其他分頁取來的固定欄位 { 工程名稱, 承包廠商, 開工日期 }
  */
-function parseMatrix(grid, meta = {}) {
+function parseMatrix(grid, meta = {}, serialToISO = null) {
   const dr = rowOfLabel(grid, '日期');
   const hr = rowOfLabel(grid, '工程項目');
   if (dr < 0 || hr < 0) throw new Error('找不到「日期」列或明細表頭(此檔非寶嶸的工程進度表)');
-  const cols = dayColumns(grid[dr]);
+  const cols = dayColumns(grid[dr], serialToISO);
   if (!cols.length) throw new Error('工程進度表裡找不到逐日欄');
 
   const amr = rowOfLabel(grid, '上午天氣');
@@ -159,7 +165,7 @@ function parseMatrix(grid, meta = {}) {
     days.push({
       header: {
         工程名稱: meta.工程名稱 || null,
-        填報日期: isoOf(at(grid, dr, c)),
+        填報日期: isoOf(at(grid, dr, c), serialToISO),
         星期: null,                                     // 標了「星期」但值印的是日期,不收
         天氣_上午: amr < 0 ? null : text(at(grid, amr, c)),
         天氣_下午: pmr < 0 ? null : text(at(grid, pmr, c)),
@@ -227,13 +233,35 @@ async function parseAll(filePath, ctx) {
     throw new Error(`找不到「${SHEET}」分頁(此檔非寶嶸日誌,或是無文字層的掃描件)`);
   }
   const meta = fixedMeta(sheets['施工日誌'], ft.excelSerialToISO);
-  const days = parseMatrix(sheets[SHEET], meta);
+  const days = parseMatrix(sheets[SHEET], meta, ft.excelSerialToISO);
   // 「還沒填的天」濾掉:範本把 180 天的日期都預先填好了,只有天氣或完成量能分辨
   // 哪幾天真的填過。兩個條件並用——只看完成量會讓「有到工、當天沒進度」的天消失。
   const filled = days.filter((d) => d.header.天氣_上午 != null || d.header.天氣_下午 != null
     || d.dailyRows.some((r) => r.本日完成數量 != null));
   if (!filled.length) throw new Error('工程進度表裡每一天都沒有天氣也沒有完成數量(這份還沒開始填)');
-  return dedupe(filled);
+  const end = reportedThrough(sheets[SHEET], filled, ft.excelSerialToISO);
+  return dedupe(end ? filled.filter((d) => d.header.填報日期 <= end) : filled);
+}
+
+/**
+ * 本次填到哪一天。**天氣不能當「填過」的證據**:廠商會把天氣先打好
+ * (7 月檔就打到 9/12;9 月檔整個 180 天都打成「晴」,直到 2027/1/10),
+ * 照收的話 9 月檔會多出 100 多天只有天氣、沒有進度的假日子寫進監造報表。
+ *
+ * 取「最後一天有完成數量」與「欄 11 當前選定日」兩者較晚的那天:
+ *   只看完成量 → 月底沒有進度的那幾天(雨天)會消失;
+ *   只看選定日 → 廠商常忘了調(8 月修正檔選定日停在 8/4,完成量填到 8/31)。
+ * 實測 9 月兩份都得 9/30,7/15~9/30 正好 78 天 = 該表「施工累計天數」。
+ * 兩者都沒有時回 null(不截)。
+ */
+function reportedThrough(grid, days, serialToISO) {
+  const 有量 = days.filter((d) => d.dailyRows.some((r) => r.本日完成數量 != null && r.本日完成數量 !== 0));
+  const lastQty = 有量.length ? 有量[有量.length - 1].header.填報日期 : null;
+  const dr = rowOfLabel(grid, '日期');
+  const cols = dayColumns(grid[dr], serialToISO);
+  const snap = cols.length && cols[0] > 0 ? isoOf(at(grid, dr, cols[0] - 1), serialToISO) : null;
+  const cands = [lastQty, snap].filter(Boolean).sort();
+  return cands.length ? cands[cands.length - 1] : null;
 }
 
 async function parse(filePath, ctx) {

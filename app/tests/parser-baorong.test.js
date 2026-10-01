@@ -32,11 +32,13 @@ describe('parseAll(橋頭國小暨許厝分校)', () => {
   beforeAll(async () => { days = await mod.parseAll(FIXTURE, ctx); }, 120000);
 
   // ② 叫「施工日誌」的分頁只有一天(公式抓當天的列印表單);讀它的話一份檔只有一天。
-  // 逐日在「工程進度表」矩陣裡,而範本把 180 天的日期都預先填好,只有 60 天填過。
-  test('讀的是工程進度表矩陣,60 天,由 7/15 起', () => {
-    expect(days.length).toBe(60);
+  // 逐日在「工程進度表」矩陣裡,範本把 180 天的日期都預先填好。天氣也先打到 9/12,
+  // 但這是 7 月的檔——8/1 之後只有天氣、沒有任何完成量,是預先打好的,不是填過的。
+  // 完成量最後一天與當前選定日(欄 11)都是 7/31 → 17 天,等於該表「施工累計天數」。
+  test('讀的是工程進度表矩陣,7/15~7/31 共 17 天,預打天氣的未來日不收', () => {
+    expect(days.length).toBe(17);
     expect(days[0].header.填報日期).toBe('2026-07-15');
-    expect(days[59].header.填報日期).toBe('2026-09-12');
+    expect(days[16].header.填報日期).toBe('2026-07-31');
     const dates = days.map((d) => d.header.填報日期);
     expect([...dates].sort()).toEqual(dates);
     expect(new Set(dates).size).toBe(dates.length);
@@ -81,7 +83,7 @@ describe('parseAll(橋頭國小暨許厝分校)', () => {
   // ③ 矩陣格 = 該日完成數量;33 個項目逐列把逐日欄加總,都等於該檔「累計完成數量」欄。
   // 期末累計就是驗這件事——累加寫錯(少帶前一天、沒值時歸零)這裡就會不符。
   test('累計完成數量逐日累加,期末等於矩陣列總和', () => {
-    const 末 = days[59].dailyRows;
+    const 末 = days[days.length - 1].dailyRows;
     expect(末[0].累計完成數量).toBe(1);                // 項次1:7/18 完成 1
     expect(末.filter((r) => r.累計完成數量 == null)).toHaveLength(0);
     // 不回退:每一項的累計在整份日誌裡單調不減
@@ -105,11 +107,37 @@ describe('parseAll(橋頭國小暨許厝分校)', () => {
 
   test('必要欄位零缺漏', () => {
     const rows = days.flatMap((d) => d.dailyRows);
-    expect(rows).toHaveLength(1980);
+    expect(rows).toHaveLength(17 * 33);
     expect(rows.filter((r) => r.單位 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.契約數量 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.契約單價 == null)).toHaveLength(0);
     expect(rows.filter((r) => r.項次 == null)).toHaveLength(0);
+  });
+});
+
+// 9 月起廠商把「日期」列從文字(「2026//7/31」)改成真正的 Excel 日期(序號 46218)。
+// 只認文字的話一欄逐日欄都找不到,整份上傳直接失敗(「工程進度表裡找不到逐日欄」)。
+describe('parseAll(9 月檔:日期列改成 Excel 日期序號)', () => {
+  let days;
+  beforeAll(async () => {
+    days = await mod.parseAll(path.join(__dirname, 'fixtures', 'baorong-202609.xlsx'), ctx);
+  }, 120000);
+
+  // 這份把 180 天的天氣全打成「晴」(到 2027/1/10)。照「有天氣就算填過」會多收 102 天
+  // 只有天氣的假日子;7/15~9/30 = 78 天 = 該表「施工累計天數」。
+  test('讀得到逐日欄,由 7/15 起到 9/30 共 78 天,預打天氣的未來日不收', () => {
+    const dates = days.map((d) => d.header.填報日期);
+    expect(dates).toHaveLength(78);
+    expect(dates[0]).toBe('2026-07-15');
+    expect(dates[dates.length - 1]).toBe('2026-09-30');
+    expect([...dates].sort()).toEqual(dates);
+    expect(new Set(dates).size).toBe(dates.length);
+  });
+
+  // 9 月檔的單價已由廠商改成與橋頭經費總表一致(16250 → 9750),照讀。
+  test('33 項明細,單價照讀', () => {
+    expect(new Set(days.map((d) => d.dailyRows.length))).toEqual(new Set([33]));
+    expect(days[0].dailyRows[0].契約單價).toBe(9750);
   });
 });
 
