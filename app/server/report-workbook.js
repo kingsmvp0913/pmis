@@ -157,7 +157,19 @@ function progressBlock(xlsmPath) {
   const jf = (ws[`J${r0}`] && ws[`J${r0}`].f) || '';
   const m = jf.match(/\$E\$2:\$E\$(\d+)/);
   const 合計範圍不足 = !m || Number(m[1]) < r0 - 1;
-  return { 合計列: r0, 末欄: x.utils.encode_col(末), 缺標籤列, 預定列空, 合計範圍不足 };
+  // 合計列 +7:廠商填報實際進度的核對列(列印範圍外)。範本那一列留著編範本時的手算差值
+  // (=3.57-3.56),不清掉會在核對列印出 0.01。只認純數字算式,廠商值是數字不是公式。
+  const 廠商列 = r0 + 7;
+  const 廠商列雜項 = [];
+  for (let c = 9; c <= 末; c++) {
+    const addr = x.utils.encode_cell({ r: 廠商列 - 1, c });
+    const cell = ws[addr];
+    if (cell && cell.f && /^[\d.\s+\-*/()]+$/.test(cell.f)) 廠商列雜項.push(addr);
+  }
+  return {
+    合計列: r0, 末欄: x.utils.encode_col(末), 缺標籤列, 預定列空, 合計範圍不足,
+    廠商標籤缺: !有值(ws[`A${廠商列}`]), 廠商列雜項,
+  };
 }
 
 module.exports = {

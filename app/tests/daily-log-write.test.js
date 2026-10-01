@@ -308,3 +308,49 @@ describe('progressBlockOperations — 補舊常駐報表的進度區塊', () => 
     expect(progressBlockOperations(null)).toEqual([]);
   });
 });
+
+// Summer:報表的實際進度是公式算的,廠商日誌的實際進度多少會因算法不同而有差,
+// 不能直接覆蓋;另外寫在合計列 +7(列印範圍外的灰色區),與上面的實際進度同一欄好核對。
+describe('vendorProgressOperations — 廠商填報的實際進度寫到核對列', () => {
+  const { vendorProgressOperations, vendorProgressDivisor } = require('../server/daily-log-write');
+  const block = { 合計列: 284, 末欄: 'WF', 缺標籤列: [], 預定列空: false, 合計範圍不足: false, 廠商標籤缺: true, 廠商列雜項: ['O291'] };
+  const d = (填報日期, 實際進度) => ({ header: { 填報日期, 實際進度 }, dailyRows: [] });
+
+  test('依日期寫進對應欄,沒填的那天斷開不覆蓋;補標籤、清雜項', () => {
+    const ops = vendorProgressOperations(
+      [d('2026-04-08', 0.6), d('2026-04-09', 1.56), d('2026-04-10', null), d('2026-04-11', 2.74)],
+      '2026-04-08', block, { '2026-04-08': 0.006, '2026-04-09': 0.0156, '2026-04-11': 0.0274 },
+    );
+    expect(ops).toEqual([
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'O291', value: null },
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'A291', value: '廠商填報實際進度' },
+      { type: 'setRange', sheet: '每日施工紀錄', startAddr: 'J291', values: [[0.006, 0.0156]] },
+      { type: 'setRange', sheet: '每日施工紀錄', startAddr: 'M291', values: [[0.0274]] },
+    ]);
+  });
+
+  test('量不到進度區塊或整批都沒填就不出指令', () => {
+    expect(vendorProgressOperations([d('2026-04-08', 0.6)], '2026-04-08', null, {})).toEqual([]);
+    expect(vendorProgressOperations([d('2026-04-08', null)], '2026-04-08', { ...block, 廠商標籤缺: false, 廠商列雜項: [] }, {})).toEqual([]);
+  });
+
+  // 久木:xls 回比例(0.111)、PDF 回百分數(24.65),7~9 月一起送時同一批混著兩種尺度。
+  // 整批只判一次的話,8 月那幾天印成 2465%。
+  test('尺度逐日判斷,同一批可以混用', () => {
+    const ops = vendorProgressOperations([d('2026-04-08', 0.111), d('2026-04-09', 24.65)], '2026-04-08',
+      { ...block, 廠商標籤缺: false, 廠商列雜項: [] }, { '2026-04-08': 0.111, '2026-04-09': 0.2 });
+    expect(ops).toEqual([{ type: 'setRange', sheet: '每日施工紀錄', startAddr: 'J291', values: [[0.111, 0.2465]] }]);
+  });
+
+  // 各家讀取器有的回百分數(0.6 = 0.6%)、有的回比例(0.006)。只看大小會在開工頭幾天
+  // 誤判(真的只有 0.6%),改拿完成金額推得的實際進度當參考,取較接近的那個尺度。
+  test('尺度以完成金額推得的進度為參考', () => {
+    expect(vendorProgressDivisor(0.6, 0.006)).toBe(100);
+    expect(vendorProgressDivisor(0.006, 0.006)).toBe(1);
+    expect(vendorProgressDivisor(0.374, 0.3742)).toBe(1);
+    expect(vendorProgressDivisor(37.42, 0.3742)).toBe(100);
+    // 參考值算不出來(0 或 null)時才退回看大小
+    expect(vendorProgressDivisor(37.42, 0)).toBe(100);
+    expect(vendorProgressDivisor(0.42, null)).toBe(1);
+  });
+});

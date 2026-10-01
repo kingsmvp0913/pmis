@@ -977,3 +977,21 @@ describe('期初累計', () => {
     expect(後.body.errors).toEqual([]);
   });
 });
+
+// Summer:廠商的實際進度不覆蓋報表(報表用公式算),另寫在合計列 +7 的核對列,
+// 而且要排在刪項目列之前——列號是寫入前量的,刪列會把整段往上帶。
+test('寫日誌時把廠商填報的實際進度寫到核對列,尺度依完成金額判斷', async () => {
+  const { app, token, id } = await makeApp();
+  fs.mkdirSync(path.dirname(workbookPath(id)), { recursive: true });
+  fs.copyFileSync(TEMPLATE_PATH, workbookPath(id));
+  // 契約 10 式 × 100 = 1000;本日 3 式 = 300 → 推得 30%。廠商印 30(百分數)→ 0.3
+  feed([day('2026-04-08', [r('1', 3)])].map((d) => ({ ...d, header: { ...d.header, 實際進度: 30 } })));
+  await post(app, token, id, 'confirm').expect(200);
+  const ops = fillTemplate.mock.calls[0][2];
+  const i廠商 = ops.findIndex((o) => o.type === 'setRange' && o.startAddr === 'J291');
+  expect(ops[i廠商].values).toEqual([[0.3]]);
+  expect(ops).toContainEqual({ type: 'setCell', sheet: '每日施工紀錄', addr: 'A291', value: '廠商填報實際進度' });
+  expect(ops).toContainEqual({ type: 'setCell', sheet: '每日施工紀錄', addr: 'O291', value: null });
+  const i刪 = ops.findIndex((o) => o.type === 'deleteRows');
+  expect(i廠商).toBeLessThan(i刪);
+});

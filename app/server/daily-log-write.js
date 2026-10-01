@@ -296,7 +296,67 @@ function progressBlockOperations(block) {
   return ops;
 }
 
+/**
+ * 廠商日誌的實際進度是百分數還是比例(各家讀取器不一)。回傳要除的數:100 或 1。
+ *
+ * 只看大小會在開工頭幾天誤判(真的只有 0.6%),故拿完成金額推得的實際進度 ref(比例)
+ * 當參考,取換算後與它比值最接近 1 的那個尺度;ref 算不出來才退回「> 1.05 即百分數」。
+ */
+function vendorProgressDivisor(v, ref) {
+  if (v == null || !Number.isFinite(Number(v))) return 1;
+  const n = Math.abs(Number(v));
+  if (ref == null || !(Number(ref) > 0) || n === 0) return n > 1.05 ? 100 : 1;
+  const 偏差 = (d) => Math.abs(Math.log((n / d) / Number(ref)));
+  return 偏差(100) < 偏差(1) ? 100 : 1;
+}
+
+const 廠商進度標籤 = '廠商填報實際進度';
+
+/**
+ * 廠商日誌的實際進度 → 每日施工紀錄合計列 +7(列印範圍外的核對列),與公式算的
+ * 「實際進度」同一個日期欄,上下對照。報表的實際進度仍由公式算,不覆蓋:
+ * 廠商的算法多少有差,直接填會把差異藏起來(Summer 2026-10-01)。
+ *
+ * 只寫有值的日子、切成連續區段——沒填的那天寫 null 會把別批寫好的值清掉。
+ *
+ * @param {Array} days
+ * @param {string} 開工日 ISO
+ * @param {object|null} block progressBlock 的結果
+ * @param {Object<string, number>} refByDate 日期 → 依完成金額推得的實際進度(比例),
+ *   逐日判斷尺度用(見 vendorProgressDivisor)。**不可整批判一次**:久木的 xls 回比例、
+ *   PDF 回百分數,7~9 月一起送時同一批混著兩種,整批判會把 8 月印成 2465%。
+ */
+function vendorProgressOperations(days, 開工日, block, refByDate) {
+  if (!block) return [];
+  const base = dayNum(開工日);
+  if (base == null) return [];
+  const row = block.合計列 + 7;
+  const byOff = new Map();
+  for (const d of days || []) {
+    const h = d.header || {};
+    const v = h.實際進度 == null || h.實際進度 === '' ? null : Number(h.實際進度);
+    if (!h.填報日期 || v == null || !Number.isFinite(v)) continue;
+    const off = dayNum(h.填報日期) - base;
+    if (off < 0 || FIRST_DATE_COL + off > LAST_DATE_COL) continue;
+    const divisor = vendorProgressDivisor(v, (refByDate || {})[h.填報日期]);
+    byOff.set(off, Number((v / divisor).toFixed(8)));
+  }
+  if (!byOff.size) return [];
+  const ops = (block.廠商列雜項 || []).map((addr) => ({ type: 'setCell', sheet: SHEET, addr, value: null }));
+  if (block.廠商標籤缺) ops.push({ type: 'setCell', sheet: SHEET, addr: `A${row}`, value: 廠商進度標籤 });
+  const offs = [...byOff.keys()].sort((a, b) => a - b);
+  let 起 = offs[0];
+  let 段 = [byOff.get(起)];
+  for (let i = 1; i <= offs.length; i++) {
+    if (i < offs.length && offs[i] === offs[i - 1] + 1) { 段.push(byOff.get(offs[i])); continue; }
+    ops.push({ type: 'setRange', sheet: SHEET, startAddr: `${colName(FIRST_DATE_COL + 起)}${row}`, values: [段] });
+    if (i < offs.length) { 起 = offs[i]; 段 = [byOff.get(起)]; }
+  }
+  return ops;
+}
+
 module.exports = {
   colName, daysToOperations, weatherToOperations, diffDays,
-  legacyFormulaOperations, progressBlockOperations, SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
+  legacyFormulaOperations, progressBlockOperations, vendorProgressOperations, vendorProgressDivisor,
+  SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };

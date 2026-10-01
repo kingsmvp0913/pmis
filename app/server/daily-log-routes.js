@@ -43,6 +43,7 @@ const { validateDailyLog } = require('./daily-log-validate');
 const { mergeDays } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations, progressBlockOperations,
+  vendorProgressOperations,
 } = require('./daily-log-write');
 const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
 const { nextBatchFolder } = require('./settings');
@@ -430,14 +431,41 @@ function flatten(days, contract = []) {
  *          source:string, userId:number|null}} p
  *   source 進 daily_records.source:'parser' | 'ocr_confirmed'
  */
+/**
+ * 廠商實際進度的尺度參考:逐日依完成金額推得的進度(比例),日期 → 值。
+ * 與報表公式同一算法:累計(數量 × 契約單價)÷ 契約總價;前期取已寫入的 daily_records。
+ * @returns {Object<string, number>}
+ */
+function 廠商進度參考(rows, records, contract) {
+  const price = new Map(contract.map((c) => [String(c.項次), Number(c.單價) || 0]));
+  const total = contract.reduce((a, c) => a + Math.round((Number(c.數量) || 0) * (Number(c.單價) || 0)), 0);
+  if (!(total > 0)) return {};
+  const 金額 = (r) => (Number(r.本日完成數量) || 0) * (price.get(String(r.項次)) || 0);
+  const 起 = 最早日(rows);
+  let amount = 0;
+  for (const r of records) if (起 && r.日期 < 起) amount += 金額(r);
+  const 當日 = new Map();
+  for (const r of rows) 當日.set(r.日期, (當日.get(r.日期) || 0) + 金額(r));
+  const out = {};
+  for (const 日 of [...當日.keys()].sort()) {
+    amount += 當日.get(日);
+    out[日] = amount / total;
+  }
+  return out;
+}
+
 async function writeDays({ projectId, days, rows, ctx, files, source, userId }) {
   const dest = ensureWorkbook(projectId);
+  const block = progressBlock(dest);
+  const 參考 = 廠商進度參考(rows, await loadRecords(projectId), ctx.contract);
   let tmp = dest.replace(/\.xlsm$/i, `.tmp-${process.pid}-${++tmpSeq}.xlsm`);
   try {
     await fillTemplate(dest, tmp, applyProtection(dest, [
       // 舊常駐報表缺進度標籤與預定進度公式(8/11 以前的範本),監造報表的進度整份空白。
-      // 列號是現在量的,必須排在下面會刪項目列的指令之前。
-      ...progressBlockOperations(progressBlock(dest)),
+      // 廠商填報的實際進度另寫在核對列(不覆蓋公式算的實際進度)。
+      // 列號都是現在量的,必須排在下面會刪項目列的指令之前。
+      ...progressBlockOperations(block),
+      ...vendorProgressOperations(days, ctx.開工日, block, 參考),
       // 先把項目列數對齊,再以資料庫契約完整覆寫價目表。只擴列會把最後一個既有項目
       // 一併複製到新增列；例如舊報表 36 列、契約 44 項時,第 36 項會重複八次。
       // SP3 必須自己修復常駐舊報表,因為承辦人日常上傳日誌時不會重跑 SP2。
