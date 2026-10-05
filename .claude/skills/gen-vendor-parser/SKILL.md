@@ -35,7 +35,7 @@ description: 產生單一廠商的施工日誌讀取器(.pmisparser.js)。輸入
    **禁止推定;測試一定要斷言 `meta.vendorKey`**(原本沒有任何測試驗它,所以錯名字能一直躺著)。
    日誌內的廠商名只能當佐證:三崙那案的分頁抬頭寫著「承昇營造」,那是拿承昇的檔改的殘留。
 2. **施工日誌樣本檔**路徑(xls/xlsx/pdf/**docx**)。
-   **`.docx` 讀得了**(2026-08-14 起):`ctx.filetypes.readDocx` → `{ blocks, tables }`,
+   **`.docx` 讀得了**:`ctx.filetypes.readDocx` → `{ blocks, tables }`,
    純 Node(jszip)不需 Word COM。用法與坑見下方「Word(.docx)」那節。
    **`.doc`(Word 97-2003)仍然讀不了**——OLE2 二進位,SheetJS 開不了,
    文字流沒有表格欄界。作法:**用 Word COM 另存 PDF**
@@ -175,7 +175,7 @@ XLSX／XLSM 的目標工作表可能有密碼保護。標註只能在輸出副�
     - `extractPages(filePath)` → 每頁純文字(依 `transform[5]` y 座標換行);**對每頁做 NFKC 正規化**(關鍵:CID 字型會把「年」等字映到 CJK 相容區 U+F9xx,不正規化則 regex 抓不到)。只適合單欄/標籤-值版面。
     - **`extractItems(filePath)` → 每頁的原始 item `{x, y, w, s}`(座標版)**。多欄表格抽成文字後會變成「1.002,500.00」這種黏連字串,還原不回欄位;**沒有座標就只能靠 token 順序猜,而順序在多欄表格裡不成立**(見下方「每家要客製」第 2 點)。
   - Excel(`xlsx.js`,已存在):用 `xlsx` 套件;把 `!merges` 合併區起點值**填滿整個合併區**,reader 用固定起點欄字母即可取值。提供 `excelSerialToISO`(日期常存 1900 曆制序號,非文字)、`gridFromWorksheet`。**Excel 路徑特有坑**:①日期多為序號要轉,別當字串 regex(仍保留文字雙制辨識)②進度欄常是小數 0.477=47.7%,**保留原值**、是否 ×100 交下游 ③**務必用 sheet 真表頭列校正欄位落點**——來源分析文件的座標僅供起點,曾有標錯(摯東 doc 標錯本日完成/單價欄,以 R9 真表頭為準)④分析時先 dump `!merges` 看數字欄真正落在哪個合併起點欄,別被覆蓋格誤導 ⑤`selfTest` 用真 worksheet(含 `!merges`)經 `gridFromWorksheet` 建 grid,連合併填充一起自檢。⑥**error cell 陷阱**:SheetJS 對 `#REF!`/`#VALUE!` 格的 `.v` 是「錯誤代碼數字」(#REF!→23、#VALUE!→15),會偽裝成正常數字。**已在 `gridFromWorksheet` 於 grid 端把 `t==='e'` 轉 null**(所有 Excel 讀取器自動受保護),但仍要警覺:別去讀那些整片 `#REF!` 的 snapshot sheet(見上「多視圖選乾淨來源」)。
-  - **Word `.docx`(`docx.js`,2026-08-14 新增)**:`readDocx(path)` → `{ blocks, tables }`,
+  - **Word `.docx`(`docx.js`)**:`readDocx(path)` → `{ blocks, tables }`,
     純 Node(jszip),**不需 Word COM**。`.doc` 仍讀不了(見「輸入」第 2 點)。
     - **`blocks` 是依文件順序的段落與表格**(`{type:'p',text}` / `{type:'tbl',rows}`)。
       **段落不能丟掉**:玉森第一聯是**一天一個表格,而那天的日期印在表格前面的段落上**;
@@ -307,10 +307,6 @@ XLSX／XLSM 的目標工作表可能有密碼保護。標註只能在輸出副�
 
 ### 掃描件(無文字層)——**可以做,但走的是另一條路**
 
-⛔ 這一節 2026-08-15 改寫過。舊版寫著「不要嘗試用 OCR 讀明細」,**那條在 2026-08-10
-就已經不成立**:`daily-log-scan.js` 的 `scanDays` 已經開放,前端也有「辨識掃描件」。
-規則落後於系統,照舊版做會白白放棄一整批掃描件。
-
 **現況:OCR 明細解析是開放的,但只作為預填,一律要承辦人逐格確認才寫得進去。**
 
 ```
@@ -371,7 +367,7 @@ scanDays(pdf, {ocr, extractItemsOcr, filetypes, parser}) → parseAll 的輸出
 4. **fixture 測試**:複製樣本檔到 `app/tests/fixtures/<key>.<ext>`;寫 `app/tests/parser-<key>.test.js`,呼叫 `parse`/`parseAll` 時傳入 `ctx`(`const ctx = { filetypes: require('../server/parsers/filetypes') }`),Excel 讀取器的 `selfTest(filetypes)` 也帶入同一份;**斷言來源的具體已知值**(工程名稱、某日日期、某項次各欄數字、當日累計金額、「-」轉 null 的語意、天數)。**金額/數量解析錯時測試必須失敗(Rule 9)。**
 5. **驗證(三道關卡,全部要過才算完成)**:
 
-   a. 先跑受影響的測試（採專案 AGENTS.md 的安靜輸出參數），再依專案規則跑全量
+   a. 先跑受影響的測試，再跑全量
       `cd app && npm test`；`selfTest(ft)` 回 true。若已知 Excel/測試環境卡住，先確認
       子程序屬於本次測試，依專案規則收尾並如實回報，不能把未完成的全量測試說成通過。
 
