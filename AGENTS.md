@@ -1,6 +1,6 @@
 # PMIS — Codex 開發規則
 
-本檔供互動式 Codex 使用。`.claude/CLAUDE.md` 與 `.claude/agents/*.md` 是 PMIS 平台執行期的 Claude pipeline 設定；除非任務明確要求，請勿修改、搬移或改名它們。
+本檔供互動式 Codex 使用。`.claude/` 底下是 Claude Code 的設定；除非任務明確要求，請勿修改、搬移或改名它們。
 
 ## Skills
 
@@ -25,7 +25,6 @@
 
 - `app/server/**`、`app/public/**` 是 PMIS 平台程式碼；`data/**` 是執行期資料，不納入一般程式修改。
 - 前端（`app/public/**`）配色一律使用 `app.css` 的 CSS 變數或 dark-aware class；不得只在 inline style 寫死淺色背景，造成深色模式文字不可讀。需要底色區隔時使用 `var(--bg)`、`var(--surface)` 等既有變數。
-- `.claude/agents/*.md` 是由平台 pipeline 載入的 prompt，含輸出契約（如 `<result>`、JSON 欄位與 placeholder）。修改前必須先讀完整檔案及其呼叫端，並為契約新增或更新驗證。
 - 廠商讀取器必須是 deterministic；不得在讀取器中呼叫 AI、網路、`process.cwd()`，或直接載入檔型工具。檔型工具一律由 `ctx.filetypes` 注入。
 - 讀取器的 `meta.vendorKey` 必須等於決標公告的正式廠商名稱；不可由檔名或日誌內容猜測。
 
