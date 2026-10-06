@@ -94,6 +94,20 @@ describe('parseAll', () => {
   });
 });
 
+// 本日進度(r0+7)只在開工第一天與累計相同,fixture 只有那一天驗不出取錯列;
+// 取成本日的話,監造報表的廠商進度核對列每天都印成零點幾 %。
+test('預定/實際進度取累計那一列,不是本日', () => {
+  const grid = [];
+  const set = (r, c, v) => { (grid[r] = grid[r] || [])[c] = v; };
+  set(0, 1, '報表編號');
+  set(1, 13, 45870);
+  set(7, 1, '本日預定進度(%)'); set(7, 4, 0.0085); set(7, 11, 0);
+  set(8, 1, '累計預定進度(%)'); set(8, 4, 0.4596); set(8, 11, 0.5360);
+  const day = mod.parseBlock(grid, 0, ctx.filetypes);
+  expect(day.header.預定進度).toBe(0.4596);
+  expect(day.header.實際進度).toBe(0.536);
+});
+
 // 天區塊靠「報表編號」偵測,不寫死間距 83——間距是觀察值不是保證。
 test('blockStarts 以「報表編號」定位,不靠固定間距', () => {
   const grid = [];
