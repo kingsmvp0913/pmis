@@ -280,6 +280,8 @@ async function migrate() {
     ['firms', 'fax', 'TEXT'],
     ['firms', 'contact', 'TEXT'],
     ['firms', 'email', 'TEXT'],
+    // 公文用印圖檔(data URL)。原本範本寫死呂罡銘的簽名章,大墩的公文也蓋成呂罡銘的。
+    ['firms', 'seal_image', 'TEXT'],
     // 公文文號一律人工輸入整串:樣本裡連「銘第」vs「墩字第」都不一致,
     // 拆欄位等於把一個不成立的格式寫死。
     ['submission_history', 'our_doc_no', 'TEXT'],
@@ -335,6 +337,18 @@ async function migrate() {
     if (firmNames.has(name)) continue;
     await query('INSERT INTO firms (name) VALUES ($1)', [name]);
     firmNames.add(name);
+  }
+
+  // 用印改綁事務所之前,範本寫死的就是呂罡銘的簽名章;升級後他的公文不能突然沒印。
+  // 只補一次(settings 記號),承辦人之後自己刪掉印不會在重啟時又被補回來。
+  const { rows: sealDone } = await query("SELECT value FROM settings WHERE key = 'seal_backfill_done'");
+  if (!sealDone[0]) {
+    const { templateSealDataUrl } = require('./official-doc');
+    const legacy = await templateSealDataUrl();
+    if (legacy) {
+      await query("UPDATE firms SET seal_image = $1 WHERE name LIKE '%呂罡銘%' AND seal_image IS NULL", [legacy]);
+    }
+    await query("INSERT INTO settings (key, value) VALUES ('seal_backfill_done', '1')");
   }
 
   // 單一險種 → 多險種的一次性搬移。以「這個工程在新表裡還沒有任何一列」為條件,

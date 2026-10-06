@@ -1110,15 +1110,17 @@
     async function makeOfficialDoc(p, r, cell) {
       const payload = await askOfficialDoc(r);
       if (!payload) return;   // 使用者取消
+      let res;
       try {
-        await Api.post('submissions/' + r.id + '/official-doc', payload);
+        res = await Api.post('submissions/' + r.id + '/official-doc', payload);
       } catch (e) {
         // 後端的硬擋會帶 fields(哪一欄不合格),只丟 message 會讓承辦人不知道要改哪裡
         const suffix = e.fields && e.fields.length ? '：' + e.fields.join('、') : '';
         showToast(e.message + suffix, 'error');
         return;
       }
-      showToast('已產出公文', 'success');
+      if (res && res.warning) showToast('已產出公文。' + res.warning, 'warn');
+      else showToast('已產出公文', 'success');
       await renderHistory(p, cell);   // 重繪以帶出新存的欄位值
     }
 

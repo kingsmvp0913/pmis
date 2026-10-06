@@ -3,7 +3,9 @@
  *
  * Exports:
  *   PLACEHOLDERS            — 範本的 15 個佔位符名稱
- *   fillTemplate(values, templatePath?) → Promise<Buffer>
+ *   fillTemplate(values, templatePath?, seal?) → Promise<Buffer>  seal:事務所用印 data URL,null = 不蓋印
+ *   parseSeal(buf)          — 驗證用印圖檔(PNG/JPEG),回 {mime, width, height};不合法回 null
+ *   templateSealDataUrl()   — 範本原本寫死的用印(呂罡銘)轉 data URL,升級補資料用
  *   TEMPLATE_PATH           — 範本檔絕對路徑
  *   toIsoDate(v)            — 轉為 YYYY-MM-DD(pg DATE 物件 / 字串皆可),無值回 null
  *   toRocDate(v)            — 西元轉民國中文日期,無效日期回空字串
@@ -80,7 +82,75 @@ function buildLogDescription(period, startDate, completionDate) {
   return `施工日誌(${toRocDate(from)}至${toRocDate(to)})`;
 }
 
-async function fillTemplate(values, templatePath = TEMPLATE_PATH) {
+// 範本裡用印圖的關聯 id 與檔名(產範本時就只有這一張圖)。
+const SEAL_REL = 'rId6';
+const SEAL_MEDIA = 'word/media/image1.png';
+// 範本原圖 410×103 排成 307.45pt×77.25pt;換印時固定高度、依比例算寬,不超過版心。
+const SEAL_HEIGHT_PT = 77.25;
+const SEAL_MAX_WIDTH_PT = 420;
+
+/** 只認 PNG/JPEG,並讀出像素尺寸(排版要用比例)。 */
+function parseSeal(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 24) return null;
+  if (buf.readUInt32BE(0) === 0x89504e47) {
+    return { mime: 'image/png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf[0] === 0xff && buf[1] === 0xd8) {
+    // 走 JPEG 區段找 SOFn(C0~CF,扣掉 C4/C8/CC 這三個不是畫面的)
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) return null;
+      const m = buf[i + 1];
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+        return { mime: 'image/jpeg', width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+      }
+      i += 2 + buf.readUInt16BE(i + 2);
+    }
+  }
+  return null;
+}
+
+async function templateSealDataUrl(templatePath = TEMPLATE_PATH) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(templatePath));
+  const f = zip.file(SEAL_MEDIA);
+  if (!f) return null;
+  return 'data:image/png;base64,' + (await f.async('base64'));
+}
+
+// 換掉(或拿掉)範本的用印。沒設定用印的事務所寧可不蓋,也不能蓋成別家的章。
+async function applySeal(zip, xml, seal) {
+  const pict = new RegExp(`<w:pict\\b(?:(?!</w:pict>).)*r:id="${SEAL_REL}"(?:(?!</w:pict>).)*</w:pict>`, 's');
+  const m = /^data:(image\/(?:png|jpeg));base64,(.+)$/s.exec(String(seal || ''));
+  const buf = m ? Buffer.from(m[2], 'base64') : null;
+  const info = buf ? parseSeal(buf) : null;
+  if (!info || !info.width || !info.height) return xml.replace(pict, '');
+
+  let h = SEAL_HEIGHT_PT;
+  let w = (h * info.width) / info.height;
+  if (w > SEAL_MAX_WIDTH_PT) { h = (h * SEAL_MAX_WIDTH_PT) / w; w = SEAL_MAX_WIDTH_PT; }
+  const fmt = (n) => Number(n.toFixed(2));
+  xml = xml.replace(pict, (s) => s.replace(/width:[\d.]+pt;height:[\d.]+pt/, `width:${fmt(w)}pt;height:${fmt(h)}pt`));
+
+  if (info.mime === 'image/png') {
+    zip.file(SEAL_MEDIA, buf);
+    return xml;
+  }
+  // JPEG:副檔名與 Content_Types 要對得上,Word 才開得起來
+  const jpg = SEAL_MEDIA.replace(/\.png$/, '.jpeg');
+  zip.remove(SEAL_MEDIA);
+  zip.file(jpg, buf);
+  const relsPath = 'word/_rels/document.xml.rels';
+  const rels = await zip.file(relsPath).async('string');
+  zip.file(relsPath, rels.replace('media/image1.png', 'media/image1.jpeg'));
+  const ctPath = '[Content_Types].xml';
+  const ct = await zip.file(ctPath).async('string');
+  if (!/Extension="jpeg"/i.test(ct)) {
+    zip.file(ctPath, ct.replace('</Types>', '<Default Extension="jpeg" ContentType="image/jpeg"/></Types>'));
+  }
+  return xml;
+}
+
+async function fillTemplate(values, templatePath = TEMPLATE_PATH, seal = null) {
   const zip = await JSZip.loadAsync(fs.readFileSync(templatePath));
   const entry = zip.file('word/document.xml');
   if (!entry) throw new Error('範本損毀:找不到 word/document.xml');
@@ -94,8 +164,12 @@ async function fillTemplate(values, templatePath = TEMPLATE_PATH) {
   const left = xml.match(/\{\{[^}]*\}\}/g);
   if (left) throw new Error('範本有未知的佔位符:' + [...new Set(left)].join('、'));
 
+  xml = await applySeal(zip, xml, seal);
   zip.file('word/document.xml', xml);
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-module.exports = { PLACEHOLDERS, fillTemplate, TEMPLATE_PATH, toIsoDate, toRocDate, buildLogDescription };
+module.exports = {
+  PLACEHOLDERS, fillTemplate, TEMPLATE_PATH, toIsoDate, toRocDate, buildLogDescription,
+  parseSeal, templateSealDataUrl,
+};

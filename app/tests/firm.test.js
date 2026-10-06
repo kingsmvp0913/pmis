@@ -218,3 +218,55 @@ describe('firms 發文資訊五欄', () => {
     expect(res.body.address == null || res.body.address === '').toBe(true);
   });
 });
+
+// 用印綁事務所:大墩的公文原本蓋成呂罡銘的章(範本寫死)。
+describe('事務所公文用印', () => {
+  let app, token;
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+    ({ app, token } = await makeAppWithToken());
+  });
+  afterEach(() => db._setPoolForTesting(null));
+  const auth = (req) => req.set('Authorization', `Bearer ${token}`);
+  const PNG = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000c8000000640806000000', 'hex'), Buffer.alloc(8)]);
+
+  test('上傳後單筆回圖、清單只回 has_seal;移除後恢復', async () => {
+    const { body: f } = await auth(request(app).post('/api/firms')).send({ name: '大墩規劃設計顧問有限公司' });
+    expect(f.has_seal).toBe(false);
+    const up = await auth(request(app).post(`/api/firms/${f.id}/seal`)).attach('seal', PNG, 'seal.png');
+    expect(up.status).toBe(200);
+    const one = await auth(request(app).get(`/api/firms/${f.id}`));
+    expect(one.body.seal_image).toBe('data:image/png;base64,' + PNG.toString('base64'));
+    const list = await auth(request(app).get('/api/firms'));
+    expect(list.body[0].has_seal).toBe(true);
+    expect(list.body[0].seal_image).toBeUndefined();
+    // 編輯基本欄位(整份取代)不可把用印洗掉
+    await auth(request(app).put(`/api/firms/${f.id}`)).send({ name: '大墩規劃設計顧問有限公司' });
+    expect((await auth(request(app).get(`/api/firms/${f.id}`))).body.has_seal).toBe(true);
+    await auth(request(app).delete(`/api/firms/${f.id}/seal`)).expect(200);
+    expect((await auth(request(app).get(`/api/firms/${f.id}`))).body.seal_image).toBeNull();
+  });
+
+  test('不是 PNG/JPEG 擋下', async () => {
+    const { body: f } = await auth(request(app).post('/api/firms')).send({ name: '甲' });
+    const res = await auth(request(app).post(`/api/firms/${f.id}/seal`)).attach('seal', Buffer.from('hello world, not an image'), 'a.txt');
+    expect(res.status).toBe(400);
+  });
+
+  // 升級前範本寫死的就是呂罡銘的章:升級後他的公文要照舊有印,但只補一次——
+  // 承辦人刪掉之後,重啟不可以又被補回來
+  test('升級時替呂罡銘補上原本範本的章,只補一次', async () => {
+    await db.query("INSERT INTO firms (name) VALUES ('呂罡銘建築師事務所'), ('大墩規劃設計顧問有限公司')");
+    await db.query("DELETE FROM settings WHERE key = 'seal_backfill_done'");
+    await db.migrate();
+    const { rows } = await db.query('SELECT name, seal_image FROM firms ORDER BY name');
+    const by = Object.fromEntries(rows.map((r) => [r.name, r.seal_image]));
+    expect(by['呂罡銘建築師事務所']).toMatch(/^data:image\/png;base64,/);
+    expect(by['大墩規劃設計顧問有限公司']).toBeNull();
+    await db.query("UPDATE firms SET seal_image = NULL WHERE name = '呂罡銘建築師事務所'");
+    await db.migrate();
+    const { rows: again } = await db.query("SELECT seal_image FROM firms WHERE name = '呂罡銘建築師事務所'");
+    expect(again[0].seal_image).toBeNull();
+  });
+});

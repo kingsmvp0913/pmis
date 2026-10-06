@@ -25,11 +25,52 @@
       el('div', { class: 'form-group' }, [el('label', {}, '傳真(公文用)'), faxI]),
       el('div', { class: 'form-group' }, [el('label', {}, '聯絡人(公文用)'), contactI]),
       el('div', { class: 'form-group' }, [el('label', {}, '電子信箱(公文用)'), emailI]),
+      sealGroup(),
       el('div', { class: 'form-actions' }, [
         el('button', { class: 'btn btn-primary', onClick: save }, '儲存'),
         el('button', { class: 'btn btn-outline', onClick: () => { window.location.hash = '/firms'; } }, '取消')
       ])
     ]));
+
+    // 公文用印:產公文時蓋在這家事務所的公文上;沒設定就不蓋(不會蓋成別家的章)。
+    // 上傳/移除立即生效,不必再按「儲存」——圖檔不在表單的整份取代裡。
+    function sealGroup() {
+      if (isNew) {
+        return el('div', { class: 'form-group' }, [el('label', {}, '公文用印'),
+          el('div', { class: 'hint' }, '先儲存事務所,再回到編輯頁上傳用印圖檔。')]);
+      }
+      const img = el('img', { alt: '公文用印', style: 'max-height:90px;display:block;margin-bottom:var(--space-2)' });
+      const none = el('div', { class: 'hint' }, '尚未設定:這家事務所的公文不會蓋印。');
+      const fileI = el('input', { type: 'file', accept: 'image/png,image/jpeg', style: 'display:none' });
+      const removeBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '移除用印');
+      const show = (src) => {
+        img.hidden = !src; none.hidden = !!src; removeBtn.hidden = !src;
+        if (src) img.src = src;
+      };
+      show(firm.seal_image || null);
+      fileI.addEventListener('change', async () => {
+        if (!fileI.files[0]) return;
+        const fd = new FormData();
+        fd.append('seal', fileI.files[0]);
+        try {
+          const r = await Api.upload('firms/' + id + '/seal', fd);
+          show(r.seal_image);
+          showToast('已更新公文用印', 'success');
+        } catch (e) { showToast(e.message, 'error'); }
+        fileI.value = '';
+      });
+      removeBtn.addEventListener('click', async () => {
+        try { await Api.delete('firms/' + id + '/seal'); show(null); showToast('已移除公文用印', 'success'); }
+        catch (e) { showToast(e.message, 'error'); }
+      });
+      return el('div', { class: 'form-group' }, [
+        el('label', {}, '公文用印(PNG/JPG,建議去背)'), img, none, fileI,
+        el('div', {}, [
+          el('button', { class: 'btn btn-outline', type: 'button', onClick: () => fileI.click() }, '上傳用印圖檔'),
+          ' ', removeBtn,
+        ]),
+      ]);
+    }
 
     async function save() {
       const name = nameI.value.trim();

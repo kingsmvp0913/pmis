@@ -337,7 +337,7 @@ function registerRoutes(app) {
         廠商文號: vendorNo,
       };
 
-      const buffer = await fillTemplate(values);
+      const buffer = await fillTemplate(values, undefined, firm.seal_image || null);
       const dir = path.join(OUTPUT_DIR, `proj_${sub.project_id}`);
       fs.mkdirSync(dir, { recursive: true });
       // 檔名帶紀錄 id:submission_history 沒有 (project_id, period) 唯一約束,同一期
@@ -353,7 +353,9 @@ function registerRoutes(app) {
          WHERE id = $7`,
         [relToData(abs), ourNo, ourDate, vendorNo, vendorDate, copies, req.params.id]);
 
-      res.json({ ok: true, path: relToData(abs) });
+      // 沒設用印不擋(承辦人可能要手蓋),但要講——不然印出來才發現少了章
+      const warning = firm.seal_image ? null : `「${supervisorFirmName}」尚未設定公文用印,這份公文沒有蓋印;可到「事務所」上傳用印圖檔`;
+      res.json({ ok: true, path: relToData(abs), warning });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

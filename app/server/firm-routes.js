@@ -10,13 +10,20 @@
  *   POST   /api/firms            建立(name,不可與既有同名)
  *   PUT    /api/firms/:id        更新(name,不可與既有同名)
  *   DELETE /api/firms/:id        刪除;有工程正在使用該名稱時回 409(帶 ?force=1 強制刪除)
+ *   POST   /api/firms/:id/seal   上傳公文用印圖檔(multipart 欄位 seal,PNG/JPEG)
+ *   DELETE /api/firms/:id/seal   移除用印(之後的公文不蓋印)
  */
+const multer = require('multer');
 const { query } = require('./db');
 const { verifyToken } = require('./auth');
+const { parseSeal } = require('./official-doc');
+
+// 用印存進 DB(data URL):圖很小,跟著事務所資料走,不必另管檔案路徑。
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } });
 
 // 公文用的發文資訊。全部選填——既有事務所資料沒有這些值,不能因此擋住儲存。
 const DOC_FIELDS = ['address', 'phone', 'fax', 'contact', 'email'];
-const RETURNING = 'id, name, ' + DOC_FIELDS.join(', ') + ', created_at';
+const RETURNING = 'id, name, ' + DOC_FIELDS.join(', ') + ', created_at, (seal_image IS NOT NULL) AS has_seal';
 
 function docValues(body) {
   return DOC_FIELDS.map((f) => {
@@ -37,7 +44,8 @@ function registerRoutes(app) {
 
   app.get('/api/firms/:id', verifyToken, async (req, res) => {
     try {
-      const { rows } = await query(`SELECT ${RETURNING} FROM firms WHERE id = $1`, [req.params.id]);
+      // 單筆才回圖本身(編輯頁要預覽);清單只回 has_seal,免得每列都帶一張圖
+      const { rows } = await query(`SELECT ${RETURNING}, seal_image FROM firms WHERE id = $1`, [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '事務所不存在' });
       res.json(rows[0]);
     } catch (err) {
@@ -79,6 +87,32 @@ function registerRoutes(app) {
       );
       if (!rows[0]) return res.status(404).json({ error: '事務所不存在' });
       res.json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/firms/:id/seal', verifyToken, upload.single('seal'), async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: '請選擇用印圖檔' });
+      const info = parseSeal(req.file.buffer);
+      if (!info) return res.status(400).json({ error: '用印圖檔只收 PNG 或 JPG' });
+      const dataUrl = `data:${info.mime};base64,${req.file.buffer.toString('base64')}`;
+      const { rows } = await query(
+        'UPDATE firms SET seal_image = $1 WHERE id = $2 RETURNING id', [dataUrl, req.params.id]);
+      if (!rows[0]) return res.status(404).json({ error: '事務所不存在' });
+      res.json({ ok: true, seal_image: dataUrl });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/firms/:id/seal', verifyToken, async (req, res) => {
+    try {
+      const { rows } = await query(
+        'UPDATE firms SET seal_image = NULL WHERE id = $1 RETURNING id', [req.params.id]);
+      if (!rows[0]) return res.status(404).json({ error: '事務所不存在' });
+      res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -333,6 +333,25 @@ describe('POST /api/submissions/:id/official-doc', () => {
     expect(dl.status).toBe(200);
   });
 
+  // 公文要蓋的是監造單位那家事務所的印;沒設定就不蓋,但要提醒,不然印出來才發現少了章
+  test('產公文帶入監造單位的用印;沒設定時照產但回提醒', async () => {
+    const { app, token } = await makeApp();
+    const { submissionId } = await seed(token, app);
+    const 無印 = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(無印.status).toBe(200);
+    expect(無印.body.warning).toMatch(/尚未設定公文用印/);
+
+    const png = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452000000c8000000640806000000', 'hex'), Buffer.alloc(8)]);
+    await db.query("UPDATE firms SET seal_image = $1 WHERE name = '呂罡銘建築師事務所'",
+      ['data:image/png;base64,' + png.toString('base64')]);
+    const 有印 = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
+      .set('Authorization', 'Bearer ' + token).send(BODY);
+    expect(有印.body.warning).toBeNull();
+    const zip = await require('jszip').loadAsync(fs.readFileSync(path.join(DATA_DIR, 有印.body.path)));
+    expect(Buffer.compare(await zip.file('word/media/image1.png').async('nodebuffer'), png)).toBe(0);
+  });
+
   // 樣本三份裡三份的我方日期都等於廠商日期,寫成嚴格大於整套當場不能用
   test('我方日期 = 廠商日期 → 放行', async () => {
     const { app, token } = await makeApp();

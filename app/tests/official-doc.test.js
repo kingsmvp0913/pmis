@@ -7,7 +7,9 @@
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
-const { fillTemplate, PLACEHOLDERS, toIsoDate, toRocDate, buildLogDescription } = require('../server/official-doc');
+const {
+  fillTemplate, PLACEHOLDERS, toIsoDate, toRocDate, buildLogDescription, parseSeal, templateSealDataUrl,
+} = require('../server/official-doc');
 
 const TEMPLATE = path.resolve(__dirname, '../templates/公文_空白範本.docx');
 
@@ -79,6 +81,68 @@ describe('fillTemplate', () => {
     const tmp = path.join(require('os').tmpdir(), 'pmis-tpl-unknown.docx');
     fs.writeFileSync(tmp, await zip.generateAsync({ type: 'nodebuffer' }));
     await expect(fillTemplate(VALUES, tmp)).rejects.toThrow('沒人認得的欄位');
+  });
+});
+
+// 範本原本寫死呂罡銘的簽名章,大墩的公文也蓋成呂罡銘的(2026-10-06 使用者回報)。
+// 用印改由事務所提供:有就換成該家的、沒有就不蓋——絕不能蓋到別家的章。
+describe('用印', () => {
+  // 只需要表頭:parseSeal 讀尺寸、docx 只是原樣夾帶
+  const png = (w, h) => {
+    const b = Buffer.alloc(33);
+    b.writeUInt32BE(0x89504e47, 0); b.writeUInt32BE(0x0d0a1a0a, 4);
+    b.writeUInt32BE(13, 8); b.write('IHDR', 12); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20);
+    return b;
+  };
+  const jpeg = (w, h) => Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,           // APP0(長度 4)
+    0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ]);
+  const dataUrl = (mime, buf) => `data:${mime};base64,${buf.toString('base64')}`;
+  async function parts(buffer) {
+    const zip = await JSZip.loadAsync(buffer);
+    return {
+      zip,
+      xml: await zip.file('word/document.xml').async('string'),
+      rels: await zip.file('word/_rels/document.xml.rels').async('string'),
+      ct: await zip.file('[Content_Types].xml').async('string'),
+    };
+  }
+
+  test('沒給用印就不蓋,不沿用範本裡的章', async () => {
+    const { xml } = await parts(await fillTemplate(VALUES));
+    expect(xml).not.toContain('r:id="rId6"');
+    expect(await textOf(await fillTemplate(VALUES))).toContain('臺中市西區大勇國民小學');
+  });
+
+  test('PNG 用印換掉範本的圖,固定高度、依比例算寬', async () => {
+    const seal = png(200, 100);
+    const { zip, xml } = await parts(await fillTemplate(VALUES, undefined, dataUrl('image/png', seal)));
+    expect(Buffer.compare(await zip.file('word/media/image1.png').async('nodebuffer'), seal)).toBe(0);
+    expect(xml).toContain('width:154.5pt;height:77.25pt');
+  });
+
+  test('JPEG 用印:副檔名、關聯與 Content_Types 一起改,Word 才開得起來', async () => {
+    const seal = jpeg(120, 120);
+    const { zip, xml, rels, ct } = await parts(await fillTemplate(VALUES, undefined, dataUrl('image/jpeg', seal)));
+    expect(zip.file('word/media/image1.png')).toBeNull();
+    expect(Buffer.compare(await zip.file('word/media/image1.jpeg').async('nodebuffer'), seal)).toBe(0);
+    expect(rels).toContain('media/image1.jpeg');
+    expect(ct).toMatch(/Extension="jpeg"/);
+    expect(xml).toContain('width:77.25pt;height:77.25pt');
+  });
+
+  test('parseSeal 只認 PNG/JPEG', () => {
+    expect(parseSeal(png(410, 103))).toEqual({ mime: 'image/png', width: 410, height: 103 });
+    expect(parseSeal(jpeg(300, 150))).toEqual({ mime: 'image/jpeg', width: 300, height: 150 });
+    expect(parseSeal(Buffer.from('not an image at all, just text'))).toBeNull();
+  });
+
+  // 升級補資料用:呂罡銘原本就是蓋這張,升級後不能突然沒印
+  test('templateSealDataUrl 取出範本原本的章', async () => {
+    const url = await templateSealDataUrl();
+    const info = parseSeal(Buffer.from(url.split(',')[1], 'base64'));
+    expect(info).toEqual({ mime: 'image/png', width: 410, height: 103 });
   });
 });
 
