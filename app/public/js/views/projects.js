@@ -839,7 +839,9 @@
       // 是防同一個元件裡有多列 .form-actions(目前都只有一列,但比只認第一個
       // 更保險);把「關閉」插到最前面,跟元件自己的按鈕收在同一排、同一種
       // 右對齊。真的找不到(理論上不會發生)才退回舊的「另外附加一列」。
-      const rows = body.querySelectorAll ? body.querySelectorAll('.form-actions') : [];
+      // 只找卡片的直接子層:施工日誌卡的期初累計(預設收合)裡也有一列 .form-actions,
+      // 找全部的最後一個會把「關閉」塞進看不見的那列。
+      const rows = body.querySelectorAll ? body.querySelectorAll(':scope > .form-actions') : [];
       const actionsRow = rows.length ? rows[rows.length - 1] : null;
       if (actionsRow) {
         actionsRow.insertBefore(closeBtn, actionsRow.firstChild);
