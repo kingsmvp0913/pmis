@@ -995,3 +995,16 @@ test('寫日誌時把廠商填報的實際進度寫到核對列,尺度依完成�
   const i刪 = ops.findIndex((o) => o.type === 'deleteRows');
   expect(i廠商).toBeLessThan(i刪);
 });
+
+test('寫日誌時把廠商填報的累計預定進度寫到實際進度核對列的下一列', async () => {
+  const { app, token, id } = await makeApp();
+  fs.mkdirSync(path.dirname(workbookPath(id)), { recursive: true });
+  fs.copyFileSync(TEMPLATE_PATH, workbookPath(id));
+  feed([day('2026-04-08', [r('1', 3)])].map((d) => ({ ...d, header: { ...d.header, 預定進度: 0.28 } })));
+  await post(app, token, id, 'confirm').expect(200);
+  const ops = fillTemplate.mock.calls[0][2];
+  const i預定 = ops.findIndex((o) => o.type === 'setRange' && o.startAddr === 'J292');
+  expect(i預定).toBeGreaterThanOrEqual(0);
+  expect(ops).toContainEqual({ type: 'setCell', sheet: '每日施工紀錄', addr: 'A292', value: '廠商填報累計預定進度' });
+  expect(i預定).toBeLessThan(ops.findIndex((o) => o.type === 'deleteRows'));
+});

@@ -97,6 +97,7 @@ describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼'
     expect(got).toEqual({
       合計列: 283, 末欄: 'L', 缺標籤列: [283, 284, 285, 286, 287, 288], 預定列空: true, 合計範圍不足: true,
       廠商標籤缺: true, 廠商列雜項: [],
+      廠商預定標籤缺: true,
     });
   });
 
@@ -109,6 +110,7 @@ describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼'
     }));
     expect(got).toEqual({
       合計列: 284, 末欄: 'L', 缺標籤列: [], 預定列空: false, 合計範圍不足: true, 廠商標籤缺: true, 廠商列雜項: [],
+      廠商預定標籤缺: true,
     });
   });
 
@@ -129,6 +131,11 @@ describe('progressBlock — 量出每日施工紀錄的進度區塊缺了什麼'
   test('廠商列裡編範本留下的純數字算式列為雜項', () => {
     const got = progressBlock(build({ ...合計(284), K291: { t: 'n', v: 0.01, f: '3.57-3.56' }, L291: { t: 'n', v: 0.37 } }));
     expect(got.廠商列雜項).toEqual(['K291']);
+  });
+
+  test('合計列 +8 沒有標籤就要補「廠商填報累計預定進度」', () => {
+    expect(progressBlock(build({ ...合計(284) })).廠商預定標籤缺).toBe(true);
+    expect(progressBlock(build({ ...合計(284), A292: { t: 's', v: '廠商填報累計預定進度' } })).廠商預定標籤缺).toBe(false);
   });
 
   test('找不到合計列回 null', () => {

@@ -43,7 +43,7 @@ const { validateDailyLog } = require('./daily-log-validate');
 const { mergeDays } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations, progressBlockOperations,
-  vendorProgressOperations,
+  vendorProgressOperations, vendorPlannedOperations,
 } = require('./daily-log-write');
 const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
 const { nextBatchFolder } = require('./settings');
@@ -241,6 +241,7 @@ async function loadContext(projectId) {
       開工日期: 開工日,
       契約金額: p[0].award_amount == null ? null : Number(p[0].award_amount),
       竣工日期: toISODate(p[0].contract_completion_date),
+      契約工期: p[0].duration_days,
     },
   };
 }
@@ -454,6 +455,25 @@ function 廠商進度參考(rows, records, contract) {
   return out;
 }
 
+/**
+ * 廠商累計預定進度的尺度參考:與報表預定進度公式同一條直線 (第幾天 ÷ 契約工期),日期 → 值。
+ * 沒有契約工期就算不出來,退回「> 1.05 即百分數」(見 vendorProgressDivisor)。
+ * @returns {Object<string, number>}
+ */
+function 預定進度參考(days, 開工日, 工期) {
+  const n = Number(工期);
+  const base = 開工日 ? Date.parse(開工日) : NaN;
+  if (!(n > 0) || !Number.isFinite(base)) return {};
+  const out = {};
+  for (const d of days || []) {
+    const 日 = d.header && d.header.填報日期;
+    if (!日) continue;
+    const off = Math.round((Date.parse(日) - base) / 86400000);
+    out[日] = Math.min(1, Math.max(0, (off + 1) / n));
+  }
+  return out;
+}
+
 async function writeDays({ projectId, days, rows, ctx, files, source, userId }) {
   const dest = ensureWorkbook(projectId);
   const block = progressBlock(dest);
@@ -462,10 +482,11 @@ async function writeDays({ projectId, days, rows, ctx, files, source, userId }) 
   try {
     await fillTemplate(dest, tmp, applyProtection(dest, [
       // 舊常駐報表缺進度標籤與預定進度公式(8/11 以前的範本),監造報表的進度整份空白。
-      // 廠商填報的實際進度另寫在核對列(不覆蓋公式算的實際進度)。
+      // 廠商填報的實際進度、累計預定進度另寫在核對列(不覆蓋公式算的實際/預定進度)。
       // 列號都是現在量的,必須排在下面會刪項目列的指令之前。
       ...progressBlockOperations(block),
       ...vendorProgressOperations(days, ctx.開工日, block, 參考),
+      ...vendorPlannedOperations(days, ctx.開工日, block, 預定進度參考(days, ctx.開工日, ctx.project.契約工期)),
       // 先把項目列數對齊,再以資料庫契約完整覆寫價目表。只擴列會把最後一個既有項目
       // 一併複製到新增列；例如舊報表 36 列、契約 44 項時,第 36 項會重複八次。
       // SP3 必須自己修復常駐舊報表,因為承辦人日常上傳日誌時不會重跑 SP2。

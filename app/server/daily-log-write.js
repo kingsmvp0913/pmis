@@ -328,13 +328,33 @@ const 廠商進度標籤 = '廠商填報實際進度';
  */
 function vendorProgressOperations(days, 開工日, block, refByDate) {
   if (!block) return [];
+  return 核對列Operations(days, 開工日, '實際進度', block.合計列 + 7, 廠商進度標籤,
+    block.廠商標籤缺, block.廠商列雜項, refByDate);
+}
+
+const 廠商預定標籤 = '廠商填報累計預定進度';
+
+/**
+ * 廠商日誌的累計預定進度 → 合計列 +8,緊接在廠商實際進度核對列下面,同樣不覆蓋
+ * 報表公式算的預定進度(合計列 +6 的直線),寫法與 vendorProgressOperations 相同。
+ * schema 的 header.預定進度 各讀取器取的是「累計預定進度」那一格。
+ *
+ * @param {Object<string, number>} refByDate 日期 → 依契約工期推得的直線預定進度(比例),
+ *   逐日判斷尺度用;開工頭幾天累計預定只有零點幾 %,只看大小會誤判。
+ */
+function vendorPlannedOperations(days, 開工日, block, refByDate) {
+  if (!block) return [];
+  return 核對列Operations(days, 開工日, '預定進度', block.合計列 + 8, 廠商預定標籤,
+    block.廠商預定標籤缺, [], refByDate);
+}
+
+function 核對列Operations(days, 開工日, 欄, row, label, 標籤缺, 雜項, refByDate) {
   const base = dayNum(開工日);
   if (base == null) return [];
-  const row = block.合計列 + 7;
   const byOff = new Map();
   for (const d of days || []) {
     const h = d.header || {};
-    const v = h.實際進度 == null || h.實際進度 === '' ? null : Number(h.實際進度);
+    const v = h[欄] == null || h[欄] === '' ? null : Number(h[欄]);
     if (!h.填報日期 || v == null || !Number.isFinite(v)) continue;
     const off = dayNum(h.填報日期) - base;
     if (off < 0 || FIRST_DATE_COL + off > LAST_DATE_COL) continue;
@@ -342,8 +362,8 @@ function vendorProgressOperations(days, 開工日, block, refByDate) {
     byOff.set(off, Number((v / divisor).toFixed(8)));
   }
   if (!byOff.size) return [];
-  const ops = (block.廠商列雜項 || []).map((addr) => ({ type: 'setCell', sheet: SHEET, addr, value: null }));
-  if (block.廠商標籤缺) ops.push({ type: 'setCell', sheet: SHEET, addr: `A${row}`, value: 廠商進度標籤 });
+  const ops = (雜項 || []).map((addr) => ({ type: 'setCell', sheet: SHEET, addr, value: null }));
+  if (標籤缺) ops.push({ type: 'setCell', sheet: SHEET, addr: `A${row}`, value: label });
   const offs = [...byOff.keys()].sort((a, b) => a - b);
   let 起 = offs[0];
   let 段 = [byOff.get(起)];
@@ -357,6 +377,7 @@ function vendorProgressOperations(days, 開工日, block, refByDate) {
 
 module.exports = {
   colName, daysToOperations, weatherToOperations, diffDays,
-  legacyFormulaOperations, progressBlockOperations, vendorProgressOperations, vendorProgressDivisor,
+  legacyFormulaOperations, progressBlockOperations, vendorProgressOperations, vendorPlannedOperations,
+  vendorProgressDivisor,
   SHEET, FIRST_DATE_COL, FIRST_ITEM_ROW,
 };

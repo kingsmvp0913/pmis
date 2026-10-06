@@ -354,3 +354,35 @@ describe('vendorProgressOperations — 廠商填報的實際進度寫到核對�
     expect(vendorProgressDivisor(0.42, null)).toBe(1);
   });
 });
+
+// Summer:除了實際進度,廠商日誌的累計預定進度也要寫出來核對。報表的預定進度是依工期的
+// 直線公式,不覆蓋;寫在實際進度核對列的下一列(合計列 +8)。
+describe('vendorPlannedOperations — 廠商填報的累計預定進度寫到核對列', () => {
+  const { vendorPlannedOperations } = require('../server/daily-log-write');
+  const block = { 合計列: 284, 末欄: 'WF', 廠商標籤缺: false, 廠商列雜項: ['O291'], 廠商預定標籤缺: true };
+  const d = (填報日期, 預定進度, 實際進度 = null) => ({ header: { 填報日期, 預定進度, 實際進度 }, dailyRows: [] });
+
+  test('取 header.預定進度 寫進合計列 +8,不碰實際進度那列的雜項', () => {
+    const ops = vendorPlannedOperations(
+      [d('2026-04-08', 0.28, 5), d('2026-04-09', 0.56, 6), d('2026-04-11', 1.12)],
+      '2026-04-08', block, { '2026-04-08': 0.0028, '2026-04-09': 0.0056, '2026-04-11': 0.0112 },
+    );
+    expect(ops).toEqual([
+      { type: 'setCell', sheet: '每日施工紀錄', addr: 'A292', value: '廠商填報累計預定進度' },
+      { type: 'setRange', sheet: '每日施工紀錄', startAddr: 'J292', values: [[0.0028, 0.0056]] },
+      { type: 'setRange', sheet: '每日施工紀錄', startAddr: 'M292', values: [[0.0112]] },
+    ]);
+  });
+
+  // 開工頭幾天累計預定只有 0.28%:讀取器回 0.28(百分數)時,只看大小會當成 28%
+  test('尺度以工期直線推得的預定進度為參考', () => {
+    const ops = vendorPlannedOperations([d('2026-04-08', 0.28), d('2026-04-09', 0.0056)], '2026-04-08',
+      { ...block, 廠商預定標籤缺: false }, { '2026-04-08': 0.0028, '2026-04-09': 0.0056 });
+    expect(ops).toEqual([{ type: 'setRange', sheet: '每日施工紀錄', startAddr: 'J292', values: [[0.0028, 0.0056]] }]);
+  });
+
+  test('量不到進度區塊或整批都沒填就不出指令', () => {
+    expect(vendorPlannedOperations([d('2026-04-08', 0.28)], '2026-04-08', null, {})).toEqual([]);
+    expect(vendorPlannedOperations([d('2026-04-08', null, 5)], '2026-04-08', block, {})).toEqual([]);
+  });
+});
