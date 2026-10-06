@@ -477,7 +477,24 @@ function parsePdfItemRows(rows) {
   const amountMid = cumulativeAmountHeader ? cumulativeAmountHeader.x
     : (combinedAmountHeader && Number.isFinite(combinedAmountHeader.w)
       ? combinedAmountHeader.x + combinedAmountHeader.w / 2 : 472 + dx);
-  const columns = {
+  // 115.09 石龜 PDF 的表頭是一個字一個 item(本/日/完/成/金/額),上面整段比對全落空;
+  // 退回寫死座標會把靠右對齊的 5 位數本日金額切進累計欄。改把表頭列依 x 串起來
+  // 找標籤,取標籤第一個字的 x 當欄界。
+  const headerChars = header.items.slice().sort((a, b) => a.x - b.x)
+    .flatMap((item) => [...squash(item.s)].map((c) => ({ c, x: item.x })));
+  const headerText = headerChars.map((ch) => ch.c).join('');
+  const spelled = ['本日完成數量', '累計完成數量', '本日完成金額', '累計完成金額'].map((label) => {
+    const i = headerText.indexOf(label);
+    return i < 0 ? null : headerChars[i].x;
+  });
+  const useSpelled = !quantityHeader && !combinedAmountHeader && !todayAmountHeader
+    && spelled.every((x) => x != null);
+  const columns = useSpelled ? {
+    本日數量起: spelled[0],
+    累計數量起: spelled[1],
+    本日金額起: spelled[2],
+    累計金額起: spelled[3],
+  } : {
     本日數量起: quantityHeader ? quantityHeader.x : 367 + dx,
     累計數量起: quantityMid,
     本日金額起: amountFrom,
