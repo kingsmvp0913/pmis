@@ -807,7 +807,7 @@
 
     // 開對應彈窗。四種都在彈窗內走完整流程,故一律 wide;完成後重載列表
     // 讓狀態標記更新(純關閉不重載——什麼都沒做就不必打 API)。
-    function openFlow(p, key) {
+    function openFlow(p, key, opts = {}) {
       if (key === 'submit') { generate(p, null); return; }
       const title = { kickoff: '開工報告表', items: '契約詳細價目表', logs: '施工日誌' }[key];
       let changed = false;
@@ -825,7 +825,7 @@
       };
       const body = key === 'kickoff'
         ? KickoffReport.card(p.id, { onArchived: done })
-        : (key === 'items' ? ContractItems.card(p.id, { onWritten: done }) : DailyLogs.card(p.id));
+        : (key === 'items' ? ContractItems.card(p.id, { onWritten: done }) : DailyLogs.card(p.id, { files: opts.files }));
       // 重載邏輯放 onClose、不是「關閉」鈕的 onClick:modalDialog 有三條關閉路徑
       // (Escape、點 overlay、呼叫 close()),塞在按鈕上只堵得住第三條——比照
       // submissionDialog 已經在用的模式,把重載收斂到 onClose 統一處理。
@@ -1131,12 +1131,19 @@
         r.files.forEach((file) => fd.append('daily_log', file));
       try {
         await Api.upload('projects/' + p.id + '/submissions', fd);
-        // 這裡只登錄繳交。報表在工程頁的「施工日誌」區塊產,那條路徑會先跑 42 條
-        // 驗證——訊息要講清楚去哪產,否則承辦人會以為按完這裡報表就有了。
-        showToast('已登錄繳交。要產監造報表請至工程頁的「施工日誌」區塊', 'success');
-        if (cell) await renderHistory(p, cell);
-        else load();
-      } catch (e) { showToast(e.message, 'error'); }
+      } catch (e) { showToast(e.message, 'error'); return; }
+      // 登錄繳交只存檔,日誌要經施工日誌那條路(42 條驗證/掃描件逐格核對)才寫得進去;
+      // 承辦人以為繳了就有資料,產公文時才被擋。所以直接接著開施工日誌、帶入同一批檔,
+      // 寫入仍要他核對後自己按。缺價目表或開工日時那條路必定被擋,只登錄不接續。
+      const 可寫日誌 = (p.contract_items || 0) > 0 && !!p.start_date;
+      if (cell) await renderHistory(p, cell);
+      if (可寫日誌) {
+        showToast('已登錄繳交,接著處理施工日誌;核對後按「確認並寫入」才會寫進監造報表', 'success');
+        openFlow(p, 'logs', { files: r.files });
+      } else {
+        showToast('已登錄繳交。這件工程還缺價目表或開工日期,施工日誌尚未寫入', 'warn');
+        if (!cell) load();
+      }
     }
 
     async function removeRec(p, r, cell) {

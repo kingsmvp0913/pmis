@@ -373,6 +373,8 @@ describe('POST /api/submissions/:id/official-doc', () => {
     const res = await request(app).post(`/api/submissions/${submissionId}/official-doc`)
       .set('Authorization', 'Bearer ' + token).send(BODY);
     expect(res.status).toBe(400);
+    // 登錄繳交過、只是沒寫入時,訊息要指出去哪裡補,不能只說「沒有日誌」
+    expect(res.body.error).toMatch(/還沒寫入.*施工日誌/);
   });
 
   // 文號填錯要能重來,一期一份公文,舊的沒有保留價值

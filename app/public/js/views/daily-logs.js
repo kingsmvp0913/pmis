@@ -2,7 +2,7 @@
  * daily-logs.js — 施工日誌區塊(SP3)
  *
  * 獨立成一個檔案的理由同 contract-items.js:projects.js 已 46KB。
- * 對外只露出 DailyLogs.card(projectId)。
+ * 對外只露出 DailyLogs.card(projectId, opts?)。
  *
  * ## 兩條路:讀取器(文字層)與掃描件(OCR 預填 + 逐格確認)
  *
@@ -93,7 +93,11 @@ const DailyLogs = (() => {
     return el('div', { style: 'margin-top:var(--space-4)' }, [toggle, box]);
   }
 
-  function card(projectId) {
+  /**
+   * @param {{files?: File[]}} [opts] files:登錄繳交剛上傳的那批日誌,帶入後自動開始處理,
+   *   承辦人不必再選一次檔(核對與「確認並寫入」仍要他自己按)。
+   */
+  function card(projectId, opts = {}) {
     let files = [];
     let scanned = null;          // scan 回來的草稿(承辦人編輯的對象)
     let findingGroups = [];
@@ -578,6 +582,13 @@ const DailyLogs = (() => {
         downloadBtn.disabled = false;
       }
     });
+
+    if (opts.files && opts.files.length) {
+      const dt = new DataTransfer();
+      opts.files.forEach((f) => dt.items.add(f));
+      fileI.files = dt.files;
+      parseBtn.click();
+    }
 
     return el('div', { class: 'card' }, [
       el('div', { class: 'card-title' }, '施工日誌'),

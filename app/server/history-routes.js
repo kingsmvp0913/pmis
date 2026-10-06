@@ -298,7 +298,10 @@ function registerRoutes(app) {
          WHERE project_id = $1 AND log_date >= $2 AND log_date < $3`,
         [sub.project_id, periodStart, periodEnd]);
       if (!logRows[0] || logRows[0].n === 0) {
-        return res.status(400).json({ error: `${sub.period} 這期沒有任何施工日誌,不產公文` });
+        // 「登錄繳交」只存檔、不寫 daily_records;只說「沒有日誌」承辦人會以為系統弄丟了他繳的檔。
+        return res.status(400).json({
+          error: `${sub.period} 這期的施工日誌還沒寫入,請先到工程的「施工日誌」處理並確認寫入,再產公文`,
+        });
       }
 
       // 專案層有值用專案層,空則吊 settings 預設(同 project-basics-routes.js 的既有慣例)。
