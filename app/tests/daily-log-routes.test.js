@@ -173,6 +173,39 @@ describe('辨識問題下載包', () => {
     expect(csv).toContain('"硬錯","E6","2026-07-15","三","單價「讀錯」"');
   });
 
+  // 使用者的系統在另一台電腦,前期累計對不上(F1/B2/F4)時開發端看不到他庫裡寫了什麼,
+  // 只能猜(公誠 10 月:前期 2 而日誌只有 1,是期初累計與已寫入的 7 月重複?還是別的?)。
+  // 下載包順手帶上**這一案**算前期用的三份資料,查證就不必再請他跑 SQL 或傳整個資料庫。
+  test('ZIP 附上這一案的期初累計、已寫入日誌與契約項目', async () => {
+    const { app, token, id } = await makeApp();
+    await db.query('INSERT INTO daily_openings (project_id, item_no, qty) VALUES ($1, $2, $3)', [id, '1', 3]);
+    await db.query(
+      `INSERT INTO daily_records (project_id, log_date, item_no, qty, source)
+       VALUES ($1, '2026-07-16', '1', 0.05, 'parser')`, [id]);
+    // 別案的資料不得混進來
+    const { rows: other } = await db.query(
+      `INSERT INTO projects (name, start_date) VALUES ('別的工程', '2026-04-08') RETURNING id`);
+    await db.query(
+      `INSERT INTO daily_records (project_id, log_date, item_no, qty, source)
+       VALUES ($1, '2026-07-16', '9', 7, 'parser')`, [other[0].id]);
+
+    const res = await asBinary(request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify(problems))
+      .attach('daily_log', Buffer.from('f'), '日誌.pdf'));
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(res.body);
+    const top = `${今天()}-0001/`;
+    const read = (n) => zip.file(`${top}系統資料/${n}`).async('string');
+
+    expect(await read('期初累計.csv')).toContain('"1","3"');
+    const recs = await read('已寫入日誌.csv');
+    expect(recs).toContain('"2026-07-16","1","0.05","parser"');
+    expect(recs).not.toContain('"9"');
+    expect(await read('契約項目.csv')).toContain('"1","項目1","式","10","100"');
+  });
+
   test('同一天第二次下載,流水號往上加', async () => {
     const { app, token, id } = await makeApp();
     const dl = async () => {

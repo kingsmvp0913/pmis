@@ -145,8 +145,37 @@ async function batchZip() {
   return { zip, top: zip.folder(await nextBatchFolder()) };
 }
 
-async function recognitionIssuesZip(files, problems) {
+const numText = (v) => (v == null ? '' : String(Number(v)));
+const csvText = (header, rows) => `﻿${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`;
+
+/**
+ * 這一案算「前期累計」用的三份資料(只限這一案)。
+ * 使用者的系統在另一台電腦,F1/B2/F4 報前期對不上時開發端看不到他庫裡寫了什麼;
+ * 期初累計 + 已寫入的逐日紀錄 + 契約項次,就是 priorCum() 的全部輸入。
+ */
+async function systemDataFiles(projectId) {
+  const { rows: openings } = await query(
+    'SELECT item_no, qty FROM daily_openings WHERE project_id = $1 ORDER BY item_no', [projectId]);
+  const { rows: records } = await query(
+    `SELECT log_date, item_no, qty, source FROM daily_records
+      WHERE project_id = $1 ORDER BY log_date, id`, [projectId]);
+  const { rows: items } = await query(
+    `SELECT item_no, name, unit, quantity, unit_price FROM contract_items
+      WHERE project_id = $1 ORDER BY seq`, [projectId]);
+  return {
+    '期初累計.csv': csvText(['項次', '期初累計數量'],
+      openings.map((o) => [o.item_no, numText(o.qty)])),
+    '已寫入日誌.csv': csvText(['日期', '項次', '本日完成數量', '來源'],
+      records.map((r) => [toISODate(r.log_date), r.item_no, numText(r.qty), r.source])),
+    '契約項目.csv': csvText(['項次', '項目', '單位', '數量', '單價'],
+      items.map((i) => [i.item_no, i.name, i.unit, numText(i.quantity), numText(i.unit_price)])),
+  };
+}
+
+async function recognitionIssuesZip(files, problems, systemData = {}) {
   const { zip, top } = await batchZip();
+  const sys = top.folder('系統資料');
+  for (const [name, text] of Object.entries(systemData)) sys.file(name, text);
   const header = ['級別', '代碼', '日期', '項次', '說明'];
   const rows = problems.map((p) => [p.級別, p.code, p.日期, p.項次, p.訊息]);
   top.file('辨識問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
@@ -698,7 +727,7 @@ function registerRoutes(app) {
           return res.status(400).json({ error: '請至少選擇一項辨識問題' });
         }
 
-        const buffer = await recognitionIssuesZip(files, problems);
+        const buffer = await recognitionIssuesZip(files, problems, await systemDataFiles(req.params.id));
         res.attachment('辨識問題.zip');
         res.send(buffer);
       } catch (err) {
