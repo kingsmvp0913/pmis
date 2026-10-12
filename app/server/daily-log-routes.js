@@ -627,7 +627,15 @@ function registerRoutes(app) {
       const ctx = await loadContext(req.params.id);
       if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
       const have = new Map((await loadOpenings(req.params.id)).map((o) => [String(o.項次), o.數量]));
+      // 前期 = 期初 + 已寫入日誌。承辦人看不到後者就會把「上個月底的累計」填進期初,
+      // 已寫入的月份被算兩次(公誠:期初填 9/30 累計,庫裡又有 7 月 → 10/01 報 F1)。
+      const { rows: span } = await query(
+        `SELECT min(log_date) AS first, max(log_date) AS last, count(DISTINCT log_date) AS days
+           FROM daily_records WHERE project_id = $1`, [req.params.id]);
       res.json({
+        已寫入: span[0] && span[0].first
+          ? { 起: toISODate(span[0].first), 迄: toISODate(span[0].last), 天數: Number(span[0].days) }
+          : null,
         items: ctx.contract.map((c) => ({
           項次: String(c.項次), 項目: c.項目, 單位: c.單位, 契約數量: c.數量,
           期初累計: have.has(String(c.項次)) ? have.get(String(c.項次)) : null,

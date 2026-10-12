@@ -968,6 +968,20 @@ describe('期初累計', () => {
     expect(res.body.items[0]).toMatchObject({ 項次: '1', 項目: '項目1', 契約數量: 10, 期初累計: null });
   });
 
+  // 公誠實案:庫裡已有 7 月日誌,承辦人又把 9/30 的累計填進期初 → 前期 = 期初 + 7 月,
+  // 7 月被算兩次,10/01 報 F1「從 2 掉到 1」。畫面要告訴他已寫入到哪天,期初只能填那之前的量。
+  test('回傳已寫入日誌的日期區間,沒有就是 null', async () => {
+    const { app, token, id } = await makeApp();
+    expect((await openings(app, token, id).expect(200)).body.已寫入).toBeNull();
+    for (const d of ['2026-07-31', '2026-07-16']) {
+      await db.query(
+        `INSERT INTO daily_records (project_id, log_date, item_no, qty, source)
+         VALUES ($1, $2, '1', 1, 'parser')`, [id, d]);
+    }
+    const res = await openings(app, token, id).expect(200);
+    expect(res.body.已寫入).toEqual({ 起: '2026-07-16', 迄: '2026-07-31', 天數: 2 });
+  });
+
   test('存了讀得回來', async () => {
     const { app, token, id } = await makeApp();
     await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
