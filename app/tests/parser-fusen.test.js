@@ -120,6 +120,60 @@ test('公誠 PDF 的分隔空白不會截斷日期、工程名與廠商名', () 
   });
 });
 
+// 2026-10 公誠國小改交第三種版面:明細多了契約單價與本日完成金額兩欄,
+// 日期標籤改印「填表日期」、廠商標籤只剩「承攬廠商」。舊判定認不得,整份 0 天
+// ——沒有任何錯誤訊息,使用者只看到「沒有日誌」。
+describe('fusen 公誠含單價版面(2026-10)', () => {
+  let all;
+  beforeAll(async () => {
+    all = await mod.parseAll(path.join(__dirname, 'fixtures', 'fusen-gongcheng-priced.pdf'), ctx);
+  });
+
+  test('封面不算日誌頁,一天兩頁合成一天:10/1~10/12 共 12 天', () => {
+    expect(all.map((d) => d.header.填報日期)).toEqual(
+      Array.from({ length: 12 }, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`));
+  });
+
+  // 表頭同時印本日與累計進度;schema 要的是累計(各家一致,見 xianghe 869d29d)。
+  // 開工日期改印民國年,不轉就會讓 D3(日期落在工期外)整份誤判。
+  test('表頭:民國開工日期轉西元、進度取累計那一列', () => {
+    expect(all[0].header).toMatchObject({
+      工程名稱: '114年仁愛樓老舊廁所整修工程',
+      承包廠商: '富森土木包工業',
+      星期: '星期四', 天氣_上午: '晴', 天氣_下午: '晴',
+      開工日期: '2026-07-16',
+      預定進度: 17.6,
+      實際進度: 26.93,
+    });
+  });
+
+  // 單價與本日金額是 B3/B4/C2 的依據;讀不到時那三條規則只會靜靜跳過
+  test('每天都列滿 36 列,單價與本日金額落在正確欄位', () => {
+    for (const d of all) expect(d.dailyRows).toHaveLength(36);
+    const d1 = all[0].dailyRows;
+    expect(d1.find((r) => /^廁所安裝衛生設備/.test(r.工程項目))).toMatchObject({
+      單位: '式', 契約數量: 1, 契約單價: 400800, 本日完成數量: 0.05, 本日完成金額: 20040, 累計完成數量: 0.53,
+    });
+    expect(d1.find((r) => /^砌1\/2B磚牆/.test(r.工程項目))).toMatchObject({
+      單位: 'M2', 契約數量: 36, 契約單價: 1700, 本日完成數量: null, 本日完成金額: null, 累計完成數量: null,
+    });
+    // 續頁沒有重印表頭,欄界要沿用同一天日誌頁的版面
+    expect(d1.find((r) => /^職業安全衛生管理費/.test(r.工程項目))).toMatchObject({
+      契約單價: 37564, 本日完成數量: 0.1, 本日完成金額: 3756, 累計完成數量: 0.26,
+    });
+  });
+
+  // 明細下方緊接「發包工程費合計」與「本日完成進度=…」兩列,沒有項次;
+  // 不擋掉就會被當名稱片段黏到最後一個費用項(陸)上,而且不會讓任何欄位變 null
+  test('多行名稱完整、合計列不黏進最後一個費用項', () => {
+    const d1 = all[0].dailyRows;
+    expect(d1.filter((r) => r.單位 != null).map((r) => r.工程項目)).toContain(
+      '既有牆面、地坪、磁磚、衛生設備、給排水設施、搗擺及天花板等拆除(含切割)及運棄(含合法證明);環境保護與清潔');
+    expect(d1.map((r) => r.工程項目)).toContain('牆面與平頂塗刷水泥漆(含清潔,批土整平,一底漆二度面漆)');
+    expect(d1[d1.length - 1].工程項目).toBe('營業稅((壹~伍)*5%)');
+  });
+});
+
 describe('fusen parseAll', () => {
   let all;
   beforeAll(async () => { all = await mod.parseAll(FIXTURE, ctx); });

@@ -11,6 +11,13 @@
  * **此格式的明細只有 6 欄**:沒有契約單價,也沒有本日完成金額。兩者一律 null
  * 不硬湊——SP3 會因此把 B3/B4/C2 列入 skipped 並在報告中說明,而不是靜默當作通過。
  *
+ * ── 公誠國小含單價版面(2026-10 起,`1001-1012公誠_施工日誌(併封面).pdf`)──
+ * 明細 8 欄:項次 <65 / 名稱 ~280 / 單位 ~315 / 契約數量 ~355 / **契約單價** ~420 /
+ * 本日完成數量 ~440 / **本日完成金額** ~495 / 累計完成數量 ~540 / 備註。
+ * 標籤也改了:「填表日期」(舊「填報日期」)、「承攬廠商」(舊「承攬廠商名稱」),
+ * 開工/完工日期改印民國年;表頭同時印本日與累計進度(取累計)。
+ * 一天兩頁,續頁不重印表頭 → 欄界沿用同一天日誌頁的判定。第 1 頁封面不是日誌頁。
+ *
  * ── 名稱跨行的方向不只一種 ──
  * 項目名稱過長時會拆列,而且**上一列與下一列都可能是它的片段**(實測項次 1:
  * 「乙種施工圍籬、警示帶、安全警示燈」在上、項次列本身的名稱欄是空的、
@@ -81,7 +88,7 @@ function nameSegments(items, x) {
   return [...byY.entries()].map(([y, s]) => ({ y, s }));
 }
 
-function collectRows(rows) {
+function collectRows(rows, opts = {}) {
   const anchors = [];   // 項次列
   const frags = [];     // 待歸屬的名稱片段
   // 公誠國小版型的左半表格整體右移約 25pt；依表頭位置選欄界，避免影響既有四湖格式。
@@ -94,8 +101,13 @@ function collectRows(rows) {
   const leftItemCount = rows.flatMap((r) => r.items).filter((i) => (
     i.x >= 40 && i.x < 60 && ITEM_NO_RE.test(String(i.s || '').trim())
   )).length;
+  // 2026-10 公誠國小的含單價版面:明細 8 欄(多了契約單價與本日完成金額)。
+  // 續頁沒有重印表頭,由 parseAll 依同一天的日誌頁傳 opts.priced 進來。
+  const priced = opts.priced || 有單價欄(rows);
   let x = X;
-  if (itemHeader && itemHeader.x < 50) {
+  if (priced) {
+    x = { 項次: 65, 名稱: 280, 單位: 315, 契約數量: 355, 單價: 420, 本日: 440, 金額: 495, 累計: 540 };
+  } else if (itemHeader && itemHeader.x < 50) {
     x = { 項次: 60, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
   } else if (itemHeader && itemHeader.x >= 70 && itemHeader.x < 90) {
     x = { 項次: 90, 名稱: 235, 單位: 270, 契約數量: 320, 本日: 395, 累計: 490 };
@@ -128,7 +140,9 @@ function collectRows(rows) {
   let 資料區下界 = -Infinity;
   for (const r of rows) {
     const t = r.items.map((i) => i.s).join('');
-    if (/二、工地材料管理概況|材料名稱/.test(t)) 資料區下界 = Math.max(資料區下界, r.y);
+    // 含單價版面的明細下方緊接「發包工程費合計」與「本日完成進度=…」,沒有項次,
+    // 不擋掉會被當名稱片段黏到最後一個費用項(陸)上
+    if (/二、工地材料管理概況|材料名稱|發包工程費合計/.test(t)) 資料區下界 = Math.max(資料區下界, r.y);
     if (r.y <= 最上項次) continue;
     const 是表頭 = /項次/.test(t) && /施工項目/.test(t);
     if (是表頭 || 頁首標籤.test(t)) 資料區上界 = Math.min(資料區上界, r.y);
@@ -149,11 +163,18 @@ function collectRows(rows) {
       y: row.y,
       項次: String(項次item.s).trim(),
       單位: text(between(row, x.名稱, x.單位)),
-      契約單價: null,        // 此格式不提供
       契約數量: first(between(row, x.單位, x.契約數量)),
-      本日完成數量: first(between(row, x.契約數量, x.本日)),
-      本日完成金額: null,    // 此格式不提供
-      累計完成數量: first(between(row, x.本日, x.累計)),
+      ...(priced ? {
+        契約單價: first(between(row, x.契約數量, x.單價)),
+        本日完成數量: first(between(row, x.單價, x.本日)),
+        本日完成金額: first(between(row, x.本日, x.金額)),
+        累計完成數量: first(between(row, x.金額, x.累計)),
+      } : {
+        契約單價: null,        // 舊版面不提供
+        本日完成數量: first(between(row, x.契約數量, x.本日)),
+        本日完成金額: null,    // 舊版面不提供
+        累計完成數量: first(between(row, x.本日, x.累計)),
+      }),
       frags: [],
     });
   }
@@ -222,14 +243,22 @@ function collectRows(rows) {
   }));
 }
 
-/** 西元「2026年4月23日」或「2025/4/23」→ ISO。此格式用西元,不需民國換算。 */
+/**
+ * 西元「2026年4月23日」或「2025/4/23」→ ISO。
+ * 含單價版面的開工/完工日期改印民國「115年7月16日」(填表日期仍是西元),故兩者都收。
+ */
 function toISO(s) {
   const t = String(s == null ? '' : s).replace(/[\s　]/g, '');
   let m = /(\d{4})年(\d{1,2})月(\d{1,2})/.exec(t);
   if (!m) m = /(\d{4})\/(\d{1,2})\/(\d{1,2})/.exec(t);
+  let y = m && Number(m[1]);
+  if (!m) {
+    m = /(\d{2,3})年(\d{1,2})月(\d{1,2})/.exec(t);
+    if (m) y = Number(m[1]) + 1911;
+  }
   if (!m) return null;
   const p = (n) => String(n).padStart(2, '0');
-  return `${m[1]}-${p(Number(m[2]))}-${p(Number(m[3]))}`;
+  return `${y}-${p(Number(m[2]))}-${p(Number(m[3]))}`;
 }
 
 function parseHeader(rows) {
@@ -238,20 +267,22 @@ function parseHeader(rows) {
   const 找 = (re) => { const m = re.exec(all); return m ? m[1] : null; };
   const 去空白 = (v) => (v == null ? null : String(v).replace(/[\s　]/g, ''));
   const 天氣列 = flat.find((l) => /本日天氣/.test(l)) || '';
-  const wm = /上午[:：]?\s*(\S+).*?下午[:：]?\s*(\S+?)(?:\s+填報日期|$)/
+  const wm = /上午[:：]?\s*(\S+).*?下午[:：]?\s*(\S+?)(?:\s+填[報表]日期|$)/
     .exec(天氣列.replace(/\s{2,}/g, ' ')) || [];
 
   return {
-    工程名稱: 去空白(找(/工程名稱\s+(.+?)\s+承攬廠商名稱/)),
-    填報日期: toISO(找(/填報日期[:：]?\s*(.+?)(?:\s+星期[一二三四五六日天]|$)/)),
+    // 含單價版面:「填表日期」「承攬廠商」(舊版是「填報日期」「承攬廠商名稱」)
+    工程名稱: 去空白(找(/工程名稱\s+(.+?)\s+承攬廠商(?:名稱)?/)),
+    填報日期: toISO(找(/填[報表]日期[:：]?\s*(.+?)(?:\s+星期[一二三四五六日天]|$)/)),
     星期: 找(/(星期[一二三四五六日天])/),
     天氣_上午: text(wm[1]),
     天氣_下午: text(wm[2]),
-    預定進度: numOf(找(/預定進度\(%\)\s+([\d.]+)%?/)),
-    實際進度: numOf(找(/實際進度\(%\)\s+([\d.]+)%?/)),
+    // schema 要累計進度;含單價版面同時印本日與累計兩列,先取累計那列
+    預定進度: numOf(找(/累計預定進度\(%\)\s+([\d.]+)/) || 找(/預定進度\(%\)\s+([\d.]+)%?/)),
+    實際進度: numOf(找(/累計實際進度\(%\)\s+([\d.]+)/) || 找(/實際進度\(%\)\s+([\d.]+)%?/)),
     出工總人數: null,
     本日累計金額: null,
-    承包廠商: 去空白(找(/承攬廠商名稱\s+([^\n]+)/)),
+    承包廠商: 去空白(找(/承攬廠商(?:名稱)?\s+([^\n]+)/)),
     開工日期: toISO(找(/開工日期\s+(.+?)(?:\s+完工日期|$)/)),
   };
 }
@@ -259,7 +290,8 @@ function parseHeader(rows) {
 // 日誌頁的判定:含「表報編號」與「填報日期」兩個標籤。前 6 頁的基本資料編與
 // 附表沒有這兩者,靠它排除,不必寫死頁碼。
 const isLogPage = (rows) => rows.some((r) => /表報編號/.test(r.items.map((i) => i.s).join('')))
-  && rows.some((r) => /填報日期/.test(r.items.map((i) => i.s).join('')));
+  && rows.some((r) => /填[報表]日期/.test(r.items.map((i) => i.s).join('')));
+const 有單價欄 = (rows) => rows.some((r) => r.items.some((i) => /契約單價/.test(String(i.s || ''))));
 
 async function parseAll(filePath, ctx) {
   const ft = ctx && ctx.filetypes;
@@ -272,11 +304,12 @@ async function parseAll(filePath, ctx) {
   let current = null;
   for (const p of pages) {
     const rows = groupRows(p.items);
-    const dailyRows = collectRows(rows);
-    if (isLogPage(rows)) {
+    const logPage = isLogPage(rows);
+    const dailyRows = collectRows(rows, { priced: !logPage && current ? current._priced : false });
+    if (logPage) {
       const header = parseHeader(rows);
       if (!current || current.header.填報日期 !== header.填報日期 || current._pageCount >= 2) {
-        current = { header, dailyRows: [], extras: {}, _pageCount: 0 };
+        current = { header, dailyRows: [], extras: {}, _pageCount: 0, _priced: 有單價欄(rows) };
         days.push(current);
       }
       current.dailyRows.push(...dailyRows);
@@ -289,6 +322,7 @@ async function parseAll(filePath, ctx) {
   }
   for (const day of days) {
     delete day._pageCount;
+    delete day._priced;
     // 此格式逐日只列當天施作項目，來源項次每天重新從 1 編號；同一個數字跨日會
     // 指向不同工程項目。統一 schema 必須用完整名稱作穩定 key，否則 SP3 會把
     // 不同項目的累計數量混在一起。
@@ -342,7 +376,7 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
-    version: '1.2.0',
+    version: '1.3.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
