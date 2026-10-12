@@ -399,9 +399,14 @@ async function loadRecords(projectId) {
  * 驗證層需要它當起點:施工日誌分批提交,第二批的「累計完成數量」包含前面批次
  * 做過的量,從 0 起算的話 B3 在每一批的第一天都必然誤判。
  * 金額用「數量 × 契約單價」還原——daily_records 只存數量。
+ *
+ * days(這批日誌)有給、又有期初累計時,會檢查期初是否**已經包含**某天以前寫入的
+ * 日誌(見 openingsCutoff)。
  */
-function priorCum(records, 最早日, contract, openings = []) {
+function priorCum(records, 最早日, contract, openings = [], days = null) {
   const priceOf = new Map(contract.map((c) => [String(c.項次), Number(c.單價)]));
+  const before = records.filter((r) => !(最早日 && r.日期 >= 最早日));
+  const cutoff = openings.length && days ? openingsCutoff(before, openings, contract, days) : null;
   const out = {};
   const 加 = (項次, q) => {
     const cur = out[項次] || { 數量: 0, 金額: 0 };
@@ -412,11 +417,51 @@ function priorCum(records, 最早日, contract, openings = []) {
   // 承辦人輸入的期初累計:**開始用本系統之前**做掉的量,永遠算在最前面。
   // 沒有這一段的話,只拿得到後半段月檔的案子(久木那型)第一天就必然對不起來。
   for (const o of openings) 加(String(o.項次), Number(o.數量) || 0);
-  for (const r of records) {
-    if (最早日 && r.日期 >= 最早日) continue;
+  for (const r of before) {
+    if (cutoff && r.日期 <= cutoff) continue;
     加(r.項次, Number(r.本日完成數量) || 0);
   }
   return out;
+}
+
+/**
+ * 期初累計已經涵蓋到哪一天的已寫入日誌;不涵蓋任何一天回 null(照字面相加)。
+ *
+ * 公誠實案:庫裡有 7 月,承辦人又把 9/30 的累計填進期初 → 7 月算兩次,10/01 報 F1。
+ * 承辦人不懂「前期 = 期初 + 已寫入」,不能要他自己去清期初、補傳。
+ * 而這批日誌第一次出現某項時印的「累計 − 本日」就是廠商寫的前一天累計——拿它當裁判:
+ * 逐一試「期初 + 某天之後寫入的日誌」,哪個切點與日誌吻合的項目最多就用哪個。
+ * 平手(含都不吻合)一律保留照字面相加,真的對不上照樣報錯,不挑好看的放行。
+ */
+function openingsCutoff(records, openings, contract, days) {
+  const index = contractItemIndex(contract);
+  const 日誌前期 = new Map();
+  for (const d of days) {
+    for (const r of d.dailyRows || []) {
+      if (r.項次 == null || r.累計完成數量 == null) continue;
+      const matched = resolveContractItem(r, index);
+      const 項次 = matched ? String(matched.項次) : String(r.項次);
+      if (!日誌前期.has(項次)) 日誌前期.set(項次, Number(r.累計完成數量) - (Number(r.本日完成數量) || 0));
+    }
+  }
+  const 期初 = new Map(openings.map((o) => [String(o.項次), Number(o.數量) || 0]));
+  const score = (cut) => {
+    const sum = new Map(期初);
+    for (const r of records) {
+      if (cut && r.日期 <= cut) continue;
+      sum.set(r.項次, (sum.get(r.項次) || 0) + (Number(r.本日完成數量) || 0));
+    }
+    let n = 0;
+    for (const [項次, v] of 日誌前期) if (Math.abs((sum.get(項次) || 0) - v) < 1e-6) n++;
+    return n;
+  };
+  let best = null;
+  let bestScore = score(null);
+  for (const cut of [...new Set(records.map((r) => r.日期))].sort()) {
+    const s = score(cut);
+    if (s > bestScore) { best = cut; bestScore = s; }
+  }
+  return best;
 }
 
 /** 承辦人輸入的期初累計(逐項)。 */
@@ -692,7 +737,7 @@ function registerRoutes(app) {
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id), days),
         });
         result.errors = markApprovableErrors(result.errors);
         result.warnings = await addNameApprovalHints(req.params.id, ctx.vendorId, result.warnings);
@@ -778,7 +823,7 @@ function registerRoutes(app) {
         const rows = flatten(days, ctx.contract);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id), days),
         });
         const problems = verifiedProblems(selected, result);
         if (problems.length !== selected.length) {
@@ -809,7 +854,7 @@ function registerRoutes(app) {
         const rows = flatten(days, ctx.contract);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id), days),
         });
         let approvals;
         let hardErrorApprovals;
@@ -917,7 +962,7 @@ function registerRoutes(app) {
         const records = await loadRecords(req.params.id);
         const result = validateDailyLog({
           days: out.days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+          prior: priorCum(records, 最早日(rows), ctx.contract, await loadOpenings(req.params.id), out.days),
         });
         result.errors = markApprovableErrors(result.errors);
 
@@ -963,7 +1008,7 @@ function registerRoutes(app) {
         const rows = flatten(days, ctx.contract);
         const result = validateDailyLog({
           days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id)),
+          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id), days),
         });
         let hardErrorApprovals;
         try {
