@@ -613,6 +613,8 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
 
       // B3 兩種算法交叉核對:逐日累加的本日完成金額 vs 累計完成數量×契約單價。
       // 讀取器不提供「累計完成金額」,故累計金額一律由前者推導(總覽 spec §5)。
+      // 軟警告(使用者 2026-10-12 指定):廠商常把本日完成與累計完成填混,
+      // 數量本身的錯 B2/F4 已經擋,這裡再擋只是讓整份日誌送不出去。
       if (!skippedCodes.has('B3') && 本日金額 != null && !isSubtotalRow(r) && !是費用項目) {
         const 累計金額 = (cumAmount.get(狀態項次) || 0) + 本日金額;
         cumAmount.set(狀態項次, 累計金額);
@@ -623,7 +625,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
           && Math.abs(累計金額 - 累計量 * 單價) > 0.5 * 筆數 + 1e-6) {
           const 訊息 = `累加的完成金額 ${顯示數(累計金額)} 與「累計數量 ${顯示數(累計量)}`
             + ` × 單價 ${顯示數(單價)}」不符`;
-          hard('B3', 日期, 項次, 訊息);
+          soft('B3', 日期, 項次, 訊息);
         }
       }
 

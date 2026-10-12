@@ -254,7 +254,7 @@ test('B3 累加金額與累計數量乘單價不符', () => {
   const r = run([day('2026-04-08', [
     row('1', { 本日完成數量: 3, 本日完成金額: 999, 累計完成數量: 3 }), // 3×100=300
   ])]);
-  expect(codes(r)).toContain('B3');
+  expect(wcodes(r)).toContain('B3');
 });
 
 // 展翔實測「門窗與雜項工程小計」的金額是各子項加總，數量欄則只記其中一種完成比例。
@@ -882,7 +882,7 @@ test('有前期累計時,第二批的累計對得起來就不判錯', () => {
     project: PROJECT,
     prior: { 1: { 數量: 3, 金額: 300 } },
   });
-  expect(r.errors.map((e) => e.code)).not.toContain('B3');
+  expect([...codes(r), ...wcodes(r)]).not.toContain('B3');
   expect(r.errors.map((e) => e.code)).not.toContain('B2');
 });
 
@@ -902,7 +902,7 @@ test('沒有前期累計時視為從零開始', () => {
   const r = run([day('2026-04-08', [
     row('1', { 本日完成數量: 2, 本日完成金額: 200, 累計完成數量: 2 }),
   ])]);
-  expect(codes(r)).not.toContain('B3');
+  expect([...codes(r), ...wcodes(r)]).not.toContain('B3');
 });
 
 // 費用項目(貳~陸:職安衛管理費、品管費、利潤、保險、營業稅)的「本日完成數量」是
@@ -916,11 +916,12 @@ test('費用項目不套用無法成立的 B3 量價核對', () => {
   expect(wcodes(r)).not.toContain('B3');
 });
 
-test('施工項目的 B3 仍是硬錯', () => {
+test('施工項目的 B3 只是軟警告:廠商常把本日與累計填混,金額對不上不該擋下整份日誌', () => {
   const r = run([day('2026-04-08', [
     row('1', { 本日完成數量: 3, 本日完成金額: 999, 累計完成數量: 3 }),
   ])]);
-  expect(codes(r)).toContain('B3');
+  expect(wcodes(r)).toContain('B3');
+  expect(codes(r)).not.toContain('B3');
 });
 
 // 金額累加到百萬級時,逐筆的捨入尾差會累積(金大實測:本日累計金額 1483077 vs
@@ -968,7 +969,7 @@ test('B3 容差隨累加筆數放寬(每筆捨入最多半元)', () => {
     row('1', { 契約單價: 220027, 契約數量: 1, 本日完成數量: 0.1, 本日完成金額: 22003, 累計完成數量: 0.1 }),
     row('1', { 契約單價: 220027, 契約數量: 1, 本日完成數量: 0.1, 本日完成金額: 22003, 累計完成數量: 0.2 }),
   ));
-  expect(codes(r)).not.toContain('B3');
+  expect([...codes(r), ...wcodes(r)]).not.toContain('B3');
 });
 
 test('B3 每日四捨五入恰達累積半元上限仍屬合理', () => {
@@ -981,7 +982,7 @@ test('B3 每日四捨五入恰達累積半元上限仍屬合理', () => {
   const r = run(days, {
     contract: [{ 項次: '1', 項目: '項目1', 單位: '式', 數量: 1, 單價: 471425 }],
   });
-  expect(codes(r)).not.toContain('B3');
+  expect([...codes(r), ...wcodes(r)]).not.toContain('B3');
 });
 
 test('B3 差距超過累積捨入上限仍要抓', () => {
@@ -989,7 +990,7 @@ test('B3 差距超過累積捨入上限仍要抓', () => {
     row('1', { 契約單價: 100, 契約數量: 10, 本日完成數量: 1, 本日完成金額: 100, 累計完成數量: 1 }),
     row('1', { 契約單價: 100, 契約數量: 10, 本日完成數量: 1, 本日完成金額: 500, 累計完成數量: 2 }),
   ));
-  expect(codes(r)).toContain('B3');
+  expect(wcodes(r)).toContain('B3');
 });
 
 // F1/F4 與 B2/B3 同源:費用項目的「累計完成數量」欄各家語意不一(玉森填的是本日值),
