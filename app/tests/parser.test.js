@@ -193,6 +193,70 @@ describe('parser routes', () => {
     expect(mod.meta.version).toBe('2.5.0');
   });
 
+  // 同一家公司用不同名稱得標(昌林土木包 = 賜利發土木包),日誌版面相同。
+  // 沿用設定讓昌林直接用賜利發的讀取器,而不是把讀取器複製一份改名——
+  // 複製的話,賜利發改版面時昌林那份不會跟著修。
+  describe('讀取器沿用其他廠商', () => {
+    async function addVendor(name) {
+      const v = await auth(request(app).post('/api/vendors')).send({ name });
+      return v.body.id;
+    }
+    const setSource = (id, parserVendorId) =>
+      auth(request(app).put(`/api/vendors/${id}/parser-source`)).send({ parserVendorId });
+
+    test('設定後總覽標出沿用哪一家,清除後恢復', async () => {
+      const aliasId = await addVendor('昌林土木包工業');
+      expect((await setSource(aliasId, vendorId)).status).toBe(200);
+
+      let list = await auth(request(app).get('/api/parsers'));
+      let row = list.body.vendors.find((v) => v.vendorId === aliasId);
+      expect(row.parserVendorId).toBe(vendorId);
+      expect(row.parserVendorName).toBe(vendorName);
+
+      expect((await setSource(aliasId, null)).status).toBe(200);
+      list = await auth(request(app).get('/api/parsers'));
+      row = list.body.vendors.find((v) => v.vendorId === aliasId);
+      expect(row.parserVendorId).toBeNull();
+    });
+
+    test('不能沿用自己', async () => {
+      const res = await setSource(vendorId, vendorId);
+      expect(res.status).toBe(400);
+    });
+
+    // 只解析一層:A 沿用 B、B 又沿用 C 時,A 實際用的是 B 自己的檔,不是 C 的,
+    // 結果與設定看起來的意思不同。兩個方向都擋。
+    test('不能串接:沿用對象本身已在沿用別家,或自己已被別家沿用', async () => {
+      const b = await addVendor('乙');
+      const c = await addVendor('丙');
+      expect((await setSource(b, vendorId)).status).toBe(200);
+      expect((await setSource(c, b)).status).toBe(400);
+      expect((await setSource(vendorId, c)).status).toBe(400);
+    });
+
+    test('刪除被沿用的廠商時一併清掉沿用設定', async () => {
+      const aliasId = await addVendor('昌林土木包工業');
+      await setSource(aliasId, vendorId);
+      await auth(request(app).delete(`/api/vendors/${vendorId}`)).expect(200);
+      const { rows } = await db.query('SELECT parser_vendor_id FROM vendors WHERE id = $1', [aliasId]);
+      expect(rows[0].parser_vendor_id).toBeNull();
+    });
+
+    test('非 admin → 403', async () => {
+      const { hashPassword } = require('../server/password');
+      const hash = await hashPassword('password1');
+      const { rows } = await db.query(
+        "INSERT INTO users (username, password_hash, display_name, role) VALUES ($1, $2, $3, 'user') RETURNING id",
+        ['normaluser3', hash, '一般使用者3']
+      );
+      const userToken = jwt.sign({ userId: rows[0].id }, 'test-secret', { expiresIn: '7d' });
+      const aliasId = await addVendor('昌林土木包工業');
+      const res = await request(app).put(`/api/vendors/${aliasId}/parser-source`)
+        .set('Authorization', `Bearer ${userToken}`).send({ parserVendorId: vendorId });
+      expect(res.status).toBe(403);
+    });
+  });
+
   test('缺廠商 → 404', async () => {
     const st = await auth(request(app).get('/api/vendors/99999/parser'));
     expect(st.status).toBe(404);

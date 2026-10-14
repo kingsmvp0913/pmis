@@ -311,6 +311,27 @@ test('沒有對應廠商讀取器時擋下', async () => {
   expect(res.body.error).toMatch(/讀取器/);
 });
 
+// 昌林土木包 = 賜利發土木包:日誌用賜利發的讀取器解析,但主檔與報表上的
+// 承包廠商仍是工程綁定的那家——改綁廠商的話公文會印錯名字。
+test('廠商設定沿用別家讀取器時,用那家的讀取器解析,承包廠商不變', async () => {
+  const { app, token, id } = await makeApp();
+  const { rows } = await db.query(`INSERT INTO vendors (name) VALUES ('賜利發土木包工業') RETURNING id`);
+  await db.query(`UPDATE vendors SET parser_vendor_id = $1 WHERE name = '某某營造'`, [rows[0].id]);
+  feed([day('2026-04-08', [r('1', 1)])]);
+  await post(app, token, id, 'parse').expect(200);
+  expect(registry.getParser).toHaveBeenCalledWith('賜利發土木包工業');
+});
+
+test('沿用的讀取器沒裝時,訊息講出是沿用哪一家', async () => {
+  const { app, token, id } = await makeApp();
+  const { rows } = await db.query(`INSERT INTO vendors (name) VALUES ('賜利發土木包工業') RETURNING id`);
+  await db.query(`UPDATE vendors SET parser_vendor_id = $1 WHERE name = '某某營造'`, [rows[0].id]);
+  registry.getParser.mockReturnValue(null);
+  const res = await post(app, token, id, 'parse').expect(400);
+  expect(res.body.error).toMatch(/賜利發土木包工業/);
+  expect(res.body.error).toMatch(/某某營造/);
+});
+
 test('尚未填開工日期時擋下(沒有它就決定不了要寫哪一欄)', async () => {
   const { app, token, id } = await makeApp({ start: null });
   feed([day('2026-04-08', [r('1', 1)])]);

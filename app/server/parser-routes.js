@@ -11,6 +11,7 @@
  *   GET    /api/vendors/:id/parser   讀取檔狀態(以該廠商名稱為 key)
  *   POST   /api/vendors/:id/parser   admin 上傳安裝(multipart 單檔;vendorKey 須等於此廠商名稱)
  *   DELETE /api/vendors/:id/parser   admin 移除(以該廠商名稱為 key)
+ *   PUT    /api/vendors/:id/parser-source  admin 設定讀取器沿用哪一家({ parserVendorId },null 清除)
  *
  * 安全:
  *   上傳的 JS 於安裝時會被載入執行(selfTest / 驗證),因此:
@@ -100,7 +101,9 @@ function registerRoutes(app) {
   // ── 總覽:所有廠商 × 讀取器狀態 + 孤兒讀取器 ──
   app.get('/api/parsers', verifyToken, async (req, res) => {
     try {
-      const { rows: vendors } = await query('SELECT id, name FROM vendors ORDER BY name');
+      const { rows: vendors } = await query(
+        `SELECT v.id, v.name, v.parser_vendor_id, pv.name AS parser_vendor_name
+           FROM vendors v LEFT JOIN vendors pv ON pv.id = v.parser_vendor_id ORDER BY v.name`);
       // 已安裝讀取器:meta.vendorKey(名稱) → 包裝物件
       const installed = registry.loadAll();
       const matchedKeys = new Set();
@@ -115,6 +118,8 @@ function registerRoutes(app) {
           version: st.version || null,
           targetFields: st.targetFields || null,
           installedAt: st.installedAt || null,
+          parserVendorId: v.parser_vendor_name ? v.parser_vendor_id : null,
+          parserVendorName: v.parser_vendor_name || null,
         };
       });
 
@@ -280,6 +285,40 @@ function registerRoutes(app) {
         return res.status(400).json({ error: result.error });
       }
       res.status(201).json(result.status);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── 讀取器沿用(admin)──
+  // 同一家公司用不同名稱得標時,讓這家直接用另一家的讀取器,不必複製一份改名。
+  // 只解析一層,所以兩個方向都不准串接:對象本身在沿用別家、或自己已被別家沿用。
+  app.put('/api/vendors/:id/parser-source', verifyToken, requireAdmin, async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if ((await vendorNameById(id)) === null) {
+        return res.status(404).json({ error: '廠商不存在' });
+      }
+      const raw = req.body.parserVendorId;
+      const targetId = raw == null || raw === '' ? null : Number(raw);
+      if (targetId !== null) {
+        if (targetId === id) {
+          return res.status(400).json({ error: '不能沿用自己的讀取器' });
+        }
+        const { rows: t } = await query('SELECT name, parser_vendor_id FROM vendors WHERE id = $1', [targetId]);
+        if (!t[0]) return res.status(400).json({ error: '要沿用的廠商不存在' });
+        if (t[0].parser_vendor_id != null) {
+          return res.status(400).json({ error: `「${t[0].name}」本身也在沿用別家的讀取器,請直接選它沿用的那一家` });
+        }
+        const { rows: dep } = await query('SELECT name FROM vendors WHERE parser_vendor_id = $1', [id]);
+        if (dep.length) {
+          return res.status(400).json({
+            error: `已有廠商沿用這一家的讀取器(${dep.map((d) => d.name).join('、')}),不能再讓它沿用別家`,
+          });
+        }
+      }
+      await query('UPDATE vendors SET parser_vendor_id = $1 WHERE id = $2', [targetId, id]);
+      res.json({ ok: true, parserVendorId: targetId });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

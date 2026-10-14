@@ -161,6 +161,8 @@ function registerRoutes(app) {
   app.delete('/api/vendors/:id', verifyToken, async (req, res) => {
     try {
       await query('DELETE FROM vendor_contacts WHERE vendor_id = $1', [req.params.id]);
+      // 沿用此廠商讀取器的別家改回用自己的(不留指向已刪廠商的設定)
+      await query('UPDATE vendors SET parser_vendor_id = NULL WHERE parser_vendor_id = $1', [req.params.id]);
       const { rows } = await query('DELETE FROM vendors WHERE id = $1 RETURNING id', [req.params.id]);
       if (!rows[0]) return res.status(404).json({ error: '廠商不存在' });
       res.json({ ok: true });

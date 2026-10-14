@@ -170,11 +170,13 @@
       if (!vendors.length) {
         tbody.appendChild(el('tr', {}, [el('td', { class: 'empty-row', colspan: '3' }, '沒有廠商資料')]));
       }
+      // 可被沿用的:自己有裝讀取器、且本身沒有在沿用別家(後端只解析一層)
+      const sources = vendors.filter(v => v.installed && !v.parserVendorId);
       for (const v of vendors) {
         tbody.appendChild(el('tr', {}, [
           el('td', {}, v.vendorName),
-          el('td', {}, statusCell(v)),
-          el('td', { class: 'actions' }, actionCell(v))
+          el('td', {}, statusCell(v, vendors)),
+          el('td', { class: 'actions' }, actionCell(v, sources))
         ]));
       }
       tableWrap.appendChild(el('div', { class: 'table-wrap' }, [
@@ -182,14 +184,21 @@
           el('thead', {}, [el('tr', {}, [
             el('th', {}, '廠商名稱'),
             el('th', {}, '狀態'),
-            el('th', { style: 'width:120px' }, '')
+            el('th', { style: 'width:220px' }, '')
           ])]),
           tbody
         ])
       ]));
     }
 
-    function statusCell(v) {
+    function statusCell(v, vendors) {
+      if (v.parserVendorId) {
+        // 沿用的那家若被移除讀取器,這裡要看得出來,不然到上傳日誌才會被擋
+        const src = vendors.find(x => x.vendorId === v.parserVendorId);
+        return src && src.installed
+          ? el('span', { class: 'status-pill submitted' }, '沿用「' + v.parserVendorName + '」的讀取器')
+          : el('span', { class: 'status-pill overdue' }, '沿用「' + v.parserVendorName + '」,但它尚未安裝讀取器');
+      }
       if (v.installed) {
         const fieldCount = (v.targetFields || []).length;
         return el('span', { class: 'status-pill submitted' },
@@ -198,13 +207,34 @@
       return el('span', { class: 'status-pill overdue' }, '未安裝');
     }
 
-    function actionCell(v) {
+    function actionCell(v, sources) {
       if (!isAdmin) return el('span', { class: 'hint', style: 'margin:0' }, '');
+      if (v.parserVendorId) {
+        return el('button', { class: 'btn btn-outline', type: 'button',
+          onClick: () => setSource(v, null) }, '取消沿用');
+      }
       if (v.installed) {
         return el('button', { class: 'btn btn-danger', type: 'button',
           onClick: () => remove(v) }, '移除');
       }
-      return el('span', { class: 'hint', style: 'margin:0' }, '請於上方上傳讀取器');
+      // 同一家公司換名稱得標時,直接沿用另一家的讀取器,不必再上傳一份
+      const options = sources.filter(s => s.vendorId !== v.vendorId);
+      if (!options.length) return el('span', { class: 'hint', style: 'margin:0' }, '請於上方上傳讀取器');
+      const select = el('select', { class: 'form-control', title: '同一家公司換名稱時,可直接沿用另一家的讀取器' }, [
+        el('option', { value: '' }, '上傳讀取器,或沿用…')
+      ].concat(options.map(s => el('option', { value: String(s.vendorId) }, s.vendorName))));
+      select.addEventListener('change', () => {
+        if (select.value) setSource(v, Number(select.value));
+      });
+      return select;
+    }
+
+    async function setSource(v, parserVendorId) {
+      try {
+        await Api.put('vendors/' + v.vendorId + '/parser-source', { parserVendorId });
+        showToast(parserVendorId ? '已設定沿用' : '已取消沿用', 'success');
+      } catch (e) { showToast('設定失敗:' + e.message, 'error'); }
+      load();
     }
 
     async function remove(v) {

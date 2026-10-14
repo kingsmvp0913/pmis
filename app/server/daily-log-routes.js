@@ -234,8 +234,9 @@ function toISODate(v) {
  */
 async function loadContext(projectId) {
   const { rows: p } = await query(
-    `SELECT p.*, v.name AS vendor_name FROM projects p
-       LEFT JOIN vendors v ON v.id = p.vendor_id WHERE p.id = $1`, [projectId]);
+    `SELECT p.*, v.name AS vendor_name, pv.name AS parser_vendor_name FROM projects p
+       LEFT JOIN vendors v ON v.id = p.vendor_id
+       LEFT JOIN vendors pv ON pv.id = v.parser_vendor_id WHERE p.id = $1`, [projectId]);
   if (!p[0]) return { error: { status: 404, message: '找不到工程' } };
 
   const { rows: items } = await query(
@@ -246,12 +247,16 @@ async function loadContext(projectId) {
   if (!p[0].start_date) return { error: { status: 400, message: NO_START } };
 
   const vendorKey = p[0].vendor_name;
-  const parser = vendorKey ? registry.getParser(vendorKey) : null;
+  // 廠商設定了「讀取器沿用」就用那家的;承包廠商(下方 project)仍是本家
+  const parserKey = p[0].parser_vendor_name || vendorKey;
+  const parser = parserKey ? registry.getParser(parserKey) : null;
   if (!parser || typeof parser.parseAll !== 'function') {
     return {
       error: {
         status: 400,
-        message: vendorKey
+        message: parserKey !== vendorKey
+          ? `「${vendorKey}」設定沿用「${parserKey}」的讀取器,但「${parserKey}」尚未安裝施工日誌讀取器,無法解析這份日誌`
+          : vendorKey
           ? `尚未安裝「${vendorKey}」的施工日誌讀取器,無法解析這份日誌`
           : '此工程尚未綁定承包廠商,無法決定要用哪一份讀取器',
       },

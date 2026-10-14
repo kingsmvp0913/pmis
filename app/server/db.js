@@ -308,6 +308,10 @@ async function migrate() {
     // 「監造報表基本資料」表單再由此帶入 B7——不存的話承辦人得把剛核對完的
     // 同一個數字再打一次。與 duration_basis 拆兩欄:基準判不出來時天數仍要存得住。
     ['projects', 'duration_days', 'INTEGER'],
+    // 讀取器沿用哪一家廠商。同一家公司用不同名稱得標(昌林土木包 = 賜利發土木包),
+    // 日誌版面一樣;讀取器是以廠商名稱為鍵,不設這個就得把讀取器複製一份改名,
+    // 原廠改版面時複本不會跟著修。只影響解析,主檔/報表上的承包廠商仍是本家。
+    ['vendors', 'parser_vendor_id', 'INTEGER'],
   ];
   const { rows: colRows } = await query(
     "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'"
