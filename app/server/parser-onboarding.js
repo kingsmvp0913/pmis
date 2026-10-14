@@ -4,7 +4,8 @@
  * 正式環境不安裝 AI:讀取器由開發環境的 gen-vendor-parser skill 產出後 commit 進 repo。
  * 取得最新讀取器的 `git pull` 在「啟動.bat」裡、node 起來之前跑——放進程內太晚,
  * 拉到的 .js 這一次執行吃不到。這裡只負責掃描安裝:
- *   逐支讀取器 → 驗證安裝 → 有同名廠商就更新讀取器,沒有就新建廠商並綁定。
+ *   逐支讀取器 → 驗證安裝 → 有同名廠商就更新讀取器,沒有就新建廠商並綁定;
+ *   meta.aliases 列的別名廠商一併設成沿用這支讀取器。
  * 免手動安裝、免按鈕。
  */
 const fs = require('fs');
@@ -14,6 +15,25 @@ const db = require('./db');
 
 // 讀取器來源:隨程式碼樹發佈的 samples 目錄(git pull 會更新這裡)。
 const BUNDLED_DIR = path.join(__dirname, 'parsers', 'vendors', 'samples');
+
+/**
+ * meta.aliases:同一家公司用不同名稱得標(昌林土木包 = 賜利發土木包),版面相同。
+ * 別名廠商沒有就建立,沿用未設定時設成沿用本家——重開即可用,不必到讀取器頁手動設。
+ * 已設定沿用(承辦人手動指到別家)不覆蓋;已被別家沿用的不設,避免串接(只解析一層)。
+ */
+async function linkAliases(q, aliases, vendorKey, vendorId) {
+  for (const alias of Array.isArray(aliases) ? aliases : []) {
+    if (!registry.isValidVendorKey(alias) || alias === vendorKey) continue;
+    let { rows } = await q('SELECT id, parser_vendor_id FROM vendors WHERE name = $1', [alias]);
+    if (!rows[0]) {
+      ({ rows } = await q('INSERT INTO vendors (name) VALUES ($1) RETURNING id, parser_vendor_id', [alias]));
+    }
+    if (rows[0].parser_vendor_id != null) continue;
+    const { rows: dep } = await q('SELECT id FROM vendors WHERE parser_vendor_id = $1', [rows[0].id]);
+    if (dep.length) continue;
+    await q('UPDATE vendors SET parser_vendor_id = $1 WHERE id = $2', [vendorId, rows[0].id]);
+  }
+}
 
 /**
  * 掃描讀取器目錄,逐支安裝並 upsert 廠商。
@@ -50,11 +70,12 @@ async function scanAndInstall(opts = {}) {
       }
 
       // upsert 廠商:無同名則新建並綁定。
-      const { rows } = await q('SELECT id FROM vendors WHERE name = $1', [vendorKey]);
+      let { rows } = await q('SELECT id FROM vendors WHERE name = $1', [vendorKey]);
       if (!rows[0]) {
-        await q('INSERT INTO vendors (name) VALUES ($1)', [vendorKey]);
+        ({ rows } = await q('INSERT INTO vendors (name) VALUES ($1) RETURNING id', [vendorKey]));
         entry.vendorCreated = true;
       }
+      await linkAliases(q, ins.meta.aliases, vendorKey, rows[0].id);
       entry.ok = true;
     } catch (e) {
       entry.error = e.message;

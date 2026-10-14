@@ -559,6 +559,8 @@ function selfTest(ft) {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
+    // 同一家公司用不同名稱得標(使用者 2026-10-14 告知),啟動時自動設成沿用本讀取器
+    aliases: ['昌林土木包工業'],
     version: '1.1.0',
     targetFields: [
       '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',

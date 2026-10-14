@@ -72,6 +72,54 @@ describe('scanAndInstall 啟動掃描 upsert', () => {
   });
 });
 
+// 同一家公司換名稱得標(昌林土木包 = 賜利發土木包):讀取器 meta.aliases 列出的名稱,
+// 啟動時自動設成沿用這支讀取器——承辦人重開即可用,不必再到讀取器頁手動設定。
+describe('meta.aliases 自動設定沿用', () => {
+  let ALIAS_DIR;
+  beforeAll(() => {
+    ALIAS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pmis-onboard-alias-'));
+    fs.writeFileSync(path.join(ALIAS_DIR, 'a.pmisparser.js'), `module.exports = {
+      meta: { vendorKey: '本家', version: '1', targetFields: [], aliases: ['別名一'] },
+      parse() { return { header: {}, dailyRows: [] }; },
+    };`);
+  });
+  beforeEach(async () => {
+    db._setPoolForTesting(freshPool());
+    await db.migrate();
+  });
+  afterEach(() => db._setPoolForTesting(null));
+
+  const sourceOf = async (name) => (await db.query(
+    `SELECT pv.name FROM vendors v LEFT JOIN vendors pv ON pv.id = v.parser_vendor_id
+      WHERE v.name = $1`, [name])).rows[0];
+
+  test('別名廠商不存在:建立並設成沿用本家', async () => {
+    await scanAndInstall({ dir: ALIAS_DIR, query: db.query });
+    expect((await sourceOf('別名一')).name).toBe('本家');
+  });
+
+  test('別名廠商已存在(已有工程綁著):補上沿用,不重複建', async () => {
+    await db.query(`INSERT INTO vendors (name) VALUES ('別名一')`);
+    await scanAndInstall({ dir: ALIAS_DIR, query: db.query });
+    expect((await sourceOf('別名一')).name).toBe('本家');
+    const { rows } = await db.query(`SELECT id FROM vendors WHERE name = '別名一'`);
+    expect(rows).toHaveLength(1);
+  });
+
+  // 承辦人手動指到別家時尊重他的選擇,不在每次重開時蓋掉
+  test('別名廠商已手動設定沿用別家:不覆蓋', async () => {
+    const { rows: o } = await db.query(`INSERT INTO vendors (name) VALUES ('另一家') RETURNING id`);
+    await db.query(`INSERT INTO vendors (name, parser_vendor_id) VALUES ('別名一', $1)`, [o[0].id]);
+    await scanAndInstall({ dir: ALIAS_DIR, query: db.query });
+    expect((await sourceOf('別名一')).name).toBe('另一家');
+  });
+
+  test('賜利發讀取器帶著昌林這個別名', () => {
+    const mod = require(path.join(BUNDLED_DIR, 'cilifa.pmisparser.js'));
+    expect(mod.meta.aliases).toContain('昌林土木包工業');
+  });
+});
+
 // 上面那支不再掃 samples/,所以「有人 commit 了裝不起來的讀取器」要由這裡守。
 // 刻意用 Jest 自己的 require + validateModule(**不**走 install 的 Module._compile、
 // 不寫任何檔、不碰 DB),才不會重蹈上面說的沙箱污染。
