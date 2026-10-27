@@ -34,6 +34,11 @@ const XLSX = require('xlsx');
 // 承辦人上傳的既有內容會被系統直接蓋掉,而且沒有任何徵兆。
 const SHEETS = ['工程基本資料', '契約詳細價目表', '監造報表', '每日施工紀錄', '監造內容'];
 
+// 監造內容 C/D 欄第 3 列起是逐日天氣,**以施工日誌為準,不受上傳保護**(使用者 2026-10-27 裁決)。
+// 人工報表常把整欄預填「晴」(鹿場 C3:D763),那是公版預設不是逐日記錄;保護它會讓日誌上
+// 的雨天全被靜默跳過。日誌沒寫天氣的那天 weatherToOperations 本來就不送,原值照樣留著。
+const 不保護 = (sheet, addr) => sheet === '監造內容' && /^[CD](\d+)$/.test(addr) && Number(addr.slice(1)) >= 3;
+
 /**
  * 掃出「承辦人已經填過」的儲存格。
  *
@@ -64,6 +69,7 @@ function scanFilledCells(xlsmPath) {
       if (c == null || c.f) continue;                       // 公式格不算,見上面
       if (c.v == null) continue;
       if (typeof c.v === 'string' && c.v.trim() === '') continue;
+      if (不保護(name, key)) continue;
       addrs.push(key);
     }
     if (addrs.length) out[name] = addrs;
@@ -121,7 +127,10 @@ function filterOperations(ops, protectedMap) {
   const map = protectedMap || {};
   if (!Object.keys(map).length) return ops || [];
   const sets = {};
-  for (const [sheet, addrs] of Object.entries(map)) sets[sheet] = new Set(addrs);
+  // 舊清單是上傳當時存的,可能含天氣欄;在這裡濾掉,已上傳過的專案才不必重傳
+  for (const [sheet, addrs] of Object.entries(map)) {
+    sets[sheet] = new Set(addrs.filter((a) => !不保護(sheet, a)));
+  }
 
   const out = [];
   for (const op of ops || []) {
@@ -137,6 +146,9 @@ function filterOperations(ops, protectedMap) {
     const start = parseAddr(op.startAddr);
     if (!start) { out.push(op); continue; }
     const values = op.values || [];
+    // 整塊碰不到保護格就整道送:拆成逐列會讓指令數暴增(天氣 3 → 103 道 COM 往返)
+    const 碰到 = values.some((row, r) => (row || []).some((_, c) => 保護.has(`${colName(start.col + c)}${start.row + r}`)));
+    if (!碰到) { out.push(op); continue; }
     for (let r = 0; r < values.length; r++) {
       const row = values[r] || [];
       let seg = null;

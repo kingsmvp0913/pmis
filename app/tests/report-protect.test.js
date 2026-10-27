@@ -24,6 +24,30 @@ describe('filterOperations', () => {
     expect(got[0].addr).toBe('B2');
   });
 
+  // 鹿場(玉森)2026-10-27:人工報表的監造內容 C3:D763 整欄預填「晴」(公版預設,不是
+  // 逐日記錄),上傳時被收進保護清單,日誌上 14 天雨天全被靜默跳過,報表整份是晴天。
+  // 使用者裁決:**天氣以施工日誌為準**——日誌有寫的那天一律覆蓋;沒寫的天系統本來就不送。
+  // 清單是上傳那時存下的,所以要在過濾時豁免,已上傳過的專案才不必重傳。
+  // 天氣是一整段 setRange(b8064f6 為了少 COM 往返才合併的)。分頁上別處有保護格
+  // (鹿場的監造內容有 4542 格)不該讓它被拆成逐列:實測 3 道 → 103 道
+  test('整塊範圍內沒有保護格時 setRange 原樣放行,不拆成逐列', () => {
+    const op = { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['雨', '雨'], ['晴', '雨']] };
+    expect(filterOperations([op], { 監造內容: ['E3', 'G9'] })).toEqual([op]);
+  });
+
+  test('監造內容的天氣欄不受上傳保護,以日誌為準', () => {
+    const 舊清單 = { 監造內容: ['C1', 'C2', 'D2', 'C3', 'D3', 'C4', 'D4', 'E3'] };
+    const ops = [
+      { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['雨', '雨'], ['晴', '雨']] },
+      { type: 'setCell', sheet: '監造內容', addr: 'E3', value: 'x' },
+      { type: 'setCell', sheet: '監造內容', addr: 'C1', value: 'x' },
+    ];
+    const got = filterOperations(ops, 舊清單);
+    expect(got).toEqual([
+      { type: 'setRange', sheet: '監造內容', startAddr: 'C3', values: [['雨', '雨'], ['晴', '雨']] },
+    ]);
+  });
+
   // 別的分頁同名位址不該被誤擋
   test('保護只在該分頁生效', () => {
     const ops = [{ type: 'setCell', sheet: '契約詳細價目表', addr: 'B1', value: 'x' }];
@@ -110,6 +134,18 @@ describe('scanFilledCells', () => {
     const 某公式格 = Object.keys(ws).find((k) => !k.startsWith('!') && ws[k] && ws[k].f);
     expect(某公式格).toBeTruthy();
     expect(每日).not.toContain(某公式格);
+  });
+
+  // 上傳畫面會回報「保護了幾格」;把不會被保護的天氣算進去,承辦人會以為那 1522 格動不了
+  test('監造內容的天氣欄不收進保護清單', () => {
+    const os = require('os');
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[null, '日期', '天氣'], [null, null, '上午', '下午'], [null, null, '晴', '晴']]), '監造內容');
+    const tmp = path.join(os.tmpdir(), `protect-weather-${process.pid}.xlsx`);
+    XLSX.writeFile(wb, tmp);
+    try {
+      expect(scanFilledCells(tmp).監造內容.sort()).toEqual(['B1', 'C1', 'C2', 'D2']);
+    } finally { fs.unlinkSync(tmp); }
   });
 
   // 掃描範圍必須**恰好**等於系統會寫入的分頁集合,兩邊都會出事:
