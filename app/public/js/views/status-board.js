@@ -176,7 +176,7 @@ const StatusBoard = (() => {
             el('th', {}, '主辦機關'),
             el('th', { style: 'width:110px' }, '開工日期'),
             el('th', { style: 'width:200px' }, '竣工日期'),
-            el('th', { style: 'width:110px' }, '契約金額'),
+            el('th', { style: 'width:110px' }, '決標金額'),
             el('th', { style: 'width:80px' }, '狀態'),
             el('th', { style: 'width:70px' }, ''),
           ])),
