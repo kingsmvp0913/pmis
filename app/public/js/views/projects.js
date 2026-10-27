@@ -741,7 +741,7 @@
       // 狀態照工程的時序排(未開工→施工中→已竣工),不照字面——字面排出來是
       // 「已竣工/未開工/施工中」,對承辦人沒有意義。
       status: { 名: '狀態', 值: (p) => STATUSES.indexOf(p.status) },
-      design_fee_actual: { 名: '設計費', 值: (p) => p.design_fee_actual },
+      award_amount: { 名: '決標金額', 值: (p) => (p.award_amount == null ? null : Number(p.award_amount)) },
     };
     const 排序頭 = (key, style) => {
       const th = el('th', { style: `${style || ''};cursor:pointer;user-select:none`, title: '點擊排序' },
@@ -764,7 +764,7 @@
         排序頭('firm_doc_no', 'width:110px'),
         排序頭('name'),
         排序頭('status', 'width:88px'),
-        排序頭('design_fee_actual', 'width:140px'),
+        排序頭('award_amount', 'width:140px'),
         el('th', { style: 'width:300px' }, '流程'),
         el('th', { style: 'width:50px' }, ''),
       );
@@ -872,7 +872,7 @@
       let rows = want ? 全部.filter((p) => p.status === want) : 全部.slice();
       if (sortKey) {
         const 取 = SORTS[sortKey].值;
-        // **空值一律排最後,不受升降序影響**。跟著翻的話,按「設計費」降序時
+        // **空值一律排最後,不受升降序影響**。跟著翻的話,按「決標金額」降序時
         // 一整片「—」會擠在最前面,承辦人要找的是有金額的那幾案。
         rows.sort((a, b) => {
           const x = 取(a);
@@ -891,13 +891,8 @@
         return;
       }
       for (const p of rows) {
-        let feeText;
-        if (p.design_fee_unbid) feeText = '未招標,待補';
-        // 百分比法乘的是建造費用(發包工程費−保險費−營業稅),沒有價目表就算不出來。
-        // 講出缺什麼,不然只看到一個「—」會以為系統壞了。
-        else if (p.design_fee_needs_items) feeText = '待建立價目表';
-        else if (p.design_fee_actual != null) feeText = Number(p.design_fee_actual).toLocaleString() + ' 元';
-        else feeText = '—';
+        // 決標金額空白＝未招標(與編輯頁的欄位說明同一個定義)
+        const awardText = p.award_amount != null ? Number(p.award_amount).toLocaleString() + ' 元' : '未招標';
         const panelCell = el('td', { colspan: '6', style: 'padding:0' });
         const panelRow = el('tr', { style: 'display:none' }, [panelCell]);
 
@@ -976,7 +971,7 @@
           el('td', {}, p.firm_doc_no || '—'),
           el('td', {}, p.name),
           el('td', {}, statusBadge(p.status)),
-          el('td', {}, feeText),
+          el('td', {}, awardText),
           el('td', { class: 'actions' }, [
             flowCell,
           ]),
