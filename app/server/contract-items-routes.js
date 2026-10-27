@@ -240,7 +240,7 @@ function registerRoutes(app) {
           try {
             const g = await loadGroup(query, award.project_no);
             if (g && g.標的數 > 1) {
-              hint = `。⚠️ 這張決標(${award.project_no})底下有 ${g.標的數} 個標的,` +
+              hint = `。⚠️ 這張決標(${award.project_no})底下有 ${g.標的數} 個標的(${g.標的.map((t) => t.name).join('、')}),` +
                 '本工程的決標金額看起來還是**整張決標的總額**——請先把它改成本標的的金額,' +
                 '再回來上傳。';
             }
