@@ -1040,6 +1040,30 @@ describe('期初累計', () => {
     expect(res.body.errors.find((e) => e.code === 'F1').訊息).toMatch(/從 6 掉到 2/);
   });
 
+  // 銘佑(龍井廁所)實案:承辦人先拿 7 月那份(7/29~7/31)把 7/31 的累計填進期初,
+  // 廠商後來交的 10 月檔又從開工 7/29 印起 → 這三天被算兩次,7/29 報 B2/F1/F4。
+  // 期初與這批某一天的累計逐項相同,就是「期初已涵蓋到這批的那一天」。
+  test('期初等於這批某一天的累計時,那天以前的本日不重複計算', async () => {
+    const { app, token, id } = await makeApp();
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
+    feed([
+      day('2026-07-29', [r('1', 2, { 累計完成數量: 2 })]),
+      day('2026-07-30', [r('1', 1, { 累計完成數量: 3 })]),
+      day('2026-07-31', [r('1', 1, { 累計完成數量: 4 })]),
+    ]);
+    const res = await post(app, token, id, 'parse').expect(200);
+    expect(res.body.errors).toEqual([]);
+  });
+
+  // 只是剛好對不上某一天的話不准放行:期初 3 不是這批任何一天的累計,照字面相加、錯照報。
+  test('期初不等於這批任何一天的累計時,錯照報', async () => {
+    const { app, token, id } = await makeApp();
+    await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);
+    feed([day('2026-07-29', [r('1', 2, { 累計完成數量: 2 })])]);
+    const res = await post(app, token, id, 'parse').expect(200);
+    expect(res.body.errors.map((e) => e.code)).toContain('F1');
+  });
+
   test('存了讀得回來', async () => {
     const { app, token, id } = await makeApp();
     await setOpenings(app, token, id, [{ 項次: '1', 期初累計: 3 }]).expect(200);

@@ -411,7 +411,6 @@ async function loadRecords(projectId) {
 function priorCum(records, 最早日, contract, openings = [], days = null) {
   const priceOf = new Map(contract.map((c) => [String(c.項次), Number(c.單價)]));
   const before = records.filter((r) => !(最早日 && r.日期 >= 最早日));
-  const cutoff = openings.length && days ? openingsCutoff(before, openings, contract, days) : null;
   const out = {};
   const 加 = (項次, q) => {
     const cur = out[項次] || { 數量: 0, 金額: 0 };
@@ -419,6 +418,13 @@ function priorCum(records, 最早日, contract, openings = [], days = null) {
     cur.金額 += q * (priceOf.get(項次) || 0);
     out[項次] = cur;
   };
+  // 期初其實是這批某一天的累計:那天(含)以前的已寫入日誌與這批的本日都已經在期初裡。
+  const 批內 = openings.length && days ? openingsWithinBatch(openings, contract, days) : null;
+  if (批內) {
+    for (const [項次, q] of 批內) 加(項次, q);
+    return out;
+  }
+  const cutoff = openings.length && days ? openingsCutoff(before, openings, contract, days) : null;
   // 承辦人輸入的期初累計:**開始用本系統之前**做掉的量,永遠算在最前面。
   // 沒有這一段的話,只拿得到後半段月檔的案子(久木那型)第一天就必然對不起來。
   for (const o of openings) 加(String(o.項次), Number(o.數量) || 0);
@@ -467,6 +473,39 @@ function openingsCutoff(records, openings, contract, days) {
     if (s > bestScore) { best = cut; bestScore = s; }
   }
   return best;
+}
+
+/**
+ * 期初累計若**逐項等於**這批某一天印的累計,回「期初 − 這批到那天為止的本日合計」(項次 → 數量);
+ * 否則回 null。
+ *
+ * 銘佑(龍井廁所)實案:承辦人拿 7 月那份(7/29~7/31)把 7/31 的累計填進期初,
+ * 廠商後來交的檔又從開工 7/29 印起 → 前期多算三天,7/29 報 B2/F1/F4。
+ * openingsCutoff 只會切「已寫入的日誌」,切不到這批自己的日子。
+ * 要全部項目(含期初沒填、那天累計非零的)都對上才算——只對上幾項是巧合,照字面相加。
+ */
+function openingsWithinBatch(openings, contract, days) {
+  const index = contractItemIndex(contract);
+  const 期初 = new Map(openings.map((o) => [String(o.項次), Number(o.數量) || 0]));
+  if (![...期初.values()].some((v) => v)) return null;
+  const sorted = [...days].filter((d) => (d.header || {}).填報日期)
+    .sort((a, b) => (a.header.填報日期 < b.header.填報日期 ? -1 : 1));
+  const 本日合計 = new Map();
+  for (const d of sorted) {
+    const 累計 = new Map();
+    for (const r of d.dailyRows || []) {
+      if (r.項次 == null) continue;
+      const matched = resolveContractItem(r, index);
+      const 項次 = matched ? String(matched.項次) : String(r.項次);
+      本日合計.set(項次, (本日合計.get(項次) || 0) + (Number(r.本日完成數量) || 0));
+      if (r.累計完成數量 != null) 累計.set(項次, Number(r.累計完成數量));
+    }
+    const 項次們 = new Set([...期初.keys(), ...累計.keys()]);
+    const 相同 = [...項次們].every((k) => 累計.has(k) || !期初.get(k))
+      && [...項次們].every((k) => Math.abs((累計.get(k) || 0) - (期初.get(k) || 0)) < 1e-6);
+    if (相同) return new Map([...期初].map(([k, v]) => [k, v - (本日合計.get(k) || 0)]));
+  }
+  return null;
 }
 
 /** 承辦人輸入的期初累計(逐項)。 */
