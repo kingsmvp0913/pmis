@@ -16,6 +16,11 @@
  * 末三欄無施工時是「-」,語意為無資料 → null,不可當 0。
  *
  * 第一聯提供 header(日期/天氣/進度/開工日),第二聯提供明細;兩者依頁序配對。
+ * 配對後再比兩聯的日期:少一天的第二聯時頁數仍可能湊平,錯位整份都會配錯天。
+ *
+ * ── 進度取累計那一組 ──
+ * 第一聯同時印「本日預定/實際進度」與「累計預定/實際進度」。報表核對列與 SP3 的
+ * F3/H1 要的是累計;原本取本日,僑美 9 月印 0.50/0.67(累計是 40.50/71.47)。
  */
 
 const META_VENDOR_KEY = '陳宏鈞土木包工業';
@@ -182,13 +187,19 @@ function parseFirstSheet(rows) {
     星期: 找(/(星期[一二三四五六日天])/),
     天氣_上午: text(wm[1]),
     天氣_下午: text(wm[2]),
-    預定進度: numOf(找(/本\s*日\s*預\s*定\s*進\s*度\s+([\d.]+)/)),
-    實際進度: numOf(找(/本\s*日\s*實\s*際\s*進\s*度\s+([\d.]+)/)),
+    預定進度: numOf(找(/累\s*計\s*預\s*定\s*進\s*度\s+([\d.]+)/)),
+    實際進度: numOf(找(/累\s*計\s*實\s*際\s*進\s*度\s+([\d.]+)/)),
     出工總人數: null,
     本日累計金額: null,
     契約金額: numOf(找(/契\s*約\s*金\s*額\s+([\d,]+)/)),
     開工日期: rocToISO((flat.find((l) => /開\s*工\s*日\s*期/.test(l)) || '')),
   };
+}
+
+/** 第二聯表頭的「日期: 115 年 6 月 12 日」。 */
+function secondDate(rows) {
+  const l = rows.map((r) => r.items.map((i) => i.s).join(' ')).find((t) => /日\s*期/.test(t) && /年/.test(t));
+  return l ? rocToISO(l.slice(l.search(/日\s*期/))) : null;
 }
 
 /** PDF 匯出時「第 二 聯」可能在字間插入空白，聯別判定不可要求字元緊連。 */
@@ -222,8 +233,13 @@ async function parseAll(filePath, ctx) {
   const n = firsts.length;
   const out = [];
   for (let k = 0; k < n; k++) {
-    const dailyRows = collectRows(seconds[k]);
-    out.push({ header: parseFirstSheet(firsts[k]), dailyRows, extras: {} });
+    const header = parseFirstSheet(firsts[k]);
+    const 第二聯日期 = secondDate(seconds[k]);
+    // 掃描件的第二聯日期可能 OCR 不出來,兩邊都有才比
+    if (header.填報日期 && 第二聯日期 && header.填報日期 !== 第二聯日期) {
+      throw new Error(`第一聯 ${header.填報日期} 配到的第二聯是 ${第二聯日期}(缺第二聯或頁序錯亂)`);
+    }
+    out.push({ header, dailyRows: collectRows(seconds[k]), extras: {} });
   }
   return out;
 }
@@ -282,5 +298,5 @@ module.exports = {
   parse,
   parseAll,
   selfTest,
-  _internal: { groupRows, parseItemRow, parseFirstSheet, pageKind, rocToISO },
+  _internal: { groupRows, parseItemRow, parseFirstSheet, pageKind, rocToISO, secondDate },
 };

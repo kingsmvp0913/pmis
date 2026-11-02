@@ -343,6 +343,10 @@ async function parseAll(filePath, ctx) {
     }
   }
   if (!groups.length) throw new Error('找不到第一聯/第二聯(此檔非禾結格式)');
+  // 只有第一聯的那天會變成「有日期、0 列明細」,上游照收不報錯,報表那天整片空白
+  const 缺第二聯 = groups.filter((g) => g.cover && !g.details.length)
+    .map((g) => parseCover(g.cover).填報日期 || '日期不明');
+  if (缺第二聯.length) throw new Error(`缺第二聯:${缺第二聯.join('、')}(只有第一聯,沒有明細)`);
 
   const days = groups.map((g) => {
     const h = g.cover ? parseCover(g.cover) : {};

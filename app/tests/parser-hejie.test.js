@@ -226,3 +226,12 @@ describe('parseAll(明禮 9 月掃描件的 OCR 結果)', () => {
     expect([r.單位, r.契約單價, r.本日完成數量, r.本日完成金額, r.累計完成數量]).toEqual(['式', 7500, 0.5, 3750, 1]);
   });
 });
+
+// 廠商只交第一聯時,每天都變成「有日期、0 列明細」:上游照收不報錯,
+// 報表那幾天整片空白、實際進度掛 0,承辦人看不出是檔案少了一聯(僑美 11/02 回報)。
+test('某天只有第一聯、沒有第二聯時要 throw,不可回 0 列明細', async () => {
+  const pages = await filetypes.extractItems(FIXTURE);
+  const 封面 = pages.filter((p) => (p.items || []).some((it) => String(it.s).replace(/\s/g, '').startsWith('第一聯')));
+  await expect(mod.parseAll('x.pdf', { filetypes: { ...filetypes, extractItems: async () => 封面 } }))
+    .rejects.toThrow(/缺第二聯/);
+});

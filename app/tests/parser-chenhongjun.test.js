@@ -82,6 +82,24 @@ describe('chenhongjun parseAll', () => {
     });
   });
 
+  // 第一聯同時印本日與累計兩組進度,報表核對列要的是累計。取本日的話 6/15 起實際進度
+  // 變回 0,累計卻是 6.67%——看起來像進度倒退,報表上只剩 0 跟 1 這種數字。
+  test('進度取累計那一組,逐日不倒退', () => {
+    expect(all[1].header).toMatchObject({ 預定進度: 0.5, 實際進度: 3.92 });
+    expect(all[18].header).toMatchObject({ 預定進度: 9, 實際進度: 15.23 });
+    const seq = all.map((d) => d.header.實際進度);
+    expect(seq.filter((v, i) => i > 0 && v < seq[i - 1])).toHaveLength(0);
+  });
+
+  // 少一天的第二聯、又多出一頁被認成第二聯時,頁數會湊平而整份錯位配對。
+  // 拿掉第 2 天的第二聯、把第 3 天的第二聯複製一份補數:第 2 天會配到 6/14 的明細。
+  test('兩聯日期對不上時 throw,不可錯位配對', async () => {
+    const pages = await filetypes.extractItems(FIXTURE);
+    const 錯位 = [...pages.slice(0, 3), pages[4], pages[5], pages[5], ...pages.slice(6)];
+    await expect(mod.parseAll('x.pdf', { filetypes: { ...filetypes, extractItems: async () => 錯位 } }))
+      .rejects.toThrow(/2026-06-13.*第二聯是 2026-06-14/);
+  });
+
   // 名稱過長時原檔拆兩列,而續行印在**項次列的上一列**;不接回來的話,
   // 每一列都只剩殘缺的後半段,與契約表比對時整份判不一致(實測 E3 從 57 降到 1)
   test('跨行的項目名稱要接回完整', () => {
@@ -128,6 +146,10 @@ describe('parseAll(橋美 9 月掃描件的 OCR 結果)', () => {
   });
 
   // OCR 把「稱」與名稱黏成一框:「工」「程」「名」「稱僑美國小114年老舊廁所整修工程」
+  test('進度取累計(9/1 印本日 0.50/0.67、累計 40.50/71.47)', () => {
+    expect(days[0].header).toMatchObject({ 預定進度: 40.5, 實際進度: 71.47 });
+  });
+
   test('工程名稱與「稱」黏成一框也抽得出', () => {
     expect(days[0].header.工程名稱).toBe('僑美國小114年老舊廁所整修工程');
   });
