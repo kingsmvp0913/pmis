@@ -246,7 +246,7 @@ function assemble(seconds, firsts) {
 //   第二聯次表頭(y744)依 x 序:數量 單價 數量 金額 數量 金額
 //     = 契約數量 契約單價 本日完成數量 本日完成金額 累計完成數量 累計金額
 // 值靠右對齊但都在欄中心 ±15pt 內,取最近的次表頭中心。
-// 名稱跨行時數值印在名稱區塊的垂直中央(同明德),上下**同時**是名稱帶才收編。
+// 名稱跨行時數值印在名稱區塊的垂直中央(同明德),上下對稱分配名稱行(見 parseSecondPdf)。
 
 const PDF_BAND = 2;
 const PDF_NAME_MAX_X = 200;                               // 名稱區 item 起點都 < 50,值區 ≥ 249
@@ -313,16 +313,40 @@ function parseSecondPdf(items) {
   const cols = sub.items.map((it, i) => ({ key: PDF_VALUE_KEYS[i], cx: centerOf(it) }));
   const unitHead = bs.flatMap((b) => b.items).find((it) => despace(it.s) === '單位');
   const unitCx = unitHead ? centerOf(unitHead) : 257;
+  // 項次欄右界依表頭推:10 月起整張表右移約 55pt(「項次」x 21→75),寫死 35 時
+  // 項次全部併進名稱、一天 33 列項次全空,F1 拿相鄰項目的累計互比而整份硬錯
+  const noHead = bs.flatMap((b) => b.items).find((it) => despace(it.s) === '項次');
+  const noMaxX = noHead ? noHead.x + noHead.w + 5 : 35;
   const cw = digitWidth(items);
   const db = bs.find((b) => /日期[:：]/.test(despace(bandText(b))));
   const 日期 = db ? pdfDate((despace(bandText(db)).match(/日期[:：](.+)$/) || [])[1]) : null;
 
   const unitIn = (b) => b.items.map((it) => (Math.abs(centerOf(it) - unitCx) <= 15 ? unitOf(it.s) : null))
     .find((u) => u);
-  const 是名稱帶 = (b) => !!(b && !unitIn(b) && b.items.every((it) => num(it.s) == null)
-    && text(bandText(b)));
+  // 只看值區有沒有數字:名稱裡的「th=2cm」會被 pdf.js 切出一個單獨的「2」
+  const 是名稱帶 = (b) => !!(b && !unitIn(b)
+    && b.items.every((it) => it.x < PDF_NAME_MAX_X || num(it.s) == null) && text(bandText(b)));
 
   const body = bs.filter((b) => b.y < sub.y);
+  const 項次帶 = (b) => b.items.some((it) => it.x < noMaxX && ITEM_NO.test(nfkc(it.s).trim().split(/\s+/)[0]));
+  // 名稱跨行時以項次列為中心上下對稱(上面幾行、下面就幾行)。兩列之間的名稱行先還給
+  // 上一列(還它上面收過的行數),剩下的才是下一列的上半段。原本「上下兩帶都是名稱才收」,
+  // 10 月版面每行名稱都獨立成帶,一行名稱的項次(與名稱同帶)會把上下鄰居的半截名稱吃進來。
+  // 大類列(「壹 直接工程費」)沒有數字也沒有單位,要當邊界,不可算成名稱行。
+  const 上 = new Map();
+  const 下 = new Map();
+  let prev = null;
+  let buf = [];
+  const flush = () => {
+    if (prev) 下.set(prev, buf.splice(0, Math.min((上.get(prev) || []).length, buf.length)));
+  };
+  for (const b of body) {
+    if (unitIn(b)) { flush(); 上.set(b, buf); buf = []; prev = b; continue; }
+    if (是名稱帶(b) && !項次帶(b)) { buf.push(b); continue; }
+    flush(); buf = []; prev = null;
+  }
+  flush();
+
   const dailyRows = [];
   let 本日累計金額 = null;
   for (let i = 0; i < body.length; i++) {
@@ -341,17 +365,12 @@ function parseSecondPdf(items) {
     const parts = [];
     for (const it of own) {
       const s = nfkc(it.s);
-      const m = 項次 == null && it.x < 35 ? s.match(/^\s*(\S+)\s*/) : null;
+      const m = 項次 == null && it.x < noMaxX ? s.match(/^\s*(\S+)\s*/) : null;
       if (m && ITEM_NO.test(m[1])) { 項次 = m[1]; parts.push(s.slice(m[0].length)); continue; }
       parts.push(s);
     }
-    const ups = []; const dns = [];
-    for (let k = 1; k <= 2; k++) {
-      const up = body[i - k]; const dn = body[i + k];
-      if (!是名稱帶(up) || !是名稱帶(dn)) break;
-      ups.unshift(bandText(up));
-      dns.push(bandText(dn));
-    }
+    const ups = (上.get(b) || []).map(bandText);
+    const dns = (下.get(b) || []).map(bandText);
     const row = {
       項次, 工程項目: text([...ups, ...parts, ...dns].join('').trim()), 單位,
       契約單價: null, 契約數量: null,

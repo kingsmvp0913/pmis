@@ -190,6 +190,41 @@ describe('parseAll(元長國小廁所 9 月 PDF)', () => {
 });
 
 // 沒有「第二聯」分頁的檔要明確失敗。回空陣列會被上游當成「這份沒有資料」略過。
+// 10 月起整張表右移約 55pt(「項次」表頭 x 21→75),而且每行名稱各自成帶、以項次列為中心
+// 上下對稱。原本寫死「x < 35 才是項次」:項次全部併進名稱,一天 33 列項次全空,
+// SP3 拿相鄰項目的累計互比,整份 292 個 F1 硬錯(元長 11/02「之前好的突然全錯」)。
+describe('parseAll(元長國小廁所 10 月 PDF:版面右移)', () => {
+  let days;
+  beforeAll(async () => {
+    days = await mod.parseAll(path.join(__dirname, 'fixtures', 'cilifa-october.pdf'), ctx);
+  }, 120000);
+
+  test('31 天,每天 33 項,項次一個都不缺', () => {
+    expect(days).toHaveLength(31);
+    expect(new Set(days.map((d) => d.dailyRows.length))).toEqual(new Set([33]));
+    expect(days.flatMap((d) => d.dailyRows).filter((r) => r.項次 == null)).toHaveLength(0);
+    expect(days[0].dailyRows.map((r) => r.項次).slice(0, 3)).toEqual(['1', '2', '3']);
+  });
+
+  // 一行名稱的項次(與名稱同帶)夾在兩個兩行名稱中間時,上下鄰居的半截名稱不可被吃進來;
+  // 名稱裡的「th=2cm」會被切出單獨的「2」,那一行仍是名稱行。
+  test('跨行名稱依項次列上下對稱分配,不吃鄰居', () => {
+    const 名 = Object.fromEntries(days[30].dailyRows.map((r) => [r.項次, r.工程項目]));
+    expect(名['1']).toBe('乙種施工圍籬、警示帶、安全警示燈等安全措施(租用)');
+    expect(名['2']).toBe('工程告示牌與職安衛告示牌(租用)');
+    expect(名['4']).toMatch(/^既有牆面.*環境保護與清潔$/);
+    expect(名['15']).toBe('安裝鋁合金陽角收邊條');
+    expect(名['20']).toBe('貼深色石材檯面(th=2cm以上,導角處理)');
+    expect(名['21']).toMatch(/^安裝輕鋼架/);
+  });
+
+  test('數值欄照舊歸位(10/31 項次 9、18)', () => {
+    const r = Object.fromEntries(days[30].dailyRows.map((x) => [x.項次, x]));
+    expect(r['9']).toMatchObject({ 單位: 'M2', 契約數量: 163, 契約單價: 500, 累計完成數量: 163 });
+    expect(r['18']).toMatchObject({ 契約數量: 34, 契約單價: 3600, 累計完成數量: 32 });
+  });
+});
+
 test('不是賜利發的活頁簿要 throw,不可回空陣列', async () => {
   await expect(mod.parseAll(path.join(__dirname, 'fixtures', 'kunyao.xlsx'), ctx))
     .rejects.toThrow(/第二聯/);
