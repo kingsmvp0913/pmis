@@ -24,10 +24,16 @@
  * 欄 11 也印著日期(當前選定日 7/31),排在逐日欄(7/15 起)的**左邊**。
  * 從第一個有日期的欄開始收,第一天就會變成 7/31,整份的時序全錯。
  *
+ * ── 進度(四份 9、10 月檔的期末都與欄 11 快照逐位相同)──
+ * 「預定進度」列的逐日格是**每日增量**,欄 11 的快照才是累計 → 逐日累加。
+ * 實際進度逐日沒有,只有快照;快照是廠商自己的算式
+ * Σ 權重(欄 9)× 累計完成數量 ÷ 數量,四捨五入 4 位 → 逐日套同一條算式。
+ * 預定進度的快照也是 4 位,累加值只取到 6 位(與逐日格同精度),期末與快照差在第 5 位。
+ * 照收增量的話報表核對列只印零點幾 %,看起來像沒出來(10/29 回報)。
+ *
  * ── 此格式沒有的東西(一律 null,不回推)──
- * **沒有逐日的實際進度**(只有當前日那一格)、沒有本日完成金額、沒有累計金額、
- * 沒有出工人數。金額欄照 skill 的護欄:算得出來也不填,沒有就是沒有。
- * 預定進度有逐日值,照收。
+ * 沒有本日完成金額、沒有累計金額、沒有出工人數。金額欄照 skill 的護欄:
+ * 算得出來也不填,沒有就是沒有。
  *
  * ── 檔案重複 ──
  * `橋頭施工日誌2026.xlsm`／`-7月.xlsm`／`(1).xlsx` 三份內容完全相同(許厝那三份同理),
@@ -142,8 +148,12 @@ function parseMatrix(grid, meta = {}, serialToISO = null) {
   const items = itemRows(grid, hr);
 
   const 累計 = new Map();
+  let 預定累計 = 0;
   const days = [];
   for (const c of cols) {
+    const 預定 = plr < 0 ? null : num(at(grid, plr, c));
+    預定累計 += 預定 || 0;
+    let 實際 = 0;
     const dailyRows = items.map(({ r, 項次, 單位 }) => {
       const 本日 = num(at(grid, r, c));
       const before = 累計.get(r) || 0;
@@ -151,6 +161,9 @@ function parseMatrix(grid, meta = {}, serialToISO = null) {
       // 這一天沒有值時累計仍要往下帶,不可變成 null——否則 SP3 的 F1 會判成回退。
       const now = 本日 == null ? before : before + 本日;
       累計.set(r, now);
+      const 權重 = num(at(grid, r, 9));
+      const 數量 = num(at(grid, r, 5));
+      if (權重 && 數量) 實際 += 權重 * now / 數量;
       return {
         項次,
         工程項目: text(at(grid, r, 3)),
@@ -169,8 +182,8 @@ function parseMatrix(grid, meta = {}, serialToISO = null) {
         星期: null,                                     // 標了「星期」但值印的是日期,不收
         天氣_上午: amr < 0 ? null : text(at(grid, amr, c)),
         天氣_下午: pmr < 0 ? null : text(at(grid, pmr, c)),
-        預定進度: plr < 0 ? null : num(at(grid, plr, c)),
-        實際進度: null,                                  // 逐日沒有,只有當前日那一格
+        預定進度: plr < 0 ? null : Number(預定累計.toFixed(6)),   // 逐日格是增量;6 位只消浮點尾數
+        實際進度: Number(實際.toFixed(4)),                // 廠商快照的算式,逐日套用
         出工總人數: null,                                // 此格式不提供
         本日累計金額: null,                              // 此格式沒有金額
         承包廠商: meta.承包廠商 || null,
@@ -309,7 +322,8 @@ function selfTest(ft) {
   if (days[0].header.天氣_上午 !== '晴' || days[1].header.天氣_下午 !== '陰') return false;
   if (days[0].header.預定進度 !== 0.002243) return false;
   // 此格式沒有的:一律 null,不由數量×單價回推
-  if (days[0].header.實際進度 !== null || days[0].header.本日累計金額 !== null) return false;
+  if (days[1].header.預定進度 !== 0.004486) return false; // 增量累加:0.002243 × 2
+  if (days[0].header.本日累計金額 !== null) return false;
   if (days[0].dailyRows.some((r) => r.本日完成金額 != null)) return false;
   // 大類「壹／一」與總計列不可變成明細
   if (days[0].dailyRows.length !== 4) return false;
@@ -332,7 +346,7 @@ module.exports = {
     vendorKey: META_VENDOR_KEY,
     version: '1.0.0',
     targetFields: [
-      '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度',
+      '工程名稱', '填報日期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',
       '承包廠商', '開工日期',
       '項次', '工程項目', '單位', '契約單價', '契約數量', '本日完成數量', '累計完成數量',
     ],

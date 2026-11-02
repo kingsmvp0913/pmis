@@ -60,10 +60,24 @@ describe('parseAll(橋頭國小暨許厝分校)', () => {
     expect(h.預定進度).toBeCloseTo(0.002243, 6);
   });
 
+  // 「預定進度」那一列是**每日增量**,欄 11 的快照才是累計;報表核對列要的是累計。
+  // 照收增量的話 7/31 印 0.22%,廠商自己的表上是 4.92%(橋頭/許厝 10/29 回報沒出來)。
+  // 實際進度逐日沒有,但快照 = Σ 權重 × 累計完成數量 ÷ 數量(四捨五入 4 位),
+  // 照廠商自己這條算式逐日算;期末要等於快照,否則就是算式沒抄對。
+  test('預定進度逐日累加、實際進度照廠商算式,7/31 等於欄 11 快照', () => {
+    const 末 = days[days.length - 1].header;
+    expect(末.預定進度).toBeCloseTo(0.0492, 4);   // 快照只印 4 位
+    expect(末.實際進度).toBe(0.103);
+    for (const k of ['預定進度', '實際進度']) {
+      const seq = days.map((d) => d.header[k]);
+      expect(seq.filter((v) => v == null)).toHaveLength(0);
+      expect(seq.filter((v, i) => i > 0 && v < seq[i - 1])).toHaveLength(0);
+    }
+  });
+
   // 此格式沒有的欄位一律 null。金額算得出來(數量 × 單價)也不填 —— 回推出來的數字
   // 看起來完全正常,錯了沒有任何地方會亮。
   test('沒有的欄位一律 null,不回推', () => {
-    expect(days.filter((d) => d.header.實際進度 != null)).toHaveLength(0);
     expect(days.filter((d) => d.header.本日累計金額 != null)).toHaveLength(0);
     expect(days.filter((d) => d.header.出工總人數 != null)).toHaveLength(0);
     expect(days.flatMap((d) => d.dailyRows).filter((r) => r.本日完成金額 != null)).toHaveLength(0);
@@ -132,6 +146,12 @@ describe('parseAll(9 月檔:日期列改成 Excel 日期序號)', () => {
     expect(dates[dates.length - 1]).toBe('2026-09-30');
     expect([...dates].sort()).toEqual(dates);
     expect(new Set(dates).size).toBe(dates.length);
+  });
+
+  test('9/30 的預定/實際進度等於欄 11 快照(27.11% / 27.70%)', () => {
+    const 末 = days[days.length - 1].header;
+    expect(末.預定進度).toBeCloseTo(0.2711, 4);
+    expect(末.實際進度).toBe(0.277);
   });
 
   // 9 月檔的單價已由廠商改成與橋頭經費總表一致(16250 → 9750),照讀。
