@@ -134,9 +134,28 @@ module.exports = {
 };
 ```
 
+### 兩聯分在兩個檔(明德、隆昇)——一定要宣告,否則只傳一聯會靜靜放行
+
+讀取器自己判斷這頁是哪一聯、只讀該檔讀得到的欄位,由 `daily-log-merge.js` 依填報日期合併。
+**另外必須做兩件事**:
+
+- `meta.copies = ['第一聯', '第二聯']`
+- `parseAll` 的每一天加上 `聯別: '第一聯' | '第二聯'`(判斷版面時順手標)
+
+上傳時 `parseFiles` 會在合併前用 `missingCopy` 檢查:只收到其中一聯就直接 400,
+訊息講出「只收到第一聯(日期~日期),沒有第二聯,請一起選進來」。
+**沒宣告的話**:只傳第一聯 → 明細只有當天施作項、沒單價,SP3 報一筆看不懂的 D5;
+只傳第二聯更糟 → 天氣與進度整份空白,SP3 只說「此格式不提供」就**放行**。
+測試要斷言 `meta.copies` 與兩個 fixture 各自的 `聯別`(見 `parser-longsheng.test.js` 末段)。
+
 ## 廠商問題紅框的來源定位契約
 
 讀取器新增或修改後，`daily-log-source-locator.js` 必須能把統一 schema 欄位反查到該讀取器實際取值的位置。下載「廠商問題標註」時會直接使用這個位置在原檔畫框：
+
+⚠️ **新增讀取器時,要把檔名 stem 加進 `daily-log-source-locator.js` 的 `PROFILES` 字串**,
+fixture 檔名也要以 stem 開頭(`tests/daily-log-source-locator.test.js` 據此配對、並要求每支讀取器都有 fixture),
+漏加則該測試紅。配對取**最長前綴**:`heji`(禾吉)是 `hejie`(禾結)的前綴,舊版取第一個命中而把
+`hejie.pdf` 配給 `heji`。
 
 - Excel：`{ kind:'excel', sheet, address, field }`；合併格的 `address` 必須是完整合併範圍。
 - PDF／OCR：`{ kind:'pdf', page, x, y, width, height, field }`。
@@ -429,6 +448,8 @@ scanDays(pdf, {ocr, extractItemsOcr, filetypes, parser}) → parseAll 的輸出
 - **讀取器(含 `selfTest`)不要 `require('xlsx')`/`require('pdf-parse')` 等 node_modules**:讀取器裝到 `data/vendor-parsers/`(該目錄無 node_modules),`selfTest` 內若 `require('xlsx')` 會在安裝時**靜默失敗**(丟例外被 try/catch 吃掉 → 回 false → 「selfTest 未通過」)。一律用注入的 `ft`。(registry 的 `loadModuleFromFile` 已把 app 的 node_modules 併入解析路徑作為防線,但仍以注入為準。)
 - **測試要涵蓋 `registry.install` 完整安裝路徑**(不只直接呼叫 `selfTest`),否則這類「只在安裝時發作」的 bug 會漏(晉林即因此漏掉)。
 - 產出純 deterministic 程式,**不得在讀取器內呼叫任何 AI/網路**。
+- **不得把來源文字直接組成 `new RegExp`**:PDF/儲存格文字裡的 `(`、`[`、`*` 會讓 regex 語法錯誤而 throw,
+  整份讀不動(禾吉的 10/29 日期還原曾這樣寫)。要做「某幾位是萬用字元」的比對就逐字比。
 - 一次只做一家;預設不改其他階段的檔。**發現 SP3/SP2 的缺陷先記下來回報,不要順手改**；
   只有使用者明確要求端到端修復時，才可依「產生流程」第 5.c 的規則另行修正並驗證既有資料。
 - **來源資料的錯照收,不要「修好」它**:廠商把下午天氣整份留白(義鼎)、把日期填成
