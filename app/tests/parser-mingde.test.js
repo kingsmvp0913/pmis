@@ -148,3 +148,11 @@ test('registry.inspect(沙箱載入 + 跑 selfTest)通過', () => {
   expect(got.ok).toBe(true);
   expect(got.meta.vendorKey).toBe('明德土木包工業');
 });
+
+// 上傳時要靠這個判斷「兩聯是不是都傳了」(見 daily-log-merge 的 missingCopy)
+test('meta 宣告兩聯分檔,每天標出來自哪一聯', async () => {
+  expect(mod.meta.copies).toEqual(['第一聯', '第二聯']);
+  const [a, b] = await Promise.all([mod.parseAll(F1, ctx), mod.parseAll(F2, ctx)]);
+  expect(a.every((d) => d.聯別 === '第一聯')).toBe(true);
+  expect(b.every((d) => d.聯別 === '第二聯')).toBe(true);
+}, 180000);

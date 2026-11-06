@@ -413,8 +413,9 @@ async function parseAll(filePath, ctx) {
   for (const p of pages) {
     const items = (p && p.items) || p || [];
     if (!items.length) continue;
-    const d = parseSecond(items) || parseFirst(items);
-    if (d && d.header.填報日期) days.push(d);
+    const second = parseSecond(items);
+    const d = second || parseFirst(items);
+    if (d && d.header.填報日期) days.push({ ...d, 聯別: second ? '第二聯' : '第一聯' });
   }
   // 回空陣列會被上游當成「這份沒有資料」而靜靜略過
   if (!days.length) {
@@ -480,6 +481,9 @@ function selfTest() {
 module.exports = {
   meta: {
     vendorKey: META_VENDOR_KEY,
+    // 兩聯分在兩個檔:上傳只收到其中一聯時,由上層直接擋下並講缺哪一聯
+    // (見 daily-log-merge 的 missingCopy)。
+    copies: ['第一聯', '第二聯'],
     version: '1.0.0',
     targetFields: [
       '工程名稱', '填報日期', '星期', '天氣_上午', '天氣_下午', '預定進度', '實際進度',

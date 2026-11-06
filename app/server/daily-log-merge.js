@@ -114,4 +114,40 @@ function mergeDays(dayLists) {
   return { days, conflicts };
 }
 
-module.exports = { mergeDays, completeness };
+/**
+ * 兩聯分兩個檔的廠商(讀取器 meta.copies 宣告),只收到其中幾聯時回給承辦人看的訊息。
+ *
+ * 只有第一聯:明細沒有單價金額、只列當天施作的項目(隆昇只傳第一聯會報一筆看不懂的 D5);
+ * 只有第二聯:天氣與進度整份空白,SP3 只說「此格式不提供」就放行——**這種更糟,完全沒訊號**。
+ * 兩種都在上傳時講清楚少了哪一聯,而不是讓後面的驗證猜。
+ *
+ * 讀取器沒宣告 copies、或沒有任何一天標了聯別 → 不判斷(回 null),其他家行為不變。
+ *
+ * @param {Array<Array<object>>} dayLists 每個檔案的 parseAll 輸出(合併前,才看得到聯別)
+ * @param {string[]} [copies] 讀取器 meta.copies
+ * @returns {string|null}
+ */
+function missingCopy(dayLists, copies) {
+  if (!Array.isArray(copies) || copies.length < 2) return null;
+  const dates = new Map();                             // 聯別 → 收到的日期
+  for (const list of dayLists || []) {
+    for (const d of list || []) {
+      const k = d && d.聯別;
+      const date = d && d.header && d.header.填報日期;
+      if (!k || !date) continue;
+      if (!dates.has(k)) dates.set(k, []);
+      dates.get(k).push(date);
+    }
+  }
+  if (!dates.size) return null;
+  const missing = copies.filter((c) => !dates.has(c));
+  if (!missing.length) return null;
+  const got = copies.filter((c) => dates.has(c)).map((c) => {
+    const ds = dates.get(c).sort();
+    return `${c}(${ds[0]}~${ds[ds.length - 1]})`;
+  });
+  return `只收到${got.join('、')},沒有${missing.join('、')}。這家廠商的施工日誌分成兩個檔,`
+    + `請把${missing.join('、')}的檔案一起選進來再上傳。`;
+}
+
+module.exports = { mergeDays, completeness, missingCopy };

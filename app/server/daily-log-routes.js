@@ -40,7 +40,7 @@ const filetypes = require('./parsers/filetypes');
 const { extractItemsOcr } = require('./parsers/filetypes/pdf');
 const ocr = require('./ocr');
 const { validateDailyLog } = require('./daily-log-validate');
-const { mergeDays } = require('./daily-log-merge');
+const { mergeDays, missingCopy } = require('./daily-log-merge');
 const {
   daysToOperations, weatherToOperations, diffDays, legacyFormulaOperations, progressBlockOperations,
   vendorProgressOperations, vendorPlannedOperations,
@@ -96,6 +96,12 @@ async function parseFiles(files, parser) {
     } catch (err) {
       throw 讀取失敗(realName(f), err);
     }
+  }
+  const 缺聯 = missingCopy(lists, parser.meta && parser.meta.copies);
+  if (缺聯) {
+    const e = new Error(缺聯);
+    e.讀取失敗 = true;                                   // 承辦人補檔就好,不是伺服器壞掉
+    throw e;
   }
   return { ...mergeDays(lists), lists };
 }

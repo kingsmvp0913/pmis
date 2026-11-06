@@ -82,3 +82,32 @@ test('空輸入不會爆', () => {
   expect(mergeDays([]).days).toHaveLength(0);
   expect(mergeDays(null).days).toHaveLength(0);
 });
+
+// 兩聯分兩個檔的廠商,只傳其中一聯時:只有第一聯 → 明細沒有單價金額、只列當天施作的
+// (隆昇只傳第一聯,10/31 報一筆看不懂的 D5);只有第二聯 → 天氣與進度整份空白,
+// SP3 只說「此格式不提供」就放行。兩種都要在上傳時直接講「少了哪一聯」。
+describe('missingCopy:兩聯分檔只收到其中一聯', () => {
+  const { missingCopy } = require('../server/daily-log-merge');
+  const COPIES = ['第一聯', '第二聯'];
+  const 標 = (list, 聯別) => list.map((d) => ({ ...d, 聯別 }));
+
+  test('只有第一聯 → 講出缺第二聯與收到的日期範圍', () => {
+    const msg = missingCopy([標(第一聯, '第一聯')], COPIES);
+    expect(msg).toMatch(/只收到第一聯/);
+    expect(msg).toMatch(/2026-07-06/);
+    expect(msg).toMatch(/請把第二聯/);
+  });
+
+  test('只有第二聯 → 缺第一聯', () => {
+    expect(missingCopy([標(第二聯, '第二聯')], COPIES)).toMatch(/請把第一聯/);
+  });
+
+  test('兩聯都有 → null', () => {
+    expect(missingCopy([標(第一聯, '第一聯'), 標(第二聯, '第二聯')], COPIES)).toBeNull();
+  });
+
+  test('讀取器沒宣告分聯、或沒標聯別 → 不判斷', () => {
+    expect(missingCopy([第一聯], undefined)).toBeNull();
+    expect(missingCopy([第一聯], COPIES)).toBeNull();
+  });
+});

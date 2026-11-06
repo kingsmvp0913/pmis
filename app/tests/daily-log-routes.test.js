@@ -670,6 +670,19 @@ test('讀取器回傳 0 天時回 400，不讓使用者確認後才寫入失敗'
   expect(res.body.error).toMatch(/沒有解析出任何施工日誌日期/);
 });
 
+// 兩聯分兩個檔的廠商(隆昇、明德)只傳了其中一聯:原本只傳第一聯會報一筆看不懂的
+// D5「缺項目」,只傳第二聯則天氣進度整份空白還放行。預覽與寫入都要直接擋下並講缺哪一聯。
+test('兩聯分檔只收到第一聯時回 400 並講出缺第二聯', async () => {
+  const { app, token, id } = await makeApp();
+  const only = { ...day('2026-04-08', [r('1', 3)]), 聯別: '第一聯' };
+  registry.getParser.mockReturnValue({ meta: { copies: ['第一聯', '第二聯'] }, parseAll: async () => [only] });
+  for (const route of ['parse', 'confirm']) {
+    const res = await post(app, token, id, route).expect(400);
+    expect(res.body.error).toMatch(/只收到第一聯/);
+    expect(res.body.error).toMatch(/請把第二聯/);
+  }
+});
+
 // 掃描件另有一條路(辨識掃描件),但錯誤訊息不講的話承辦人不會知道要去按它。
 test('讀不到文字層時指路到「辨識掃描件」', async () => {
   const { app, token, id } = await makeApp();
