@@ -218,6 +218,25 @@ const tailNo = (s) => normNo(s).split('.').pop();
 // 可能是真施工項目的字眼。
 const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費|營造廢棄物清運證明與環境清潔保護費)/;
 
+// 費用名目的類別。廠商常印縮寫或多括號(「保險費」「營業稅」「職業安全衛生管理費)」),
+// 與契約全名逐字、去標點都對不上;而沒有項次欄的格式只能靠名稱對到契約 → 每天每項
+// E1 硬錯(禾吉長福實測)。各類在契約裡通常只有一筆,同類唯一時才依類別對應。
+// 「職業安全衛生管理費」也含「管理費」,所以職安要排在利潤管理之前。
+// 職安多收「職業安全」:瑞騏印成錯字「職業安全維生管理費」,FEE_NAME 認不得。
+const FEE_CATEGORIES = [
+  ['職安', /安全衛生|職業安全/],
+  ['品管', /品質管制/],
+  ['利潤管理', /利潤|管理費/],
+  ['保險', /保險費/],
+  ['營業稅', /營業稅/],
+  ['空污', /空氣污染/],
+];
+const feeCategory = (s) => {
+  const k = squash(s);
+  const hit = FEE_CATEGORIES.find(([, re]) => re.test(k));
+  return hit ? hit[0] : null;
+};
+
 const MS_PER_DAY = 86400000;
 const dayNum = (iso) => {
   const t = Date.parse(`${iso}T00:00:00Z`);
@@ -418,6 +437,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
     const loose = matchName(c.項目);
     if (loose) contractByLooseName.set(loose, contractByLooseName.has(loose) ? null : c);
   }
+  // 費用類別 → 契約項目。契約這側不先過 FEE_NAME:「第三人意外責任保險費」也要
+  // 佔掉保險類,同類兩筆就不猜。
+  const contractByFeeCat = new Map();
+  for (const c of contract) {
+    const cat = feeCategory(c.項目);
+    if (cat) contractByFeeCat.set(cat, contractByFeeCat.has(cat) ? null : c);
+  }
   const seenItemNos = new Set();
   // 這一天實際涵蓋到的契約項次(已套用 normNo 與名稱對應的結果)。
   // D5 要用它而不是原始項次:見下面 D5 的說明。
@@ -508,7 +534,9 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       let 依名稱對應 = false;
       if (項次 != null && contract.length && !isBlank(r.工程項目)) {
         const byName = contractByName.get(itemNameKey(r.工程項目))
-          || contractByLooseName.get(matchName(r.工程項目));
+          || contractByLooseName.get(matchName(r.工程項目))
+          || (FEE_NAME.test(squash(r.工程項目)) || /職業安全.*費/.test(squash(r.工程項目))
+            ? contractByFeeCat.get(feeCategory(r.工程項目)) : null);
         if (byName && (!c || itemNameKey(r.工程項目) !== itemNameKey(c.項目))) {
           c = byName;
           依名稱對應 = true;
