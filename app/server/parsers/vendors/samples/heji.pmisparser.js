@@ -130,7 +130,6 @@ function rightOf(items, label, xMax = Infinity) {
 function recoverDate(raw, 星期, 開工, 核定, 剩餘) {
   const s = despace(raw);
   if (!/[\u0000-\u001f]/.test(s)) return null;
-  const pat = s.replace(/[\u0000-\u001f]/g, '\\d');
   const m = s.match(/^(.*?)年/);
   if (!m) return null;
   const want = 開工 && 核定 != null && 剩餘 != null ? (() => {
@@ -141,7 +140,9 @@ function recoverDate(raw, 星期, 開工, 核定, 剩餘) {
   if (!want) return null;
   const [y, mo, da] = want.split('-').map(Number);
   const roc = `${y - 1911}年${mo}月${da}日`;
-  if (!new RegExp(`^${pat}$`).test(roc)) return null;
+  // 逐字比對(控制字元那一位只要求是數字)。不把 PDF 文字組成 regex:裡面若有 ( [ 會 throw
+  if (s.length !== roc.length
+    || [...s].some((ch, i) => (/[\u0000-\u001f]/.test(ch) ? !/\d/.test(roc[i]) : ch !== roc[i]))) return null;
   const wd = '日一二三四五六'[new Date(`${want}T00:00:00Z`).getUTCDay()];
   if (星期 && !星期.endsWith(wd)) return null;
   return want;
