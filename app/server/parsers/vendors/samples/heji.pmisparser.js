@@ -18,7 +18,9 @@
  * 左邊 16 列、右邊 15 列,每天都印完整清單(沒施作的數量欄空白)。
  * **沒有項次欄、沒有單價與金額**。項次用「左欄由上而下、再右欄由上而下」的
  * **出現序**(先例 以勒/德信):每天同一份清單同一個順序,出現序是穩定的位置事實。
- * 費用項(職業安全衛生管理費…營業稅)也照出現序編號,SP3 以費用名目認得它們。
+ * 費用項(職業安全衛生管理費…營業稅)依名稱改編中文大寫貳~陸(先例 銘佑):照出現序
+ * 編成 27~31 的話契約表沒有這些項次,名稱又因「職業安全衛生管理費)」「營業稅」與契約
+ * 全名不同而後備對不上,四項每天各一個 E1 硬錯(長福 20261106-0001)。
  *
  * 值靠右對齊、表頭靠左,值的中心落在自己表頭起點與下一欄表頭起點之間
  * (左累計值 c285 在 [257,295)),所以欄界用**表頭起點**。
@@ -58,6 +60,10 @@ const KNOWN_UNITS = new Set(['式', 'M', 'M2', 'M3', 'CM', 'MM', 'KG', 'kg', '�
 const BAND = 2;
 // 名稱行與數值帶相差 ≤ 3 才算「同一行」(實測 0.2~0.8;兩行名稱夾數值時差 5~7)。
 const OWN_LINE = 3;
+
+// 費用項的項次是中文大寫,不佔出現序(見檔頭)。
+const FEE_ORDER = ['貳', '參', '肆', '伍', '陸'];
+const FEE_RE = /(安全衛生管理費|品質管制作業費|利潤及管理費|管理費及利潤|保險費|營業稅)/;
 
 const nfkc = (v) => String(v == null ? '' : v).normalize('NFKC');
 const despace = (v) => nfkc(v).replace(/[\s　]/g, '');
@@ -343,7 +349,12 @@ async function parseAll(filePath, ctx) {
       days.push(cur);
     }
     if (table && !cur.dailyRows.length) {
-      cur.dailyRows = table.map((r, i) => ({ ...r, 項次: String(i + 1) }));  // 出現序(見檔頭)
+      let n = 0;
+      let f = 0;
+      cur.dailyRows = table.map((r) => ({                // 出現序;費用項貳~陸(見檔頭)
+        ...r,
+        項次: FEE_RE.test(despace(r.工程項目)) && f < FEE_ORDER.length ? FEE_ORDER[f++] : String(++n),
+      }));
     }
     if (crew) {
       cur.header.出工總人數 = crew.出工總人數;

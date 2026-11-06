@@ -63,10 +63,13 @@ describe('parseAll(長福 10/22-10/31)', () => {
 
   // 每天印完整清單:左 16 列 + 右 15 列。項次用出現序,兩組的順序不能顛倒,
   // 也不能有一組整組沒收到(那樣項次會整批位移,而每一列看起來都還是合法的)。
-  test('左右兩組依序合成 31 列,項次為出現序', () => {
+  // 費用項改用中文大寫貳~陸:編成 27~31 的話,契約表沒有這些項次,名稱又因
+  // 「職業安全衛生管理費)」「營業稅」與契約全名不同而對不上 → 四項 E1 硬錯 × 每天(長福 20261106-0001)。
+  test('左右兩組依序合成 31 列,施工項次為出現序、費用項為貳~陸', () => {
+    const want = [...Array.from({ length: 26 }, (_, i) => String(i + 1)), '貳', '參', '肆', '伍', '陸'];
     for (const d of days) {
       expect(d.dailyRows).toHaveLength(31);
-      expect(d.dailyRows.map((r) => r.項次)).toEqual(Array.from({ length: 31 }, (_, i) => String(i + 1)));
+      expect(d.dailyRows.map((r) => r.項次)).toEqual(want);
     }
     const rows = days[0].dailyRows;
     expect(rows[0].工程項目).toBe('乙種施工圍籬、警示帶、安全警示燈等安全措施(租用)');
