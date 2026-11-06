@@ -230,7 +230,8 @@ describe('廠商問題標註下載包', () => {
 
   test('重新驗證問題後才產生原格式標註副本與 CSV', async () => {
     const { app, token, id } = await makeApp();
-    feed([day('2026-07-15', [r('1', 1, { 單位: '公尺' })])]);
+    // 借 E4 製造一筆硬錯;名稱要與契約不同,同名時 E4 只是軟警告
+    feed([day('2026-07-15', [r('1', 1, { 工程項目: '別的項目', 單位: '公尺' })])]);
     const checked = await post(app, token, id, 'parse').expect(200);
     const problem = checked.body.errors.find((p) => p.code === 'E4');
     expect(problem).toBeTruthy();
@@ -254,7 +255,7 @@ describe('廠商問題標註下載包', () => {
 
   test('拒絕前端自行改寫的問題內容', async () => {
     const { app, token, id } = await makeApp();
-    feed([day('2026-07-15', [r('1', 1, { 單位: '公尺' })])]);
+    feed([day('2026-07-15', [r('1', 1, { 工程項目: '別的項目', 單位: '公尺' })])]);
     const res = await request(app)
       .post(`/api/projects/${id}/daily-logs/vendor-issues`)
       .set('Authorization', `Bearer ${token}`)
@@ -269,7 +270,7 @@ describe('廠商問題標註下載包', () => {
 
   test('掃描 PDF 沿用同一次 OCR 的解析結果與座標產生標註', async () => {
     const { app, token, id } = await makeApp();
-    const scannedDays = [day('2026-07-15', [r('1', 1, { 單位: '公尺' })])];
+    const scannedDays = [day('2026-07-15', [r('1', 1, { 工程項目: '別的項目', 單位: '公尺' })])];
     registry.getParser.mockReturnValue({ parseAll: jest.fn(async () => { throw new Error('PDF 沒有文字層(掃描件)'); }) });
     scanDays.mockResolvedValueOnce(scannedDays);
     const checked = await asBinary(request(app)

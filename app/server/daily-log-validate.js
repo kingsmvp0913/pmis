@@ -216,13 +216,14 @@ const tailNo = (s) => normNo(s).split('.').pop();
 // 以勒實測:廠商把費用項的累計填成 1.028(契約數量 1),生出 5 個假硬錯。
 // 名稱刻意只收工程會標準表單那幾個固定費用名目,不含「環境保護與清潔」這種
 // 可能是真施工項目的字眼。
-const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費|營造廢棄物清運證明與環境清潔保護費)/;
+// 「管理及利潤」:長澤中和鋪面印「包商管理及利潤費」;「職業安全…管理費」:瑞騏錯字「職業安全維生管理費」。
+const FEE_NAME = /(職業安全衛生管理費|安全衛生管理費|職業安全\S*管理費|品質管制作業費|包商管理費|包商利潤|管理費及利潤|管理及利潤|利潤及管理費|營造綜合保險費|^保險費|營業稅|空氣污染防治費|營造廢棄物清運證明與環境清潔保護費)/;
 
 // 費用名目的類別。廠商常印縮寫或多括號(「保險費」「營業稅」「職業安全衛生管理費)」),
 // 與契約全名逐字、去標點都對不上;而沒有項次欄的格式只能靠名稱對到契約 → 每天每項
 // E1 硬錯(禾吉長福實測)。各類在契約裡通常只有一筆,同類唯一時才依類別對應。
 // 「職業安全衛生管理費」也含「管理費」,所以職安要排在利潤管理之前。
-// 職安多收「職業安全」:瑞騏印成錯字「職業安全維生管理費」,FEE_NAME 認不得。
+// 職安多收「職業安全」:瑞騏印成錯字「職業安全維生管理費」。
 const FEE_CATEGORIES = [
   ['職安', /安全衛生|職業安全/],
   ['品管', /品質管制/],
@@ -535,8 +536,7 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
       if (項次 != null && contract.length && !isBlank(r.工程項目)) {
         const byName = contractByName.get(itemNameKey(r.工程項目))
           || contractByLooseName.get(matchName(r.工程項目))
-          || (FEE_NAME.test(squash(r.工程項目)) || /職業安全.*費/.test(squash(r.工程項目))
-            ? contractByFeeCat.get(feeCategory(r.工程項目)) : null);
+          || (FEE_NAME.test(squash(r.工程項目)) ? contractByFeeCat.get(feeCategory(r.工程項目)) : null);
         if (byName && (!c || itemNameKey(r.工程項目) !== itemNameKey(c.項目))) {
           c = byName;
           依名稱對應 = true;
@@ -568,8 +568,11 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
               契約名稱: String(c.項目),
             });
         }
-        if (!isBlank(r.單位) && squash(r.單位) !== squash(c.單位)) {
-          hard('E4', 日期, 項次, `單位與契約表不一致(契約表:${c.單位})`);
+        // 單位不分大小寫(豐榮印 m2、契約 M2)。名稱已確認是同一項時降為軟警告:
+        // E4 是用來抓「對到錯的項目」,日誌的單位不寫進報表(中和鋪面單位欄整欄錯位)。
+        if (!isBlank(r.單位) && squash(r.單位).toUpperCase() !== squash(c.單位).toUpperCase()) {
+          const 同名 = 依名稱對應 || looseName(r.工程項目) === looseName(c.項目);
+          (同名 ? soft : hard)('E4', 日期, 項次, `單位與契約表不一致(契約表:${c.單位})`);
         }
         if (num(r.契約數量) != null && !approx(num(r.契約數量), Number(c.數量))) {
           hard('E5', 日期, 項次, `契約數量與契約表不一致(契約表:${c.數量})`);

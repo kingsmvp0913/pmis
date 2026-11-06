@@ -48,6 +48,15 @@ describe('Excel(鹿場)', () => {
     expect(h.出工總人數).toBe(1);
   });
 
+  // 分頁 `1` 的 1/1、1/2 那一列是上下兩格合併(A1716:D1717…),readWorkbook 把合併值
+  // 填進每個覆蓋格 → 同一列讀成兩列,本日數量加兩次(B2:累計 221 ≠ 221+121、F4 期末 ≠ 442)。
+  test('上下合併的明細列只算一列', () => {
+    const byDate = Object.fromEntries(days.map((d) => [d.header.填報日期, d.dailyRows]));
+    expect(byDate['2026-01-01']).toHaveLength(1);
+    expect(byDate['2026-01-02']).toHaveLength(1);
+    expect(byDate['2026-01-02'][0]).toMatchObject({ 本日完成數量: 121, 累計完成數量: 221 });
+  });
+
   test('明細:項次用名稱,單位白名單', () => {
     const r = days[0].dailyRows[0];
     expect(r.項次).toBe(r.工程項目);

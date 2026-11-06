@@ -147,6 +147,9 @@ function parseDayGrid(grid, a, end, serialToISO) {
       const name = text(at(grid, r, 0));
       if (name != null && SECTION.test(name)) break;
       if (name == null || SKIP_ROW.test(name)) continue;
+      // 上下合併的一列(鹿場 1/1、1/2:A1716:D1717…)被 readWorkbook 填成逐格相同的兩列;
+      // 不跳過的話本日數量加兩次。真的連印兩次同一項,值也不會連備註都一模一樣。
+      if (r > hr + 1 && JSON.stringify(grid[r]) === JSON.stringify(grid[r - 1])) continue;
       dailyRows.push({
         // 此格式沒有項次欄,而且逐日只列當天有印的項目 —— 用名稱當識別(見檔頭②)
         項次: name,
