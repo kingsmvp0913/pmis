@@ -9,11 +9,13 @@ const parserKeys = fs.readdirSync(PARSER_DIR).filter((f) => f.endsWith('.pmispar
 const fixtureNames = fs.readdirSync(FIXTURE_DIR)
   .filter((name) => ['.pdf', '.xls', '.xlsx', '.xlsm', '.docx'].includes(path.extname(name).toLowerCase()));
 const fixtureCases = fixtureNames.map((name) => {
-  const key = parserKeys.find((candidate) => name.toLowerCase().startsWith(candidate));
+  // 取最長的前綴:heji(禾吉)是 hejie(禾結)的前綴,取第一個會把 hejie.pdf 配給 heji
+  const key = parserKeys.filter((candidate) => name.toLowerCase().startsWith(candidate))
+    .sort((a, b) => b.length - a.length)[0];
   return [key, name];
 }).filter(([key]) => key);
 
-test('43 間廠商讀取器都有來源定位設定與真實 fixture', () => {
+test('46 間廠商讀取器都有來源定位設定與真實 fixture', () => {
   expect(Object.keys(PROFILES).sort()).toEqual(parserKeys);
   for (const key of parserKeys) expect(fixtureCases.some(([fixtureKey]) => fixtureKey === key)).toBe(true);
 });

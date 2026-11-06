@@ -10,7 +10,7 @@ const path = require('path');
 const filetypes = require('./parsers/filetypes');
 
 const PROFILES = Object.fromEntries(
-  'akui baorong baoshu changze chengsheng chenhongjun cilifa dexin dongzhen fusen guoqian hejie hewen hongen huisheng jiayuan jinda jingwei jinlin jiumu kunyao licheng lilong mingde mingyou qiquan shangren shengjie shenglong xianghe xincheng yiding yile yiqian youhe youqian yuanfang yuanlong yusen zhanxiang zhendian zhengyu zhidong'
+  'akui baorong baoshu changze chengsheng chenhongjun cilifa dexin dongzhen fusen guoqian heji hejie hewen hongen huisheng jiayuan jinda jingwei jinlin jiumu kunyao licheng lilong longsheng mingde mingyou qiquan ruiqi shangren shengjie shenglong xianghe xincheng yiding yile yiqian youhe youqian yuanfang yuanlong yusen zhanxiang zhendian zhengyu zhidong'
     .split(' ').map((key) => [key, {}]),
 );
 
