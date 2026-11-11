@@ -730,21 +730,25 @@ function sanitizeDays(input) {
  * 問題清單只能從這裡驗出來的結果裡挑:前端送來的文字不可信——辨識問題會交給
  * 自動修正的 Claude 讀,讓人自己寫內容就等於讓人對它下指令。
  */
-async function revalidate(projectId, files, ctx) {
-  let parsed;
+// 解析上傳的原始檔;文字層讀不到的單檔 PDF 改走 OCR。自動修正的 check-batch.js 也用這條,
+// 掃描件的問題包重跑時才不會永遠「讀取失敗」、修好了也判不出變好。
+async function parseOrScan(files, parser) {
   try {
-    parsed = await parseFiles(files, ctx.parser);
+    return await parseFiles(files, parser);
   } catch (err) {
     const scannedPdf = files.length === 1 && /\.pdf$/i.test(realName(files[0]))
       && /文字層|掃描件/.test(err.message || '');
     if (!scannedPdf) throw err;
     const scanned = await withTempFile(files[0], (p) => scanDaysWithItems(p, {
-      ocr, extractItemsOcr, filetypes, parser: ctx.parser,
+      ocr, extractItemsOcr, filetypes, parser,
     }));
     if (!scanned.days.length) throw new Error('掃描件沒有辨識出可標註的施工日誌內容');
-    parsed = { days: scanned.days, lists: [scanned.days], extractedPagesByFile: [scanned.pages] };
+    return { days: scanned.days, lists: [scanned.days], extractedPagesByFile: [scanned.pages] };
   }
-  const { days, lists, extractedPagesByFile } = parsed;
+}
+
+async function revalidate(projectId, files, ctx) {
+  const { days, lists, extractedPagesByFile } = await parseOrScan(files, ctx.parser);
   const rows = flatten(days, ctx.contract);
   const result = validateDailyLog({
     days, contract: ctx.contract, project: ctx.project,
@@ -923,6 +927,10 @@ function registerRoutes(app) {
         res.json(result);
       } catch (err) {
         if (err && (err.讀取失敗 || err.status === 400)) return res.status(400).json({ error: err.message });
+        // GitHub 拒絕(權杖被撤銷、過期、或建立時沒給寫入權限):講清楚要誰做什麼
+        if (err && [401, 403, 404].includes(err.status)) {
+          return res.status(502).json({ error: '啟用碼已失效或沒有寫入權限,請管理者重發一組啟用碼' });
+        }
         console.error('[daily-log] 送出辨識問題失敗:', err);
         res.status(502).json({ error: `送出辨識問題失敗:${err.message}` });
       }
@@ -972,6 +980,10 @@ function registerRoutes(app) {
         res.json(await fixQueue.submitBatch(await nextBatchFolder(), entries, { 工程: rows[0].name, 工程id: rows[0].id }));
       } catch (err) {
         if (err && (err.讀取失敗 || err.status === 400)) return res.status(400).json({ error: err.message });
+        // GitHub 拒絕(權杖被撤銷、過期、或建立時沒給寫入權限):講清楚要誰做什麼
+        if (err && [401, 403, 404].includes(err.status)) {
+          return res.status(502).json({ error: '啟用碼已失效或沒有寫入權限,請管理者重發一組啟用碼' });
+        }
         console.error('[daily-log] 送出讀取器問題失敗:', err);
         res.status(502).json({ error: `送出失敗:${err.message}` });
       }
@@ -1231,4 +1243,4 @@ function registerRoutes(app) {
 }
 
 // _internal:佇列 workflow 的 check-batch.js 要用同一條解析與驗證路徑重跑問題包
-module.exports = { registerRoutes, APPROVABLE_HARD_ERROR_CODES, _internal: { parseFiles, flatten, priorCum, 最早日 } };
+module.exports = { registerRoutes, APPROVABLE_HARD_ERROR_CODES, _internal: { parseFiles, parseOrScan, flatten, priorCum, 最早日 } };

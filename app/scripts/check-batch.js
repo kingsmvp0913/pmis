@@ -6,13 +6,13 @@
  *
  * 佇列 workflow 在 Claude 動手前、動手後各跑一次:**硬錯沒有變少就不算修好**。這是
  * 不靠 Claude 自述的客觀把關(施工日誌是廠商給的,內容可能夾帶對 Claude 的指令)。
- * 走的是正式流程同一條路(parseFiles → flatten → priorCum → validateDailyLog),
+ * 走的是正式流程同一條路(parseOrScan → flatten → priorCum → validateDailyLog),
  * 讀取器取 repo 裡 samples/ 的版本,依 系統資料/工程.json 的「讀取器」比對 meta.vendorKey 或別名。
  */
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'check-batch';
 const fs = require('fs');
 const path = require('path');
-const { _internal: { parseFiles, flatten, priorCum, 最早日 } } = require('../server/daily-log-routes');
+const { _internal: { parseOrScan, flatten, priorCum, 最早日 } } = require('../server/daily-log-routes');
 const { validateDailyLog } = require('../server/daily-log-validate');
 
 const SAMPLES = path.join(__dirname, '..', 'server', 'parsers', 'vendors', 'samples');
@@ -59,7 +59,7 @@ async function checkBatch(dir) {
   }));
   let days;
   try {
-    ({ days } = await parseFiles(files, parser));
+    ({ days } = await parseOrScan(files, parser));   // 掃描件走 OCR,與正式流程相同
   } catch (err) {
     return { 讀取器: found.file, 讀取失敗: err.message };
   }

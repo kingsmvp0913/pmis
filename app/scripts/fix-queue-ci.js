@@ -3,7 +3,7 @@
  * fix-queue-ci.js — 自動修正 workflow 用的佇列狀態檔處理(見 docs/自動修正流程.md)
  *
  *   node fix-queue-ci.js list     <佇列目錄>                      印出 待修正/ 底下的批號(一行一個)
- *   node fix-queue-ci.js mark     <佇列目錄> <狀態>                把每一批的 狀態/<批號>.json 改成 <狀態>
+ *   node fix-queue-ci.js mark     <佇列目錄> <狀態> [批號...]      把指定批次(預設全部)的 狀態/<批號>.json 改成 <狀態>
  *   node fix-queue-ci.js finalize <佇列目錄> <批號...> --commit <sha|-> --tests <pass|fail|skip> [--reason <沒過的原因>]
  *
  * finalize 讀 Claude 寫的 結果/<批號>.json({狀態, 摘要[], 需要決定[], 放寬規則[], 原因}),配上 workflow
@@ -36,8 +36,8 @@ function writeStatus(queue, b, patch, now) {
   fs.writeFileSync(p, JSON.stringify({ ...cur, ...patch, 更新時間: now.toISOString() }, null, 2));
 }
 
-function mark(queue, state, now = new Date()) {
-  for (const b of batches(queue)) writeStatus(queue, b, { 狀態: state }, now);
+function mark(queue, state, now = new Date(), only = null) {
+  for (const b of batches(queue)) if (!only || only.includes(b)) writeStatus(queue, b, { 狀態: state }, now);
 }
 
 // 結果檔是 Claude 寫的(它讀過廠商檔案),會顯示在使用者畫面上:只收字串、限筆數與長度
@@ -82,7 +82,7 @@ if (require.main === module) {
   const [cmd, queue, ...rest] = process.argv.slice(2);
   const opt = (name) => { const i = rest.indexOf(`--${name}`); return i < 0 ? null : rest[i + 1]; };
   if (cmd === 'list') console.log(batches(queue).join('\n'));
-  else if (cmd === 'mark') mark(queue, rest[0]);
+  else if (cmd === 'mark') mark(queue, rest[0], new Date(), rest.length > 1 ? rest.slice(1) : null);
   else if (cmd === 'finalize') {
     const list = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--')));
     finalize(queue, list, { commit: opt('commit'), tests: opt('tests'), reason: opt('reason') });

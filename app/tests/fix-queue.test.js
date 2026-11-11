@@ -80,6 +80,7 @@ beforeEach(() => {
   Object.assign(fixQueue._deps, { fetch: gh.fetch, now: () => now, hasCommit: async () => false });
   process.env.PMIS_QUEUE_REPO = 'me/pmis';
   process.env.PMIS_GITHUB_TOKEN = 'tok';
+  delete process.env.PMIS_INSTALL_ID;   // activate 會設它;別讓前一支測試的值漏到下一支
   fixQueue._resetCache();
 });
 afterAll(() => {
@@ -136,7 +137,16 @@ test('同一批重按送出不會再建一批(Actions 不會把同一件事修�
   const a = await fixQueue.submitBatch('20261111-0001', entries());
   // 系統資料每次匯出都可能多一筆已寫入日誌,不算「不同的問題」
   const b = await fixQueue.submitBatch('20261111-0002', entries({ '系統資料/契約項目.csv': '項次,改' }));
-  expect(b).toEqual({ 批號: a.批號, 重複: true });
+  expect(b).toMatchObject({ 批號: a.批號, 重複: true });
+  expect(gh.commitCount()).toBe(1);
+});
+
+// 通知沒送到或那一輪掛了:重按送出要能再叫醒,不然這批永遠卡在排隊
+test('同一批還在排隊/處理中時重按送出,會再叫醒一次 workflow', async () => {
+  await fixQueue.submitBatch('20261111-0001', entries());
+  const r = await fixQueue.submitBatch('20261111-0002', entries());
+  expect(r).toMatchObject({ 重複: true, 已通知: true });
+  expect(gh.dispatches).toBe(2);
   expect(gh.commitCount()).toBe(1);
 });
 
@@ -195,7 +205,11 @@ describe('activate', () => {
   test('權杖驗過可寫才存進 config(保留其他設定),並立即生效、同步 git pull 憑證', async () => {
     expect(await fixQueue.activate(` ${TOKEN} `)).toEqual({ enabled: true, repo: 'me/pmis' });
     const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-    expect(cfg).toEqual({ JWT_SECRET: 'keep', GITHUB_TOKEN: TOKEN });
+    expect(cfg).toEqual({ JWT_SECRET: 'keep', GITHUB_TOKEN: TOKEN, INSTALL_ID: expect.stringMatching(/^[0-9a-f]{16}$/) });
+    // 安裝代號只產生一次:重新啟用(換權杖)不能換掉,否則看不到自己先前送的批次
+    const id = cfg.INSTALL_ID;
+    await fixQueue.activate(TOKEN);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).INSTALL_ID).toBe(id);
     expect(process.env.PMIS_GITHUB_TOKEN).toBe(TOKEN);
     expect(synced).toBe(TOKEN);
     expect(fixQueue.enabled()).toBe(true);
@@ -221,10 +235,34 @@ describe('activate', () => {
 });
 
 describe('readStatuses', () => {
-  const put = (批號, s) => gh.put(`狀態/${批號}.json`, { 批號, 摘要: [], 需要決定: [], commit: null, ...s });
+  const put = (批號, s) => gh.put(`狀態/${批號}.json`, { 批號, 來源: '', 摘要: [], 需要決定: [], commit: null, ...s });
 
-  test('處理中超過 1 小時沒更新改顯示「處理逾時」,不讓承辦人一直乾等', async () => {
-    put('A', { 狀態: '處理中', 更新時間: '2026-11-11T08:30:00Z' });
+  // 狀態檔所有電腦共用:看得到別校的工程名稱,也處理不了它的「需要決定」
+  test('只顯示這台電腦送的批次', async () => {
+    process.env.PMIS_INSTALL_ID = 'mine';
+    put('A', { 來源: 'mine', 狀態: '排隊中', 更新時間: '2026-11-11T09:50:00Z' });
+    put('B', { 來源: 'other', 狀態: '需要決定', 更新時間: '2026-11-11T09:50:00Z' });
+    const { items } = await fixQueue.readStatuses();
+    expect(items.map((i) => i.批號)).toEqual(['A']);
+    delete process.env.PMIS_INSTALL_ID;
+  });
+
+  test('送件時帶上這台的安裝代號', async () => {
+    process.env.PMIS_INSTALL_ID = 'mine';
+    const r = await fixQueue.submitBatch('20261111-0001', entries());
+    expect(JSON.parse(gh.headFiles()[`狀態/${r.批號}.json`]).來源).toBe('mine');
+    delete process.env.PMIS_INSTALL_ID;
+  });
+
+  test('排隊中超過 1 小時(通知沒送到)也顯示處理逾時;正常處理中 2 小時不算逾時', async () => {
+    put('Q', { 狀態: '排隊中', 更新時間: '2026-11-11T08:30:00Z' });
+    put('P', { 狀態: '處理中', 更新時間: '2026-11-11T08:00:00Z' });
+    const { items } = await fixQueue.readStatuses();
+    expect(Object.fromEntries(items.map((i) => [i.批號, i.狀態]))).toEqual({ Q: '處理逾時', P: '處理中' });
+  });
+
+  test('處理中超過 5 小時沒更新改顯示「處理逾時」,不讓承辦人一直乾等', async () => {
+    put('A', { 狀態: '處理中', 更新時間: '2026-11-11T04:30:00Z' });
     put('B', { 狀態: '處理中', 更新時間: '2026-11-11T09:30:00Z' });
     const { items } = await fixQueue.readStatuses();
     expect(Object.fromEntries(items.map((i) => [i.批號, i.狀態]))).toEqual({ A: '處理逾時', B: '處理中' });

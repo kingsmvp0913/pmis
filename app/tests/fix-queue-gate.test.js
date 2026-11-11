@@ -105,6 +105,9 @@ test.each([
   ["module.constructor._load('child_process');", 'module'],
   ['process.mainModule.require("x");', '.mainModule'],
   ["const name = 'child_process';", '系統模組名'],
+  // fixtures 什麼副檔名都收,gate 卻只解析 .js
+  ["require('./fixtures/evil.cjs');", '檢查不到的檔案'],
+  ["require('../tests/fixtures/x.js');", '檢查不到的檔案'],
 ])('測試檔新增 %s → 擋下(%s)', (line, label) => {
   write('app/tests/parser-jiumu.test.js', `${line}\n`);
   commit();

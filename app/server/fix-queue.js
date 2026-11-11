@@ -23,8 +23,11 @@ const API = 'https://api.github.com';
 const ROOT = path.resolve(__dirname, '..', '..');
 const BRANCH = 'fix-queue';
 const CACHE_MS = 5 * 60 * 1000;
-// 處理中太久沒動靜 = Actions 掛了或被取消;一直顯示「處理中」承辦人會乾等。
-const STALE_MS = 60 * 60 * 1000;
+// 太久沒動靜 = Actions 掛了、被取消,或叫醒的通知沒送到;一直顯示原狀態承辦人會乾等。
+// 處理中要涵蓋一整輪(Claude 最多 100 分鐘 + 把關兩台主機 + 排隊);排隊中正常幾分鐘內就會開始。
+const STALE_MS = { 處理中: 5 * 60 * 60 * 1000, 排隊中: 60 * 60 * 1000 };
+// 狀態檔是所有電腦共用的:每台用自己的安裝代號只看自己送的(start.js 從 config 帶入,啟用時產生)
+const installId = () => process.env.PMIS_INSTALL_ID || '';
 
 const deps = {
   fetch: (...args) => fetch(...args),
@@ -162,26 +165,33 @@ async function submitBatch(batch, entries, meta = {}) {
   const 指紋 = fingerprint(entries);
   for (const f of await listStatusFiles()) {
     const s = await readStatusFile(f).catch(() => null);
-    if (s && s.指紋 === 指紋 && s.狀態 !== '沒修成') return { 批號: s.批號, 重複: true };
+    if (s && s.指紋 === 指紋 && s.狀態 !== '沒修成') {
+      // 上次的通知沒送到或那一輪掛了:重按送出要能再叫醒一次,不然這批永遠卡在排隊
+      const 未結 = s.狀態 === '排隊中' || s.狀態 === '處理中';
+      return { 批號: s.批號, 重複: true, 已通知: 未結 ? await dispatch() : undefined };
+    }
   }
   const 批號 = `${batch}-${指紋.slice(0, 6)}`;
   const files = {};
   for (const [name, content] of Object.entries(entries)) files[`待修正/${批號}/${name}`] = content;
   files[`狀態/${批號}.json`] = JSON.stringify({
-    批號, 指紋, 工程: meta.工程 || '', 工程id: meta.工程id == null ? null : meta.工程id,
+    批號, 指紋, 來源: installId(), 工程: meta.工程 || '', 工程id: meta.工程id == null ? null : meta.工程id,
     狀態: '排隊中', 更新時間: new Date(deps.now()).toISOString(), 摘要: [], 需要決定: [], commit: null,
   }, null, 2);
   await commitFiles(files, `送出辨識問題 ${批號}`);
   cache = null;
-  // 叫醒 main 上的 workflow。失敗不算送件失敗:問題包已在佇列,下一次送件會一起處理
-  let 已通知 = true;
+  return { 批號, 重複: false, 已通知: await dispatch() };
+}
+
+// 叫醒 main 上的 workflow。失敗不算送件失敗:問題包已在佇列,重按送出或下一次送件會再叫醒
+async function dispatch() {
   try {
     await gh('POST', '/dispatches', { event_type: 'fix-queue' });
+    return true;
   } catch (err) {
-    已通知 = false;
-    console.warn('[fix-queue] 通知 workflow 失敗(下一次送件會一起處理):', err.message);
+    console.warn('[fix-queue] 通知 workflow 失敗(重按送出或下一次送件會再叫醒):', err.message);
+    return false;
   }
-  return { 批號, 重複: false, 已通知 };
 }
 
 let cache = null;
@@ -200,8 +210,10 @@ async function readStatuses({ force = false } = {}) {
   for (const f of await listStatusFiles()) {
     const s = await readStatusFile(f).catch(() => null);
     if (!s || !s.批號) continue;
+    // 別台電腦送的不顯示(看得到別校的工程名稱,也處理不了它的「需要決定」)
+    if ((s.來源 || '') !== installId()) continue;
     let 狀態 = s.狀態;
-    if (狀態 === '處理中' && deps.now() - Date.parse(s.更新時間) > STALE_MS) 狀態 = '處理逾時';
+    if (STALE_MS[狀態] && deps.now() - Date.parse(s.更新時間) > STALE_MS[狀態]) 狀態 = '處理逾時';
     // 已修好 / 需要決定 的批次帶 commit:本機重開拉到它之後,標籤就不再提醒重啟
     const 已套用 = s.commit ? await deps.hasCommit(s.commit) : null;
     items.push({ ...s, 狀態, 已套用 });
@@ -244,6 +256,8 @@ async function activate(newToken) {
   const p = deps.configPath();
   const cfg = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : {};
   cfg.GITHUB_TOKEN = t;
+  if (!cfg.INSTALL_ID) cfg.INSTALL_ID = crypto.randomBytes(8).toString('hex');
+  process.env.PMIS_INSTALL_ID = cfg.INSTALL_ID;
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
   process.env.PMIS_GITHUB_TOKEN = t;
   deps.syncGitAuth(t);

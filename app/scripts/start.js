@@ -51,6 +51,7 @@ if (cfg.DATABASE_URL) process.env.DATABASE_URL = cfg.DATABASE_URL;
 // 自動修正佇列(私人 GitHub repo)與帶權杖更新;沒設定就維持原本的下載 ZIP
 if (cfg.GITHUB_TOKEN) process.env.PMIS_GITHUB_TOKEN = cfg.GITHUB_TOKEN;
 if (cfg.QUEUE_REPO) process.env.PMIS_QUEUE_REPO = cfg.QUEUE_REPO;
+if (cfg.INSTALL_ID) process.env.PMIS_INSTALL_ID = cfg.INSTALL_ID;   // 只看自己這台送的佇列狀態
 try {
   const gitAuth = require('./git-auth');
   gitAuth.syncGitAuth(cfg.GITHUB_TOKEN || '', ROOT);
