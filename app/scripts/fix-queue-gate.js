@@ -63,6 +63,8 @@ const DENY_PROP = new Set([
   'constructor', '__proto__', 'prototype', '__defineGetter__', '__defineSetter__',
   '__lookupGetter__', '__lookupSetter__', 'caller', 'callee', 'fromCharCode', 'fromCodePoint', 'raw',
   'mainModule', 'binding', '_linkedBinding', 'dlopen', 'getBuiltinModule',
+  // Error.prepareStackTrace 拿到的呼叫點物件可以取回 this/函式本身,等於另一條拿到全域物件的路
+  'prepareStackTrace', 'captureStackTrace', 'stackTraceLimit', 'getThis', 'getFunction', 'getTypeName',
 ]);
 // require 以外載入模組的路:拿得到完整的 fs、child_process,繞過上面對 require 的檢查。
 // 只擋「新增的」,既有測試原本就有的 jest.mock 不受影響
