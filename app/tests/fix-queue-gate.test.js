@@ -30,6 +30,15 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
+test('fixtures 裡放可執行的檔案(.js/.cjs/.node)→ 擋下', () => {
+  write('app/tests/fixtures/evil.cjs', 'x');
+  write('app/tests/fixtures/evil.node', 'x');
+  commit();
+  const p = check(dir, base).join('\n');
+  expect(p).toContain('evil.cjs');
+  expect(p).toContain('evil.node');
+});
+
 test('只改讀取器與測試、沒有危險寫法 → 通過', () => {
   write(PARSER, 'const x = cumulativeQtyHeader ? cumulativeQtyHeader.x : 395;\nwhile ((m = re.exec(s))) n++;\n');
   write('app/tests/parser-jiumu.test.js', "const path = require('path');\nprocess.env.PMIS_DATA_DIR = 'x';\n");
@@ -108,6 +117,11 @@ test.each([
   // fixtures 什麼副檔名都收,gate 卻只解析 .js
   ["require('./fixtures/evil.cjs');", '檢查不到的檔案'],
   ["require('../tests/fixtures/x.js');", '檢查不到的檔案'],
+  // 正規化之前比對會被這些寫法繞過
+  ["require('./Fixtures/x');", '檢查不到的檔案'],
+  ["require('./tests/./fixtures/x.js');", '檢查不到的檔案'],
+  // 反斜線路徑不是一般的 ./ 相對路徑,在前一條「不在允許清單的模組」就擋下
+  ["require('.\\\\fixtures\\\\x');", 'require 了'],
 ])('測試檔新增 %s → 擋下(%s)', (line, label) => {
   write('app/tests/parser-jiumu.test.js', `${line}\n`);
   commit();

@@ -17,7 +17,8 @@ const ALLOWED = [
   /^app\/server\/parsers\/vendors\/samples\/[^/]+\.pmisparser\.js$/,
   /^app\/server\/daily-log-validate\.js$/,
   /^app\/tests\/[^/]+\.test\.js$/,
-  /^app\/tests\/fixtures\/[^/]+$/,
+  // fixtures 不准放可執行的檔案:測試 require 得到它,gate 卻不會解析它
+  /^app\/tests\/fixtures\/[^/]+(?<!\.(js|cjs|mjs|node))$/i,
   /^docs\/來源資料缺陷\.md$/,
   /^\.claude\/skills\/gen-vendor-parser\/SKILL\.md$/,
 ];
@@ -119,8 +120,10 @@ function astProblems(file, source, isTest) {
           const arg = node.arguments[0];
           if (!arg || arg.type !== 'StringLiteral') report(node, `require 的參數不是固定字串`);
           else if (DENY_MODULE.test(arg.value) || !TEST_MODULES.test(arg.value)) report(node, `require 了「${arg.value}」`);
-          // fixtures 允許任何副檔名、而 gate 只解析 .js:從那裡 require 等於繞過檢查載入任意程式
-          else if (/(^|\/)fixtures\//.test(arg.value) || /\.(?!js$|json$)[^./]+$/.test(arg.value)) {
+          // fixtures 允許任何副檔名、而 gate 只解析 .js:從那裡 require 等於繞過檢查載入任意程式。
+          // 先正規化再判斷(反斜線、大小寫、./ ../ 都可能拿來繞過)
+          else if (arg.value.includes('\\') || /(^|\/)fixtures(\/|$)/i.test(require('path').posix.normalize(arg.value))
+            || /\.(?!js$|json$)[^./]+$/i.test(arg.value)) {
             report(node, `require 了檢查不到的檔案「${arg.value}」`);
           }
         }
