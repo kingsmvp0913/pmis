@@ -40,6 +40,7 @@ const TEST_MODULES = /^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xls
 const DENY_PROP = new Set([
   'constructor', '__proto__', 'prototype', '__defineGetter__', '__defineSetter__',
   '__lookupGetter__', '__lookupSetter__', 'caller', 'callee', 'fromCharCode', 'fromCodePoint', 'raw',
+  'mainModule', 'binding', '_linkedBinding', 'dlopen',
 ]);
 const DENY_WORD = /constructor|__proto__|prototype|__(define|lookup)[GS]etter__/;
 const DENY_MODULE = /^(child_process|node:|http|https|net|dgram|tls|dns|vm|worker_threads|cluster|module|inspector)/;
@@ -53,7 +54,14 @@ function astProblems(file, source, isTest) {
   }
   const out = [];
   const denyIdent = isTest ? DENY_IDENT_TEST : DENY_IDENT_CODE;
-  const at = (n) => `${file}:${n.loc ? n.loc.start.line : '?'}	`;
+  // 每筆問題帶「出現在哪段程式」:修改前後逐項比對時,require('./x') 與 require('child_process')
+  // 才不會被當成同一種而互相抵銷(只比數量的話,刪一個合理的、加一個危險的就過關)
+  let parentOf = new Map();
+  const snippet = (n) => {
+    const ctx = parentOf.get(n) && parentOf.get(n).type !== 'Program' ? parentOf.get(n) : n;
+    return source.slice(ctx.start, ctx.end).replace(/\s+/g, ' ').slice(0, 160);
+  };
+  const report = (n, msg) => out.push(`${file}:${n.loc ? n.loc.start.line : '?'}\t${msg}\t${snippet(n)}`);
   const isKeyPosition = (node, parent, key) => (
     ((parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && key === 'property' && !parent.computed)
     || ((parent.type === 'ObjectProperty' || parent.type === 'ObjectMethod' || parent.type === 'ClassProperty'
@@ -67,40 +75,47 @@ function astProblems(file, source, isTest) {
       case 'Identifier':
         if (!isKeyPosition(node, parent, key) && denyIdent.has(node.name)) {
           // 讀取器唯一需要的模組系統用法是 module.exports
-          out.push(`${at(node)} 用了「${node.name}」`);
+          report(node, `用了「${node.name}」`);
         }
+        // 測試:require 只准直接呼叫(不准轉存、.call、當參數傳),module 一律不准
+        if (isTest && node.name === 'require' && !isKeyPosition(node, parent, key)
+          && !(parent.type === 'CallExpression' && key === 'callee')) {
+          report(node, '把 require 轉存或間接呼叫');
+        }
+        if (isTest && node.name === 'module' && !isKeyPosition(node, parent, key)) report(node, '用了「module」');
         if (!isTest && node.name === 'module' && !isKeyPosition(node, parent, key)
           && !(parent.type === 'MemberExpression' && key === 'object' && !parent.computed && parent.property.name === 'exports')) {
-          out.push(`${at(node)} 用了「module」(只准 module.exports)`);
+          report(node, `用了「module」(只准 module.exports)`);
         }
         break;
       case 'MemberExpression':
       case 'OptionalMemberExpression':
         if (!node.computed && node.property.type === 'Identifier' && DENY_PROP.has(node.property.name)) {
-          out.push(`${at(node)} 存取「.${node.property.name}」`);
+          report(node, `存取「.${node.property.name}」`);
         }
         if (node.computed && (node.property.type === 'TemplateLiteral'
           || (node.property.type === 'BinaryExpression' && hasString(node.property)))) {
-          out.push(`${at(node)} 用拼湊的字串當屬性名`);
+          report(node, `用拼湊的字串當屬性名`);
         }
         break;
       case 'StringLiteral':
-        if (DENY_WORD.test(node.value)) out.push(`${at(node)} 字串含「${node.value.slice(0, 40)}」`);
+        if (DENY_WORD.test(node.value)) report(node, `字串含「${node.value.slice(0, 40)}」`);
+        if (DENY_MODULE.test(node.value)) report(node, `字串是系統模組名「${node.value.slice(0, 40)}」`);
         break;
       case 'TemplateElement':
-        if (DENY_WORD.test(node.value.cooked || '')) out.push(`${at(node)} 字串含原型相關字樣`);
+        if (DENY_WORD.test(node.value.cooked || '')) report(node, `字串含原型相關字樣`);
         break;
       case 'Import':
       case 'ImportExpression':
       case 'MetaProperty':
       case 'WithStatement':
-        out.push(`${at(node)} 用了「${node.type}」`);
+        report(node, `用了「${node.type}」`);
         break;
       case 'CallExpression':
         if (node.callee.type === 'Identifier' && node.callee.name === 'require' && isTest) {
           const arg = node.arguments[0];
-          if (!arg || arg.type !== 'StringLiteral') out.push(`${at(node)} require 的參數不是固定字串`);
-          else if (DENY_MODULE.test(arg.value) || !TEST_MODULES.test(arg.value)) out.push(`${at(node)} require 了「${arg.value}」`);
+          if (!arg || arg.type !== 'StringLiteral') report(node, `require 的參數不是固定字串`);
+          else if (DENY_MODULE.test(arg.value) || !TEST_MODULES.test(arg.value)) report(node, `require 了「${arg.value}」`);
         }
         break;
       default:
@@ -108,8 +123,8 @@ function astProblems(file, source, isTest) {
     for (const k of Object.keys(node)) {
       if (k === 'loc' || k === 'start' || k === 'end' || k === 'leadingComments' || k === 'trailingComments' || k === 'innerComments' || k === 'extra') continue;
       const v = node[k];
-      if (Array.isArray(v)) v.forEach((c) => visit(c, node, k));
-      else if (v && typeof v.type === 'string') visit(v, node, k);
+      if (Array.isArray(v)) v.forEach((c) => { if (c && typeof c.type === 'string') parentOf.set(c, node); visit(c, node, k); });
+      else if (v && typeof v.type === 'string') { parentOf.set(v, node); visit(v, node, k); }
     }
   };
   visit(ast.program, ast, 'program');
@@ -134,18 +149,18 @@ function check(dir, base, head = 'HEAD') {
     try { before = git(dir, ['show', `${base}:${f}`]); } catch { /* 新檔 */ }
     const isTest = f.startsWith('app/tests/');
     // 既有程式本來就有的(驗證規則 require 專案內模組、測試 require supertest)不算;
-    // 同一類寫法變多才擋。比的是語法樹,註解與拆字照樣抓得到。
-    const kind = (p) => p.split('	')[1];
+    // 逐項比「哪種問題 + 出現在哪段程式」,修改後多出來的才擋。比的是語法樹,註解與拆字照樣抓得到。
+    const kind = (p) => p.split('\t').slice(1).join('\t');
     const had = new Map();
     for (const p of before ? astProblems(f, before, isTest) : []) {
-      if (!p.includes('	')) continue;
+      if (!p.includes('\t')) continue;
       had.set(kind(p), (had.get(kind(p)) || 0) + 1);
     }
     for (const p of astProblems(f, source, isTest)) {
-      if (!p.includes('	')) { problems.push(p); continue; }   // 解析失敗
+      if (!p.includes('\t')) { problems.push(p); continue; }   // 解析失敗
       const n = had.get(kind(p)) || 0;
       if (n > 0) had.set(kind(p), n - 1);
-      else problems.push(p.replace('	', ' '));
+      else { const [where, msg, code] = p.split('\t'); problems.push(`${where} ${msg}:${code}`); }
     }
   }
   return problems;

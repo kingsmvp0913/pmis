@@ -89,6 +89,28 @@ test('既有程式本來就有的寫法不算,同一類變多才擋', () => {
   expect(check(dir, base).join('\n')).toContain('「require」');
 });
 
+// 只比數量會被「刪一個合理的、加一個危險的」抵銷
+test('把既有的 require 換成危險的那個 → 擋下(數量沒變也一樣)', () => {
+  write(PARSER, "const XLSX = require('xlsx');\n");
+  commit();
+  base = git('rev-parse', 'HEAD');
+  write(PARSER, "const cp = require('child_process');\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain("require('child_process')");
+});
+
+test.each([
+  ['const r = require; r("child_process");', '轉存'],
+  ["require.call(null, './x');", '轉存'],
+  ["module.constructor._load('child_process');", 'module'],
+  ['process.mainModule.require("x");', '.mainModule'],
+  ["const name = 'child_process';", '系統模組名'],
+])('測試檔新增 %s → 擋下(%s)', (line, label) => {
+  write('app/tests/parser-jiumu.test.js', `${line}\n`);
+  commit();
+  expect(check(dir, base).join('\n')).toContain(label);
+});
+
 test('解析不了的檔案直接拒絕', () => {
   write(PARSER, 'const x = ;\n');
   commit();

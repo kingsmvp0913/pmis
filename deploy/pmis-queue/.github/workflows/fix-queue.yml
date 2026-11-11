@@ -3,8 +3,9 @@
 # 防提示注入(施工日誌與承辦人說明都會被 Claude 讀)——拆成四個互不相通的 job,各在全新主機上跑:
 #   prepare  標成處理中、記下程式 repo 的基準版本(不跑任何 Claude 碰過的東西)
 #   fix      只有 Claude 金鑰、唯讀權限;改完匯出成 patch 交出去(這台主機之後就丟掉)
-#   gate     全新主機從基準版本套 patch:範圍與寫法檢查 → 全套測試 → 那批硬錯變少;
+#   gate     全新主機從基準版本套 patch:範圍與寫法檢查 → 全套測試;
 #            沒有任何權杖;通過與否看步驟的成敗(runner 判定),測試碼改不了
+#   verify   再一台全新主機:修改前後各跑一次那批,硬錯要變少(不跑測試,測試碼碰不到這裡的數字)
 #   publish  全新主機套 patch、再檢查一次範圍才推;不執行 patch 裡的任何程式
 # 同一個 job 裡 Claude 可以改 git hook、$GITHUB_ENV、後面步驟要跑的腳本,所以權杖絕不和它同 job。
 name: fix-queue
@@ -136,7 +137,6 @@ jobs:
       # 只用 runner 判定的步驟成敗,不讀任何被 patch 碰得到的檔案
       static: ${{ steps.static.outcome }}
       tests: ${{ steps.tests.outcome }}
-      better: ${{ steps.better.outcome }}
       empty: ${{ steps.apply.outputs.empty }}
     steps:
       - uses: actions/checkout@v5
@@ -163,19 +163,12 @@ jobs:
       - name: 安裝繁中字型
         shell: pwsh
         run: Invoke-WebRequest 'https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC%5Bwght%5D.ttf' -OutFile "$env:WINDIR\Fonts\NotoSansTC-VF.ttf"
-      - name: 修改前的硬錯數(基準版本,還沒套 patch)
-        env:
-          BATCHES: ${{ needs.prepare.outputs.batches }}
+      - name: 準備環境(基準版本,還沒套 patch)
         run: |
           cd pmis/app && npm ci
           node scripts/fetch-ocr-models.js || echo "OCR 模型下載失敗"
           # 檢查程式取基準版本的副本放到 repo 外,套 patch 後也用這份
           cp scripts/fix-queue-gate.js "$RUNNER_TEMP/gate.js"
-          mkdir -p "$RUNNER_TEMP/before"
-          for b in $BATCHES; do
-            node scripts/check-batch.js "$GITHUB_WORKSPACE/queue/待修正/$b" --out "$RUNNER_TEMP/before/$b.json" \
-              || echo '{"讀取失敗":"check-batch 失敗"}' > "$RUNNER_TEMP/before/$b.json"
-          done
       - id: apply
         name: 套 patch
         run: |
@@ -192,9 +185,55 @@ jobs:
         name: 全套測試
         if: steps.static.outcome == 'success'
         run: cd pmis/app && SP0_SKIP_EXCEL=1 npx jest --runInBand --forceExit
-      - id: better
-        name: 那批硬錯要變少
-        if: steps.tests.outcome == 'success'
+  # 「那批硬錯有沒有變少」另開一台全新主機:gate 那台跑過 patch 裡的測試(測試碼碰得到檔案),
+  # 修改前的數字放在那裡可能被改;這裡只跑讀取器(gate 已確認它碰不到檔案與系統),不跑測試
+  verify:
+    needs: [prepare, gate]
+    if: always() && needs.gate.outputs.static == 'success' && needs.gate.outputs.tests == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: queue
+          ref: main
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ vars.PMIS_REPO }}
+          ref: ${{ needs.prepare.outputs.base }}
+          token: ${{ secrets.PMIS_READ_TOKEN }}
+          path: pmis
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: fix
+          path: in
+      - name: 修改前的硬錯數
+        env:
+          BATCHES: ${{ needs.prepare.outputs.batches }}
+        run: |
+          cd pmis/app && npm ci
+          node scripts/fetch-ocr-models.js || echo "OCR 模型下載失敗"
+          mkdir -p "$RUNNER_TEMP/before"
+          for b in $BATCHES; do
+            node scripts/check-batch.js "$GITHUB_WORKSPACE/queue/待修正/$b" --out "$RUNNER_TEMP/before/$b.json" \
+              || echo '{"讀取失敗":"check-batch 失敗"}' > "$RUNNER_TEMP/before/$b.json"
+          done
+      - name: 套 patch
+        run: |
+          cd pmis
+          git config user.name pmis-fix-bot && git config user.email pmis-fix-bot@users.noreply.github.com
+          git am -q --keep-cr "$GITHUB_WORKSPACE/in/fix.patch"
+      - name: 那批硬錯要變少
         env:
           BATCHES: ${{ needs.prepare.outputs.batches }}
         run: |
@@ -209,7 +248,7 @@ jobs:
           [ "$BETTER" = 1 ]
 
   publish:
-    needs: [prepare, fix, gate]
+    needs: [prepare, fix, gate, verify]
     if: always() && needs.prepare.outputs.batches != ''
     runs-on: ubuntu-latest
     permissions:
@@ -238,7 +277,7 @@ jobs:
           path: in
       - id: push
         name: 推上程式 repo(只在把關全過時)
-        if: needs.gate.outputs.static == 'success' && needs.gate.outputs.tests == 'success' && needs.gate.outputs.better == 'success'
+        if: needs.gate.outputs.static == 'success' && needs.gate.outputs.tests == 'success' && needs.verify.result == 'success'
         env:
           PMIS_PUSH_TOKEN: ${{ secrets.PMIS_PUSH_TOKEN }}
           BASE: ${{ needs.prepare.outputs.base }}
@@ -270,7 +309,7 @@ jobs:
           HAS_PATCH: ${{ needs.gate.outputs.empty != '1' && needs.fix.result != 'skipped' }}
           STATIC: ${{ needs.gate.outputs.static }}
           TESTS: ${{ needs.gate.outputs.tests }}
-          BETTER: ${{ needs.gate.outputs.better }}
+          BETTER: ${{ needs.verify.result }}
           COMMIT: ${{ steps.push.outputs.commit }}
           CONFLICT: ${{ steps.push.outputs.conflict }}
         run: |
