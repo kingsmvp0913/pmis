@@ -274,6 +274,19 @@ describe('送出辨識問題到自動修正佇列', () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  test('承辦人的補充說明另存一個檔,超過 500 字擋下', async () => {
+    const { app, token, id } = await makeApp();
+    const problem = await realProblem(app, token, id);
+    jest.spyOn(fixQueue, 'enabled').mockReturnValue(true);
+    const submit = jest.spyOn(fixQueue, 'submitBatch').mockResolvedValue({ 批號: 'X', 重複: false });
+    await submitReq(app, token, id, [problem]).field('note', ' 這家 10 月起改交 PDF ').expect(200);
+    expect(submit.mock.calls[0][1]['承辦人說明.txt']).toBe('這家 10 月起改交 PDF');
+
+    const res = await submitReq(app, token, id, [problem]).field('note', '字'.repeat(501)).expect(400);
+    expect(res.body.error).toMatch(/500 字/);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   test('GitHub 失敗時回 502 並帶原因,不吞掉', async () => {
     const { app, token, id } = await makeApp();
     const problem = await realProblem(app, token, id);

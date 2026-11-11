@@ -46,6 +46,8 @@ const AutoFixTag = (() => {
       el('div', { class: 'autofix-item-title' }, `${LABEL[i.顯示]} — ${i.工程 || i.批號}`),
       ...(i.摘要 || []).map((m) => el('div', { class: 'hint' }, `✅ ${m}`)),
       ...(i.需要決定 || []).map((m) => el('div', { class: 'hint' }, `⚠️ ${m}`)),
+      // Claude 自己放寬了驗證規則(降級、加容差)要讓人看得到,不能悄悄少擋錯
+      ...(i.放寬規則 || []).map((m) => el('div', { class: 'hint' }, `📏 放寬規則:${m}`)),
       i.原因 ? el('div', { class: 'hint' }, i.原因) : null,
       el('div', { class: 'hint' }, `批號 ${i.批號}`),
     ]));

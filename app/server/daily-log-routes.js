@@ -902,6 +902,15 @@ function registerRoutes(app) {
         }
 
         const entries = recognitionIssueEntries(files, problems, await systemDataFiles(req.params.id));
+        // 承辦人的補充說明:Claude 當成問題描述讀,不是指令(見 .claude/skills/fix-queue);
+        // 能改什麼由佇列 workflow 的固定檢查決定,與這段文字無關。
+        const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
+        if (note.length > 500) return res.status(400).json({ error: '補充說明請在 500 字以內' });
+        if (note) entries['承辦人說明.txt'] = note;
+        // 佇列那端要用同一支讀取器、同一份工程主檔重跑這批,才算得出「修正前後硬錯各幾筆」
+        entries['系統資料/工程.json'] = JSON.stringify({
+          讀取器: (ctx.parser.meta && ctx.parser.meta.vendorKey) || null, project: ctx.project,
+        }, null, 2);
         const result = await fixQueue.submitBatch(await nextBatchFolder(), entries,
           { 工程: rows[0].name, 工程id: rows[0].id });
         res.json(result);
@@ -1165,4 +1174,5 @@ function registerRoutes(app) {
     });
 }
 
-module.exports = { registerRoutes, APPROVABLE_HARD_ERROR_CODES };
+// _internal:佇列 workflow 的 check-batch.js 要用同一條解析與驗證路徑重跑問題包
+module.exports = { registerRoutes, APPROVABLE_HARD_ERROR_CODES, _internal: { parseFiles, flatten, priorCum, 最早日 } };

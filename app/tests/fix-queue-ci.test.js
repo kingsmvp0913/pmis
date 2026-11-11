@@ -42,6 +42,22 @@ test('Claude 說修好了但全套測試沒過 → 沒修成且不記 commit(標
   expect(read('B1').原因).toMatch(/測試沒過/);
 });
 
+test('把關沒過時帶上 workflow 給的原因;放寬的規則照實記下', () => {
+  put('結果/B1.json', { 狀態: '已修好', 放寬規則: ['F4 加捨入容差'] });
+  finalize(q, ['B1'], { commit: 'abc', tests: 'fail', reason: '那批硬錯沒有變少(9→9)' }, now);
+  expect(read('B1')).toMatchObject({ 狀態: '沒修成', commit: null, 放寬規則: ['F4 加捨入容差'] });
+  expect(read('B1').原因).toMatch(/9→9/);
+});
+
+// 把關那一步自己當掉時 workflow 只會給 commit=- tests=skip;Claude 的「已修好」不可當真,
+// 否則標籤會叫使用者重啟,而他重啟拿到的程式根本沒有修正
+test('Claude 說已修好但沒有實際推上去的 commit → 沒修成', () => {
+  put('結果/B1.json', { 狀態: '已修好', 摘要: ['x'] });
+  finalize(q, ['B1'], { commit: '-', tests: 'skip' }, now);
+  expect(read('B1')).toMatchObject({ 狀態: '沒修成', commit: null });
+  expect(read('B1').原因).toMatch(/沒有推上去/);
+});
+
 test('只需要裁決、沒有改程式 → 需要決定,沒有 commit', () => {
   put('結果/B1.json', { 狀態: '需要決定', 需要決定: ['E6 要放寬嗎'] });
   finalize(q, ['B1'], { commit: '-', tests: 'skip' }, now);

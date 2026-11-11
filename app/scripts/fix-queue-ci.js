@@ -4,11 +4,11 @@
  *
  *   node fix-queue-ci.js list     <佇列目錄>                      印出 待修正/ 底下的批號(一行一個)
  *   node fix-queue-ci.js mark     <佇列目錄> <狀態>                把每一批的 狀態/<批號>.json 改成 <狀態>
- *   node fix-queue-ci.js finalize <佇列目錄> <批號...> --commit <sha|-> --tests <pass|fail|skip>
+ *   node fix-queue-ci.js finalize <佇列目錄> <批號...> --commit <sha|-> --tests <pass|fail|skip> [--reason <沒過的原因>]
  *
- * finalize 讀 Claude 寫的 結果/<批號>.json({狀態, 摘要[], 需要決定[], 原因}),配上 workflow
- * 自己跑的把關結果寫回狀態檔,然後刪掉 待修正/<批號>/ 與 結果/。**把關以 workflow 為準**:
- * Claude 說修好了但全套測試沒過,一律改成「沒修成」,不 push。
+ * finalize 讀 Claude 寫的 結果/<批號>.json({狀態, 摘要[], 需要決定[], 放寬規則[], 原因}),配上 workflow
+ * 自己跑的把關結果(範圍/危險寫法檢查、全套測試、那批硬錯有沒有變少)寫回狀態檔,然後刪掉
+ * 待修正/<批號>/ 與 結果/。**把關以 workflow 為準**:Claude 說修好了但把關沒過,一律「沒修成」,不 push。
  * 狀態檔超過 30 天的順手清掉,佇列不會無限長。
  */
 const fs = require('fs');
@@ -40,7 +40,7 @@ function mark(queue, state, now = new Date()) {
   for (const b of batches(queue)) writeStatus(queue, b, { 狀態: state }, now);
 }
 
-function finalize(queue, list, { commit, tests }, now = new Date()) {
+function finalize(queue, list, { commit, tests, reason }, now = new Date()) {
   for (const b of list) {
     const r = readJson(path.join(queue, '結果', `${b}.json`), null);
     let 狀態 = r && FINAL.has(r.狀態) ? r.狀態 : '沒修成';
@@ -48,12 +48,17 @@ function finalize(queue, list, { commit, tests }, now = new Date()) {
     const 改了程式 = commit && commit !== '-';
     if (改了程式 && tests !== 'pass') {
       狀態 = '沒修成';
-      原因 = `修改後全套測試沒過,沒有推上去${原因 ? `;${原因}` : ''}`;
+      原因 = `${reason || '修改後全套測試沒過'},沒有推上去${原因 ? `;${原因}` : ''}`;
+    } else if (狀態 === '已修好' && !(改了程式 && tests === 'pass')) {
+      // 「已修好」只認實際推上去的 commit:把關步驟自己當掉時 Claude 的自述不可當真
+      狀態 = '沒修成';
+      原因 = `${reason || '沒有可推上去的修改'},沒有推上去${原因 ? `;${原因}` : ''}`;
     }
     writeStatus(queue, b, {
       狀態,
       摘要: (r && r.摘要) || [],
       需要決定: (r && r.需要決定) || [],
+      放寬規則: (r && r.放寬規則) || [],
       原因,
       commit: 改了程式 && tests === 'pass' ? commit : null,
     }, now);
@@ -76,7 +81,7 @@ if (require.main === module) {
   else if (cmd === 'mark') mark(queue, rest[0]);
   else if (cmd === 'finalize') {
     const list = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1].startsWith('--')));
-    finalize(queue, list, { commit: opt('commit'), tests: opt('tests') });
+    finalize(queue, list, { commit: opt('commit'), tests: opt('tests'), reason: opt('reason') });
   } else {
     console.error('用法見檔頭');
     process.exit(2);

@@ -142,6 +142,11 @@ const DailyLogs = (() => {
       class: 'btn btn-primary', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
     }, '送出辨識問題');
     const issueSubmitNote = el('div', { class: 'hint', style: 'display:none' });
+    // 承辦人補充說明(例:「這家 10 月起改交 PDF」)——光看檔案猜不到的事。後端限 500 字。
+    const issueSubmitText = el('textarea', {
+      class: 'form-control', rows: '2', maxlength: '500', style: 'display:none;margin-top:var(--space-2);width:100%',
+      placeholder: '補充說明(選填,500 字內):例如「這家 10 月起改交 PDF」「第 3 頁是別的工程」',
+    });
     const vendorDownloadBtn = el('button', {
       class: 'btn btn-outline', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
     }, '下載廠商問題標註');
@@ -159,6 +164,7 @@ const DailyLogs = (() => {
       listBox.innerHTML = '';
       issueDownloadBtn.style.display = 'none';
       issueSubmitBtn.style.display = 'none';
+      issueSubmitText.style.display = 'none';
       issueSubmitNote.style.display = 'none';
       vendorDownloadBtn.style.display = 'none';
       const all = FindingGroups.groupFindings(errors, warnings);
@@ -174,6 +180,7 @@ const DailyLogs = (() => {
         vendorDownloadBtn.style.display = '';
         issueDownloadBtn.disabled = !有辨識問題;
         issueSubmitBtn.style.display = AutoFixTag.enabled() ? '' : 'none';
+        issueSubmitText.style.display = issueSubmitBtn.style.display;
         issueSubmitBtn.disabled = !有辨識問題;
         vendorDownloadBtn.disabled = !有廠商問題;
         issueDownloadBtn.textContent = 有辨識問題
@@ -256,6 +263,7 @@ const DailyLogs = (() => {
         try {
           const form = fd();
           form.append('problems', JSON.stringify(problems));
+          form.append('note', issueSubmitText.value.trim());
           const r = await Api.upload(`projects/${projectId}/daily-logs/recognition-issues/submit`, form);
           issueSubmitNote.textContent = r.重複
             ? `這批問題已經送過了(${r.批號}),處理進度看右上角`
@@ -480,6 +488,7 @@ const DailyLogs = (() => {
       clearScan();
       issueDownloadBtn.style.display = 'none';
       issueSubmitBtn.style.display = 'none';
+      issueSubmitText.style.display = 'none';
       issueSubmitNote.style.display = 'none';
       vendorDownloadBtn.style.display = 'none';
       if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
@@ -643,6 +652,7 @@ const DailyLogs = (() => {
       scanBox,
       listBox,
       issueDownloadBtn,
+      issueSubmitText,
       issueSubmitBtn,
       vendorDownloadBtn,
       issueSubmitNote,
