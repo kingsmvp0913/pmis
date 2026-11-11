@@ -915,7 +915,7 @@ function registerRoutes(app) {
           { 工程: rows[0].name, 工程id: rows[0].id });
         res.json(result);
       } catch (err) {
-        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
+        if (err && (err.讀取失敗 || err.status === 400)) return res.status(400).json({ error: err.message });
         console.error('[daily-log] 送出辨識問題失敗:', err);
         res.status(502).json({ error: `送出辨識問題失敗:${err.message}` });
       }

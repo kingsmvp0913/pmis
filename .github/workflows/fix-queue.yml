@@ -1,6 +1,9 @@
-# 佇列 repo(私人)的自動修正流程。範本存在程式 repo 的 deploy/pmis-queue/,說明見 docs/自動修正流程.md。
+# 自動修正流程(說明見 docs/自動修正流程.md)。佇列在本 repo 的 fix-queue 分支(repo 必須是私人)。
+# 承辦人送出辨識問題時 PMIS 推進 fix-queue 分支,再發 repository_dispatch 叫醒這裡;
+# 推到 fix-queue 分支本身不會觸發(GitHub 會去那個分支找 workflow,而那裡只有資料)。
+# 全程只用 GitHub 內建的 GITHUB_TOKEN,唯一的 secret 是 CLAUDE_CODE_OAUTH_TOKEN。
 #
-# 防提示注入(施工日誌與承辦人說明都會被 Claude 讀)——拆成四個互不相通的 job,各在全新主機上跑:
+# 防提示注入(施工日誌與承辦人說明都會被 Claude 讀)——拆成五個互不相通的 job,各在全新主機上跑:
 #   prepare  標成處理中、記下程式 repo 的基準版本(不跑任何 Claude 碰過的東西)
 #   fix      只有 Claude 金鑰、唯讀權限;改完匯出成 patch 交出去(這台主機之後就丟掉)
 #   gate     全新主機從基準版本套 patch:範圍與寫法檢查 → 全套測試;
@@ -10,17 +13,13 @@
 # 同一個 job 裡 Claude 可以改 git hook、$GITHUB_ENV、後面步驟要跑的腳本,所以權杖絕不和它同 job。
 name: fix-queue
 on:
-  push:
-    branches: [main]
-    paths: ['待修正/**']
+  repository_dispatch:
+    types: [fix-queue]
   workflow_dispatch:
 concurrency:
   group: fix-queue
   cancel-in-progress: false
 permissions: {}
-env:
-  PMIS_REPO: ${{ vars.PMIS_REPO }}
-
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -33,13 +32,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: queue
-          # 排隊等前一輪的這一輪,觸發它的那個 commit 可能已被前一輪壓掉;一律拿最新的
-          ref: main
+          # 佇列分支一律拿最新的(排隊等前一輪的這一輪,觸發時的狀態可能已被前一輪收掉)
+          ref: fix-queue
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          repository: ${{ vars.PMIS_REPO }}
-          token: ${{ secrets.PMIS_READ_TOKEN }}
           path: pmis
           persist-credentials: false
       - uses: actions/setup-node@v5
@@ -59,7 +56,7 @@ jobs:
           git config user.name pmis-fix-bot && git config user.email pmis-fix-bot@users.noreply.github.com
           node ../pmis/app/scripts/fix-queue-ci.js mark . 處理中
           git add 狀態 && git commit -qm "處理中" || exit 0
-          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main || true
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:fix-queue || true
 
   fix:
     needs: prepare
@@ -75,13 +72,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: queue
-          ref: main
+          ref: fix-queue
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          repository: ${{ vars.PMIS_REPO }}
           ref: ${{ needs.prepare.outputs.base }}
-          token: ${{ secrets.PMIS_READ_TOKEN }}
           path: pmis
           persist-credentials: false
       - uses: actions/setup-node@v5
@@ -142,13 +137,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: queue
-          ref: main
+          ref: fix-queue
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          repository: ${{ vars.PMIS_REPO }}
           ref: ${{ needs.prepare.outputs.base }}
-          token: ${{ secrets.PMIS_READ_TOKEN }}
           path: pmis
           persist-credentials: false
           fetch-depth: 0
@@ -201,13 +194,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: queue
-          ref: main
+          ref: fix-queue
           persist-credentials: false
       - uses: actions/checkout@v5
         with:
-          repository: ${{ vars.PMIS_REPO }}
           ref: ${{ needs.prepare.outputs.base }}
-          token: ${{ secrets.PMIS_READ_TOKEN }}
           path: pmis
           persist-credentials: false
       - uses: actions/setup-node@v5
@@ -257,13 +248,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           path: queue
-          ref: main
+          ref: fix-queue
           persist-credentials: false
-      # 全新的程式 repo checkout:這裡跑的 fix-queue-ci.js / fix-queue-gate.js 都是 main 上的,不是 patch 裡的
+      # 全新的程式 checkout(main):這裡跑的 fix-queue-ci.js / fix-queue-gate.js 都是 main 上的,不是 patch 裡的
       - uses: actions/checkout@v5
         with:
-          repository: ${{ vars.PMIS_REPO }}
-          token: ${{ secrets.PMIS_READ_TOKEN }}
           path: pmis
           persist-credentials: false
           fetch-depth: 0
@@ -279,7 +268,7 @@ jobs:
         name: 推上程式 repo(只在把關全過時)
         if: needs.gate.outputs.static == 'success' && needs.gate.outputs.tests == 'success' && needs.verify.result == 'success'
         env:
-          PMIS_PUSH_TOKEN: ${{ secrets.PMIS_PUSH_TOKEN }}
+          PUSH_TOKEN: ${{ github.token }}
           BASE: ${{ needs.prepare.outputs.base }}
         run: |
           # main 上的檢查程式與它的套件,在套 patch 之前備好
@@ -293,7 +282,7 @@ jobs:
           $G checkout -q "$BASE"
           $G am -q --keep-cr "$GITHUB_WORKSPACE/in/fix.patch"
           NODE_PATH="$GITHUB_WORKSPACE/pmis/app/node_modules" node "$RUNNER_TEMP/gate.js" . "$BASE" HEAD
-          REMOTE="https://x-access-token:${PMIS_PUSH_TOKEN}@github.com/${PMIS_REPO}.git"
+          REMOTE="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           $G fetch -q "$REMOTE" main
           # 處理期間開發端也推了東西:疊上去;疊不上就算沒修成,留給人工
           if $G rebase -q FETCH_HEAD && $G push -q "$REMOTE" HEAD:main; then
@@ -326,13 +315,13 @@ jobs:
           git config user.name pmis-fix-bot && git config user.email pmis-fix-bot@users.noreply.github.com
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for i in 1 2 3; do
-            git fetch -q "$REMOTE" main
+            git fetch -q "$REMOTE" fix-queue
             # 處理期間才送來的新批次要留著:先把遠端的 待修正/、狀態/ 整份拿回來
             git checkout -q FETCH_HEAD -- 待修正 狀態 2>/dev/null || true
             node ../pmis/app/scripts/fix-queue-ci.js finalize . $BATCHES --commit "${COMMIT:--}" --tests "$V" --reason "$R"
-            # 原始檔不留在 git 歷史:整個 main 換成只有現況的一個 commit
+            # 原始檔不留在 git 歷史:整個 fix-queue 分支換成只有現況的一個 commit
             git checkout -q --orphan squashed && git add -A && git commit -qm "佇列現況" \
-              && git push -q --force-with-lease=main:"$(git rev-parse FETCH_HEAD)" "$REMOTE" HEAD:main && exit 0
-            git checkout -q -f main 2>/dev/null; git branch -D squashed 2>/dev/null; git reset -q --hard FETCH_HEAD
+              && git push -q --force-with-lease=fix-queue:"$(git rev-parse FETCH_HEAD)" "$REMOTE" HEAD:fix-queue && exit 0
+            git checkout -q -f fix-queue 2>/dev/null; git branch -D squashed 2>/dev/null; git reset -q --hard FETCH_HEAD
           done
           exit 1

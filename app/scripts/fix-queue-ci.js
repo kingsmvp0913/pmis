@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * fix-queue-ci.js — 佇列 repo 的 GitHub Actions 用的狀態檔處理(見 docs/自動修正流程.md)
+ * fix-queue-ci.js — 自動修正 workflow 用的佇列狀態檔處理(見 docs/自動修正流程.md)
  *
  *   node fix-queue-ci.js list     <佇列目錄>                      印出 待修正/ 底下的批號(一行一個)
  *   node fix-queue-ci.js mark     <佇列目錄> <狀態>                把每一批的 狀態/<批號>.json 改成 <狀態>

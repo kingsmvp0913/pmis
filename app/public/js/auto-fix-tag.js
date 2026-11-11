@@ -64,6 +64,52 @@ const AutoFixTag = (() => {
       return; // 查不到就維持上一次的標籤,不讓整個畫面掛掉
     }
     render();
+    if (!state.enabled && state.可啟用) promptActivate();
+  }
+
+  // 還沒啟用就跳窗請承辦人貼一次啟用碼(管理者用 LINE 傳來的那串)。
+  // 按「稍後再說」這次登入就不再跳,下次登入再提醒;sessionStorage 不能用時就每次都跳。
+  const LATER_KEY = 'pmis.autofix.later';
+  let prompting = false;
+  function promptActivate() {
+    let later = false;
+    try { later = sessionStorage.getItem(LATER_KEY) === '1'; } catch { /* 無痕或封鎖儲存 */ }
+    if (later || prompting) return;
+    prompting = true;
+    const input = el('input', {
+      class: 'form-control', type: 'password', autocomplete: 'off', placeholder: 'github_pat_…',
+    });
+    const err = el('div', { class: 'error-msg', style: 'display:none' });
+    const saveBtn = el('button', { class: 'btn btn-primary', type: 'button' }, '啟用');
+    const laterBtn = el('button', { class: 'btn btn-outline', type: 'button' }, '稍後再說');
+    const box = el('div', {}, [
+      el('p', { style: 'margin-top:0' },
+        '貼上管理者傳給你的啟用碼,系統就能自動更新,並把辨識問題直接送去修正。只要貼這一次。'),
+      el('div', { class: 'form-group' }, [el('label', {}, '啟用碼'), input]),
+      err,
+      el('div', { class: 'modal-actions' }, [laterBtn, saveBtn]),
+    ]);
+    const dlg = modalDialog({ title: '啟用自動更新與自動修正', content: box, onClose: () => { prompting = false; } });
+    laterBtn.onclick = () => {
+      try { sessionStorage.setItem(LATER_KEY, '1'); } catch { /* 同上 */ }
+      dlg.close();
+    };
+    saveBtn.onclick = async () => {
+      err.style.display = 'none';
+      saveBtn.disabled = true;
+      try {
+        await Api.put('auto-fix/activate', { token: input.value });
+        dlg.close();
+        showToast('已啟用,之後會自動更新', 'success');
+        refresh();
+      } catch (e) {
+        err.textContent = e.message;
+        err.style.display = '';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveBtn.click(); });
   }
 
   // renderShell 每次換頁都會重建框架,標籤跟著重掛;輪詢只開一次

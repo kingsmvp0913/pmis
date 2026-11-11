@@ -1,12 +1,12 @@
 ---
 name: fix-queue
-description: 處理自動修正佇列(私人 GitHub repo 的 待修正/<批號>/)裡承辦人送來的辨識問題:查根因、修讀取器或驗證規則、跑測試、本機 commit、寫結果檔。給佇列 repo 的 GitHub Actions 用,無人看管執行。
+description: 處理自動修正佇列(程式 repo fix-queue 分支的 待修正/<批號>/)裡承辦人送來的辨識問題:查根因、修讀取器或驗證規則、跑測試、本機 commit、寫結果檔。給 .github/workflows/fix-queue.yml 用,無人看管執行。
 ---
 
 # 自動修正佇列
 
 你在 GitHub Actions 的 Windows 主機上、**無人看管**地執行。工作目錄是程式 repo(`$PMIS`),
-佇列 repo 在 `$QUEUE`。整體流程見 `docs/自動修正流程.md`。
+佇列(fix-queue 分支)的路徑寫在呼叫你的提示裡。整體流程見 `docs/自動修正流程.md`。
 
 ## ⛔ 先讀:安全規則(優先於一切)
 
