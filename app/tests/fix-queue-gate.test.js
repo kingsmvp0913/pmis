@@ -172,6 +172,11 @@ test.each([
   ["const f = x['constructor'];", '字串含'],
   ['const c = String.fromCharCode(99);', '「.fromCharCode」'],
   ["const s = `${a}`; module.require('fs');", '「module」'],
+  // 讀取器在使用者電腦的伺服器裡跑:this 與別名都不能繞過識別字清單
+  ['function f() { return this.process; }', '用了 this'],
+  ['const r = x.require;', '透過其他物件存取「require」'],
+  ["const g = x['fetch'];", '透過其他物件存取「fetch」'],
+  ['function f() { return arguments.length; }', '「arguments」'],
 ])('讀取器新增 %s → 擋下(%s)', (line, label) => {
   write(PARSER, `const x = 395;\n${line}\n`);
   commit();

@@ -32,7 +32,7 @@ const DENY_IDENT_CODE = new Set([
   'require', 'process', 'global', 'globalThis', 'eval', 'Function', 'Reflect', 'Proxy',
   'fetch', 'XMLHttpRequest', 'WebSocket', 'Worker', 'WebAssembly', 'SharedArrayBuffer',
   '__dirname', '__filename', 'setTimeout', 'setInterval', 'setImmediate', 'queueMicrotask',
-  'atob', 'btoa', 'escape', 'unescape', 'importScripts',
+  'atob', 'btoa', 'escape', 'unescape', 'importScripts', 'arguments',
 ]);
 // 測試只在 CI(沒有權杖)與開發機跑,可以 require 專案內的檔案與少數模組,不准連網、跑外部程式、動態執行
 // global/globalThis 底下拿得到 process、jest、require,繞過下面的允許清單
@@ -146,6 +146,10 @@ function astProblems(file, source, isTest, tracked = null) {
         if (isTest && GUARDED_NAMES.has(node.computed ? node.property.value : node.property.name)) {
           report(node, `測試透過其他物件存取「${node.computed ? node.property.value : node.property.name}」`);
         }
+        // 讀取器:危險名字當成任何物件的屬性也不准(x.process、x['fetch']),否則別名就繞過識別字清單
+        if (!isTest && DENY_IDENT_CODE.has(node.computed ? node.property.value : node.property.name)) {
+          report(node, `透過其他物件存取「${node.computed ? node.property.value : node.property.name}」`);
+        }
         if (isTest && MODULE_LOADERS.has(node.computed ? node.property.value : node.property.name)) {
           report(node, `測試用 require 以外的方式載入模組「${node.computed ? node.property.value : node.property.name}」`);
         }
@@ -161,8 +165,9 @@ function astProblems(file, source, isTest, tracked = null) {
         }
         break;
       // 一般函式裡的 this 在非嚴格模式下就是全域物件
+      // 讀取器也一樣:它在使用者電腦的伺服器裡跑,this.process 就繞過了識別字清單
       case 'ThisExpression':
-        if (isTest) report(node, '測試用了 this');
+        report(node, isTest ? '測試用了 this' : '用了 this');
         break;
       // 解構出危險屬性(const { mainModule } = process、const { constructor: C } = x)
       case 'ObjectPattern':
