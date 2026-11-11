@@ -72,7 +72,8 @@ const MODULE_LOADERS = new Set([
   'requireActual', 'requireMock', 'createMockFromModule', 'mock', 'doMock', 'setMock', 'unstable_mockModule',
   'isolateModules', 'isolateModulesAsync', 'createRequire',
 ]);
-const DENY_WORD = /constructor|__proto__|prototype|__(define|lookup)[GS]etter__/;
+// 字串裡出現也擋:const k = 'prepareStackTrace'; Error[k] = …、Object.defineProperty(Error, 'prepareStackTrace', …)
+const DENY_WORD = /constructor|__proto__|prototype|__(define|lookup)[GS]etter__|prepareStackTrace|captureStackTrace|stackTraceLimit|getThis|getFunction|getTypeName/;
 const DENY_MODULE = /^(child_process|node:|http|https|net|dgram|tls|dns|vm|worker_threads|cluster|module|inspector)/;
 
 // tracked:該版本 git 裡有的檔案。測試 require 的相對路徑必須指到其中一個——
@@ -170,6 +171,14 @@ function astProblems(file, source, isTest, tracked = null) {
       // 讀取器也一樣:它在使用者電腦的伺服器裡跑,this.process 就繞過了識別字清單
       case 'ThisExpression':
         report(node, isTest ? '測試用了 this' : '用了 this');
+        break;
+      // 物件字面量的屬性名:Object.assign(Error, { prepareStackTrace(e, s) {…} })
+      case 'ObjectExpression':
+        for (const pp of node.properties) {
+          const k = (pp.type === 'ObjectProperty' || pp.type === 'ObjectMethod') && !pp.computed
+            && (pp.key.type === 'Identifier' ? pp.key.name : pp.key.type === 'StringLiteral' ? pp.key.value : null);
+          if (k && DENY_PROP.has(k)) report(node, `物件屬性名「${k}」`);
+        }
         break;
       // 解構出危險屬性(const { mainModule } = process、const { constructor: C } = x)
       case 'ObjectPattern':

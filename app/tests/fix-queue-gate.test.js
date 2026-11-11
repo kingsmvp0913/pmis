@@ -178,6 +178,9 @@ test.each([
   ["const g = x['fetch'];", '透過其他物件存取「fetch」'],
   ['function f() { return arguments.length; }', '「arguments」'],
   ['Error.prepareStackTrace = (e, s) => s[0].getThis();', '「.prepareStackTrace」'],
+  ["const k = 'prepareStackTrace'; Error[k] = f;", '字串含'],
+  ["Object.defineProperty(Error, 'prepareStackTrace', { value: f });", '字串含'],
+  ['Object.assign(Error, { prepareStackTrace: f });', '物件屬性名「prepareStackTrace」'],
 ])('讀取器新增 %s → 擋下(%s)', (line, label) => {
   write(PARSER, `const x = 395;\n${line}\n`);
   commit();
