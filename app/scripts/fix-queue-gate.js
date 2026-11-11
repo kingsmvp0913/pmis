@@ -52,7 +52,13 @@ const TEST_MODULES =/^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx
 const DENY_PROP = new Set([
   'constructor', '__proto__', 'prototype', '__defineGetter__', '__defineSetter__',
   '__lookupGetter__', '__lookupSetter__', 'caller', 'callee', 'fromCharCode', 'fromCodePoint', 'raw',
-  'mainModule', 'binding', '_linkedBinding', 'dlopen',
+  'mainModule', 'binding', '_linkedBinding', 'dlopen', 'getBuiltinModule',
+]);
+// require 以外載入模組的路:拿得到完整的 fs、child_process,繞過上面對 require 的檢查。
+// 只擋「新增的」,既有測試原本就有的 jest.mock 不受影響
+const MODULE_LOADERS = new Set([
+  'requireActual', 'requireMock', 'createMockFromModule', 'mock', 'doMock', 'setMock', 'unstable_mockModule',
+  'isolateModules', 'isolateModulesAsync', 'createRequire',
 ]);
 const DENY_WORD = /constructor|__proto__|prototype|__(define|lookup)[GS]etter__/;
 const DENY_MODULE = /^(child_process|node:|http|https|net|dgram|tls|dns|vm|worker_threads|cluster|module|inspector)/;
@@ -122,6 +128,9 @@ function astProblems(file, source, isTest, tracked = null) {
         }
         if (isTest && !node.computed && node.property.type === 'Identifier' && DENY_PROP_TEST.has(node.property.name)) {
           report(node, `測試寫檔「.${node.property.name}」`);
+        }
+        if (isTest && MODULE_LOADERS.has(node.computed ? node.property.value : node.property.name)) {
+          report(node, `測試用 require 以外的方式載入模組「${node.computed ? node.property.value : node.property.name}」`);
         }
         if (isTest && node.computed && node.property.type === 'StringLiteral' && DENY_PROP_TEST.has(node.property.value)) {
           report(node, `測試寫檔「['${node.property.value}']」`);

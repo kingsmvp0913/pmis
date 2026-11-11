@@ -95,6 +95,10 @@ test.each([
   ["const f = require('fs');", 'require 的用法'],
   ["const fs = require('fs'); const k = 'write' + 'FileSync'; fs[k]('x', c);", '[…]'],
   ["const fs = require('fs'); helper(fs);", '轉存或傳出去'],
+  // require 以外拿得到完整 fs 的路
+  ["const f = jest.requireActual('fs');", 'require 以外的方式'],
+  ["jest.mock('../server/x.js', () => require('child_process'));", 'require 以外的方式'],
+  ["const f = process.getBuiltinModule('fs');", '.getBuiltinModule'],
 ])('測試 %s → 擋下(%s)', (line, label) => {
   write('app/tests/parser-jiumu.test.js', `${line}\n`);
   commit();
