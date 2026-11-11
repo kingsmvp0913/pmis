@@ -767,21 +767,35 @@ test('F4 前期紀錄與日誌推得的期初不符時,訊息指出要重傳前�
 });
 
 // 久木(石龜)PDF 每天的本日數量只印到 3 位(實際 1/120=0.00833 印成 0.008),累計卻照
-// 原值四捨五入:46 天後累計 0.383,本日加總 0.368,F4 硬錯擋掉整份。這是印出位數的
-// 捨入,不是填錯——差額在逐日捨入的上限內降為軟警告,超出仍是硬錯。
-test('F4 差額落在本日數量逐日捨入的上限內時降為軟警告', () => {
-  const days = (n, cumOf) => Array.from({ length: n }, (_, i) => day(
+// 原值捨入:46 天後累計 0.383,本日加總 0.368,F4 硬錯擋掉整份。本日金額 50(=6000/120)
+// 證明了那是印出位數的捨入:用「本日金額 ÷ 單價」加總就與累計吻合 → 軟警告。
+// 沒有金額能證明的差額(例如某天本日讀成空白)不是捨入,照舊硬錯——只看小數位數會把它洗掉。
+test('F4 差額能用本日金額證明是捨入時降為軟警告,證明不了照舊硬錯', () => {
+  const contract = [{ 項次: '1', 項目: '項目1', 單位: '式', 數量: 1, 單價: 6000 }];
+  const days = (n, cumOf, patch = () => ({})) => Array.from({ length: n }, (_, i) => day(
     new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10),
-    [row('1', { 本日完成數量: 0.008, 本日完成金額: 0.8, 累計完成數量: cumOf(i + 1) })],
+    [row('1', { 契約單價: 6000, 契約數量: 1, 本日完成數量: 0.008, 本日完成金額: 50, 累計完成數量: cumOf(i + 1), ...patch(i + 1) })],
     { 本日累計金額: null },
   ));
-  const rounded = run(days(46, (k) => Math.round((k / 120) * 1000) / 1000));
+  const cum = (k) => Math.round((k / 120) * 1000) / 1000;
+  const rounded = run(days(46, cum), { contract });
   expect(codes(rounded)).not.toContain('F4');
-  expect(rounded.warnings.find((w) => w.code === 'F4').訊息).toMatch(/小數 3 位/);
+  expect(rounded.warnings.find((w) => w.code === 'F4').訊息).toMatch(/本日金額/);
 
-  // 再多差 0.02,總差 0.035 > 46 天 × 0.0005:不是捨入解釋得了的,照舊擋下
-  const wrong = run(days(46, (k) => Math.round((k / 120) * 1000) / 1000 + (k === 46 ? 0.02 : 0)));
+  // 累計多 0.02:金額換算加總也對不上,不是捨入
+  const wrong = run(days(46, (k) => cum(k) + (k === 46 ? 0.02 : 0)), { contract });
   expect(codes(wrong)).toContain('F4');
+});
+
+test('F4 某天本日數量與金額都讀成空白(累計對)不可被當成捨入', () => {
+  const days = Array.from({ length: 20 }, (_, i) => day(
+    new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10),
+    [row('1', {
+      本日完成數量: i === 9 ? null : 0.5, 本日完成金額: i === 9 ? null : 50, 累計完成數量: 0.5 * (i + 1),
+    })],
+    { 本日累計金額: null },
+  ));
+  expect(codes(run(days))).toContain('F4');
 });
 
 // ── G 主檔一致 ──────────────────────────────────────────────

@@ -337,10 +337,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 寫進去的話,系統的前期合計會與日誌對不上,而那要重傳前一個月才修得掉。
   const logBase = new Map();
   const dailySum = new Map();
-  // F4 的捨入上限:本日數量每印一筆,最多與原值差半個末位(0.008 → 0.0005)。
-  // 久木 PDF 本日只印 3 位(1/120 印成 0.008),累計卻照原值捨入,46 天就差 0.015。
-  const dailyRoundTol = new Map();
-  const dailyDecimals = new Map();
+  // F4 的捨入判斷:久木 PDF 本日只印 3 位(1/120 印成 0.008),累計卻照原值捨入,46 天就差 0.015。
+  // 只看小數位數會把真的漏讀(某天本日讀成空白)也當成捨入;要用本日金額證明:
+  // 逐日「本日金額 ÷ 單價」加總(金額本身最多差半元)與累計吻合,而且確實有某天印出的數量與它不同。
+  const amountQtySum = new Map();   // 有金額就用金額換算,沒有就用印出的本日數量
+  const amountQtyTol = new Map();   // 每筆金額捨入半元 → 數量最多差 0.5 ÷ 單價
+  const qtyRounded = new Set();     // 確實有某天印出的數量是金額換算值的四捨五入
+  const qtyMismatch = new Set();    // 有某天印出的數量與金額換算差太多(不是捨入,是讀錯或填錯)
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
 
@@ -644,11 +647,17 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         f4BaseKnown.add(狀態項次);
       }
       if (本日量 != null) dailySum.set(狀態項次, (dailySum.get(狀態項次) || 0) + 本日量);
-      // 整數視為精確值;只有印出小數的本日數量才可能是捨入過的
-      const 小數位 = 本日量 == null ? 0 : (String(本日量).split('.')[1] || '').length;
-      if (小數位 > 0) {
-        dailyRoundTol.set(狀態項次, (dailyRoundTol.get(狀態項次) || 0) + 0.5 * 10 ** -小數位);
-        dailyDecimals.set(狀態項次, Math.max(dailyDecimals.get(狀態項次) || 0, 小數位));
+      if (本日量 != null) {
+        const 換算 = 本日金額 != null && 單價 ? 本日金額 / 單價 : null;
+        amountQtySum.set(狀態項次, (amountQtySum.get(狀態項次) || 0) + (換算 != null ? 換算 : 本日量));
+        if (換算 != null) {
+          amountQtyTol.set(狀態項次, (amountQtyTol.get(狀態項次) || 0) + 0.5 / 單價);
+          const 差 = Math.abs(換算 - 本日量);
+          // 捨入只會差半個印出的末位(0.008 ↔ 0.00833),加上金額本身的半元;再大就不是捨入
+          const 末位 = (String(本日量).split('.')[1] || '').length;
+          if (差 > 0.5 * 10 ** -末位 + 0.5 / 單價 + 1e-9) qtyMismatch.add(狀態項次);
+          else if (差 > 1e-9) qtyRounded.add(狀態項次);
+        }
       }
       if (累計量 != null) lastCum.set(狀態項次, 累計量);
 
@@ -809,11 +818,13 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         m += `;日誌推得的期初為 ${顯示數(日誌期初)},與系統已寫入的前期合計不符,`
           + '前期月份可能是舊版讀取器寫入或漏傳,請重新上傳前一個月的日誌';
       }
-      const 捨入上限 = dailyRoundTol.get(項次) || 0;
+      const 換算總和 = amountQtySum.get(項次);
+      // 累計本身也是印出的(最多差半個末位),再加 1e-9 的浮點誤差
+      const 容差 = (amountQtyTol.get(項次) || 0) + 0.0005 + 1e-9;
       if (!/^[0-9]+$/.test(tailNo(項次))) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
-      else if (Math.abs(累計 - (期初 + 總和)) <= 捨入上限 + 1e-9) {
-        soft('F4', null, 項次, `${m}(本日完成數量只印到小數 ${dailyDecimals.get(項次)} 位,`
-          + '差額在逐日四捨五入的累積範圍內;報表的累計以各日本日數量加總,會與廠商印的累計差這個數)');
+      else if (qtyRounded.has(項次) && !qtyMismatch.has(項次) && 換算總和 != null && Math.abs(累計 - (期初 + 換算總和)) <= 容差) {
+        soft('F4', null, 項次, `${m}(本日完成數量是四捨五入後印出的:以本日金額 ÷ 單價換算的加總`
+          + ` ${顯示數(期初 + 換算總和)} 與累計吻合;報表的累計以各日本日數量加總,會與廠商印的累計差這個數)`);
       } else hard('F4', null, 項次, m);
     }
   }
