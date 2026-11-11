@@ -766,6 +766,24 @@ test('F4 前期紀錄與日誌推得的期初不符時,訊息指出要重傳前�
   expect(e.訊息).toMatch(/重新上傳/);
 });
 
+// 久木(石龜)PDF 每天的本日數量只印到 3 位(實際 1/120=0.00833 印成 0.008),累計卻照
+// 原值四捨五入:46 天後累計 0.383,本日加總 0.368,F4 硬錯擋掉整份。這是印出位數的
+// 捨入,不是填錯——差額在逐日捨入的上限內降為軟警告,超出仍是硬錯。
+test('F4 差額落在本日數量逐日捨入的上限內時降為軟警告', () => {
+  const days = (n, cumOf) => Array.from({ length: n }, (_, i) => day(
+    new Date(Date.UTC(2026, 6, 1 + i)).toISOString().slice(0, 10),
+    [row('1', { 本日完成數量: 0.008, 本日完成金額: 0.8, 累計完成數量: cumOf(i + 1) })],
+    { 本日累計金額: null },
+  ));
+  const rounded = run(days(46, (k) => Math.round((k / 120) * 1000) / 1000));
+  expect(codes(rounded)).not.toContain('F4');
+  expect(rounded.warnings.find((w) => w.code === 'F4').訊息).toMatch(/小數 3 位/);
+
+  // 再多差 0.02,總差 0.035 > 46 天 × 0.0005:不是捨入解釋得了的,照舊擋下
+  const wrong = run(days(46, (k) => Math.round((k / 120) * 1000) / 1000 + (k === 46 ? 0.02 : 0)));
+  expect(codes(wrong)).toContain('F4');
+});
+
 // ── G 主檔一致 ──────────────────────────────────────────────
 
 test.each([

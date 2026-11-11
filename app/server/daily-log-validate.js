@@ -337,6 +337,10 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
   // 寫進去的話,系統的前期合計會與日誌對不上,而那要重傳前一個月才修得掉。
   const logBase = new Map();
   const dailySum = new Map();
+  // F4 的捨入上限:本日數量每印一筆,最多與原值差半個末位(0.008 → 0.0005)。
+  // 久木 PDF 本日只印 3 位(1/120 印成 0.008),累計卻照原值捨入,46 天就差 0.015。
+  const dailyRoundTol = new Map();
+  const dailyDecimals = new Map();
   const lastCum = new Map();   // F4:期末(最後一天)的累計值
   let prevProgress = null;
 
@@ -640,6 +644,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         f4BaseKnown.add(狀態項次);
       }
       if (本日量 != null) dailySum.set(狀態項次, (dailySum.get(狀態項次) || 0) + 本日量);
+      // 整數視為精確值;只有印出小數的本日數量才可能是捨入過的
+      const 小數位 = 本日量 == null ? 0 : (String(本日量).split('.')[1] || '').length;
+      if (小數位 > 0) {
+        dailyRoundTol.set(狀態項次, (dailyRoundTol.get(狀態項次) || 0) + 0.5 * 10 ** -小數位);
+        dailyDecimals.set(狀態項次, Math.max(dailyDecimals.get(狀態項次) || 0, 小數位));
+      }
       if (累計量 != null) lastCum.set(狀態項次, 累計量);
 
       // B3 兩種算法交叉核對:逐日累加的本日完成金額 vs 累計完成數量×契約單價。
@@ -799,8 +809,12 @@ function validateDailyLog({ days = [], contract = [], project = {}, prior = {} }
         m += `;日誌推得的期初為 ${顯示數(日誌期初)},與系統已寫入的前期合計不符,`
           + '前期月份可能是舊版讀取器寫入或漏傳,請重新上傳前一個月的日誌';
       }
+      const 捨入上限 = dailyRoundTol.get(項次) || 0;
       if (!/^[0-9]+$/.test(tailNo(項次))) soft('F4', null, 項次, `${m}(費用項目的累計欄語意各家不一,僅供參考)`);
-      else hard('F4', null, 項次, m);
+      else if (Math.abs(累計 - (期初 + 總和)) <= 捨入上限 + 1e-9) {
+        soft('F4', null, 項次, `${m}(本日完成數量只印到小數 ${dailyDecimals.get(項次)} 位,`
+          + '差額在逐日四捨五入的累積範圍內;報表的累計以各日本日數量加總,會與廠商印的累計差這個數)');
+      } else hard('F4', null, 項次, m);
     }
   }
 
