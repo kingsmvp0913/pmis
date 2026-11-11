@@ -721,6 +721,34 @@ function sanitizeDays(input) {
   });
 }
 
+/**
+ * 重新解析與驗證上傳的原始檔(文字層讀不到的單檔 PDF 走 OCR)。
+ * 問題清單只能從這裡驗出來的結果裡挑:前端送來的文字不可信——辨識問題會交給
+ * 自動修正的 Claude 讀,讓人自己寫內容就等於讓人對它下指令。
+ */
+async function revalidate(projectId, files, ctx) {
+  let parsed;
+  try {
+    parsed = await parseFiles(files, ctx.parser);
+  } catch (err) {
+    const scannedPdf = files.length === 1 && /\.pdf$/i.test(realName(files[0]))
+      && /文字層|掃描件/.test(err.message || '');
+    if (!scannedPdf) throw err;
+    const scanned = await withTempFile(files[0], (p) => scanDaysWithItems(p, {
+      ocr, extractItemsOcr, filetypes, parser: ctx.parser,
+    }));
+    if (!scanned.days.length) throw new Error('掃描件沒有辨識出可標註的施工日誌內容');
+    parsed = { days: scanned.days, lists: [scanned.days], extractedPagesByFile: [scanned.pages] };
+  }
+  const { days, lists, extractedPagesByFile } = parsed;
+  const rows = flatten(days, ctx.contract);
+  const result = validateDailyLog({
+    days, contract: ctx.contract, project: ctx.project,
+    prior: priorCum(await loadRecords(projectId), 最早日(rows), ctx.contract, await loadOpenings(projectId), days),
+  });
+  return { days, lists, extractedPagesByFile, result };
+}
+
 function registerRoutes(app) {
   // 期初累計:開始用本系統之前已完成的數量。回傳一律以契約表為骨架逐項列出,
   // 承辦人才看得到「哪些項目還沒填」——只回已存的那幾筆會讓漏填的項目隱形。
@@ -854,17 +882,23 @@ function registerRoutes(app) {
       try {
         if (!fixQueue.enabled()) return res.status(400).json({ error: '尚未設定自動修正佇列,請改用「下載辨識問題」' });
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+        const ctx = await loadContext(req.params.id);
+        if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
         const { rows } = await query('SELECT id, name FROM projects WHERE id = $1', [req.params.id]);
-        if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
 
         const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
         if (!files.length) return res.status(400).json({ error: '請上傳施工日誌原始檔' });
 
-        let problems;
-        try { problems = JSON.parse(req.body.problems || 'null'); }
+        let selected;
+        try { selected = JSON.parse(req.body.problems || 'null'); }
         catch { return res.status(400).json({ error: '辨識問題列表格式不合法' }); }
-        if (!Array.isArray(problems) || !problems.length || problems.some((p) => !p || typeof p !== 'object')) {
+        if (!Array.isArray(selected) || !selected.length || selected.some((p) => !p || typeof p !== 'object')) {
           return res.status(400).json({ error: '請至少選擇一項辨識問題' });
+        }
+        // 只送伺服器自己驗得出來的問題(見 revalidate):清單會交給自動修正的 Claude 讀
+        const problems = verifiedProblems(selected, (await revalidate(req.params.id, files, ctx)).result);
+        if (problems.length !== selected.length) {
+          return res.status(400).json({ error: '問題內容已變更，請重新檢查施工日誌後再送出' });
         }
 
         const entries = recognitionIssueEntries(files, problems, await systemDataFiles(req.params.id));
@@ -872,6 +906,7 @@ function registerRoutes(app) {
           { 工程: rows[0].name, 工程id: rows[0].id });
         res.json(result);
       } catch (err) {
+        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
         console.error('[daily-log] 送出辨識問題失敗:', err);
         res.status(502).json({ error: `送出辨識問題失敗:${err.message}` });
       }
@@ -894,25 +929,7 @@ function registerRoutes(app) {
         }
 
         // 與 confirm 相同，重新解析與驗證；前端只能選問題，不能自行製造標註內容。
-        let parsed;
-        try {
-          parsed = await parseFiles(files, ctx.parser);
-        } catch (err) {
-          const scannedPdf = files.length === 1 && /\.pdf$/i.test(realName(files[0]))
-            && /文字層|掃描件/.test(err.message || '');
-          if (!scannedPdf) throw err;
-          const scanned = await withTempFile(files[0], (p) => scanDaysWithItems(p, {
-            ocr, extractItemsOcr, filetypes, parser: ctx.parser,
-          }));
-          if (!scanned.days.length) throw new Error('掃描件沒有辨識出可標註的施工日誌內容');
-          parsed = { days: scanned.days, lists: [scanned.days], extractedPagesByFile: [scanned.pages] };
-        }
-        const { days, lists, extractedPagesByFile } = parsed;
-        const rows = flatten(days, ctx.contract);
-        const result = validateDailyLog({
-          days, contract: ctx.contract, project: ctx.project,
-          prior: priorCum(await loadRecords(req.params.id), 最早日(rows), ctx.contract, await loadOpenings(req.params.id), days),
-        });
+        const { lists, extractedPagesByFile, result } = await revalidate(req.params.id, files, ctx);
         const problems = verifiedProblems(selected, result);
         if (problems.length !== selected.length) {
           return res.status(400).json({ error: '問題內容已變更，請重新檢查施工日誌後再下載' });
