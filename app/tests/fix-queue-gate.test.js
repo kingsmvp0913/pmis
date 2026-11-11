@@ -105,6 +105,11 @@ test.each([
   ["const { getBuiltinModule: g } = process;", 'process 只准常用功能'],
   ["const p = process; p.mainModule;", 'process 只准常用功能'],
   ["const { mainModule } = obj;", '解構出「mainModule」'],
+  // 從全域物件繞進去
+  ['globalThis.process.mainModule;', '「globalThis」'],
+  ["global['jest'].requireActual('fs');", '「global」'],
+  ['const g = (function () { return this; })(); g.process;', '測試用了 this'],
+  ['obj.require("fs");', '透過其他物件存取「require」'],
 ])('測試 %s → 擋下(%s)', (line, label) => {
   write('app/tests/parser-jiumu.test.js', `${line}\n`);
   commit();

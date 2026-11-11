@@ -35,7 +35,11 @@ const DENY_IDENT_CODE = new Set([
   'atob', 'btoa', 'escape', 'unescape', 'importScripts',
 ]);
 // 測試只在 CI(沒有權杖)與開發機跑,可以 require 專案內的檔案與少數模組,不准連網、跑外部程式、動態執行
-const DENY_IDENT_TEST = new Set(['eval', 'Function', 'Reflect', 'Proxy', 'fetch', 'XMLHttpRequest', 'WebSocket', 'Worker', 'WebAssembly']);
+// global/globalThis 底下拿得到 process、jest、require,繞過下面的允許清單
+const DENY_IDENT_TEST = new Set(['eval', 'Function', 'Reflect', 'Proxy', 'fetch', 'XMLHttpRequest', 'WebSocket', 'Worker', 'WebAssembly',
+  'global', 'globalThis']);
+// 這些名字當成任何物件的屬性來存取也不准(x.process、x['jest']):別名會繞過允許清單
+const GUARDED_NAMES = new Set(['process', 'jest', 'fs', 'require']);
 // 測試在執行時改寫 repo 裡的檔案再 require,就繞過了上面的解析;讀取器測試只需要讀 fixture。
 // 只比「新增的」:既有測試寫暫存檔的那些不受影響(見 check() 的逐項比對)
 const DENY_PROP_TEST = new Set([
@@ -139,6 +143,9 @@ function astProblems(file, source, isTest, tracked = null) {
         if (isTest && !node.computed && node.property.type === 'Identifier' && DENY_PROP_TEST.has(node.property.name)) {
           report(node, `測試寫檔「.${node.property.name}」`);
         }
+        if (isTest && GUARDED_NAMES.has(node.computed ? node.property.value : node.property.name)) {
+          report(node, `測試透過其他物件存取「${node.computed ? node.property.value : node.property.name}」`);
+        }
         if (isTest && MODULE_LOADERS.has(node.computed ? node.property.value : node.property.name)) {
           report(node, `測試用 require 以外的方式載入模組「${node.computed ? node.property.value : node.property.name}」`);
         }
@@ -152,6 +159,10 @@ function astProblems(file, source, isTest, tracked = null) {
           || (node.property.type === 'BinaryExpression' && hasString(node.property)))) {
           report(node, `用拼湊的字串當屬性名`);
         }
+        break;
+      // 一般函式裡的 this 在非嚴格模式下就是全域物件
+      case 'ThisExpression':
+        if (isTest) report(node, '測試用了 this');
         break;
       // 解構出危險屬性(const { mainModule } = process、const { constructor: C } = x)
       case 'ObjectPattern':
