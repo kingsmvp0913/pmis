@@ -496,6 +496,11 @@ function parsePdfItemRows(rows) {
   const cumulativeQtyHeader = !quantityHeader && todayQtyHeader && header.items.find((item) => (
     item.x > todayQtyHeader.x && item.x < amountFrom && squash(item.s).startsWith('累計完')
   ));
+  // 115.07~10 石龜合併版 PDF 又是一個字一個 item,而且「累計完成數量」的「數量」擠到下一行,
+  // 上面逐字比對湊不齊四個標籤。改在逐字串起的表頭裡找「本日完成數」之後的「累計完」。
+  const todayQtyAt = headerText.indexOf('本日完成數');
+  const spelledCumQtyAt = todayQtyAt < 0 ? -1 : headerText.indexOf('累計完', todayQtyAt);
+  const spelledCumQtyX = spelledCumQtyAt < 0 ? null : headerChars[spelledCumQtyAt].x;
   const columns = useSpelled ? {
     本日數量起: spelled[0],
     累計數量起: spelled[1],
@@ -503,7 +508,8 @@ function parsePdfItemRows(rows) {
     累計金額起: spelled[3],
   } : {
     本日數量起: quantityHeader ? quantityHeader.x : 367 + dx,
-    累計數量起: cumulativeQtyHeader ? cumulativeQtyHeader.x : quantityMid,
+    累計數量起: cumulativeQtyHeader ? cumulativeQtyHeader.x
+      : (!quantityHeader && spelledCumQtyX != null && spelledCumQtyX < amountFrom ? spelledCumQtyX : quantityMid),
     本日金額起: amountFrom,
     累計金額起: amountMid,
   };
