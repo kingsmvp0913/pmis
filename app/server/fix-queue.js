@@ -262,9 +262,13 @@ function registerRoutes(app) {
       res.json({ enabled: true, items: [], error: '暫時查不到自動修正狀態' });
     }
   });
-  // 重開後前端看到 enabled=false 就跳出啟用視窗;貼一次就好,權杖不回傳給前端
+  // 重開後前端看到 enabled=false 就跳出啟用視窗;貼一次就好,權杖不回傳給前端。
+  // 這組權杖能寫程式 repo,只准管理員設定(同 parser-routes 的 requireAdmin 判準)
   app.put('/api/auto-fix/activate', verifyToken, async (req, res) => {
     try {
+      const { query } = require('./db');
+      const { rows } = await query('SELECT role FROM users WHERE id = $1', [req.userId]);
+      if (!rows[0] || rows[0].role !== 'admin') return res.status(403).json({ error: '需要管理員權限' });
       res.json(await activate(req.body && req.body.token));
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message });

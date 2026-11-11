@@ -42,4 +42,24 @@ function syncGitAuth(token, root, git = (args, cwd) => execFileSync('git', args,
   return 'set';
 }
 
-module.exports = { syncGitAuth, headerFor, KEY };
+// 自動修正的佇列在同一個 repo 的 fix-queue 分支,裡面是各校送來的施工日誌。
+// git pull 預設會抓所有分支 → 每台使用者電腦都會順便下載別校的日誌。只抓 main。
+const FETCH = '+refs/heads/main:refs/remotes/origin/main';
+
+/** @returns {'set'|'unchanged'|'skipped'} */
+function syncFetchScope(root, git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })) {
+  try {
+    git(['remote', 'get-url', 'origin'], root);
+  } catch {
+    return 'skipped';
+  }
+  let have = '';
+  try { have = git(['config', '--local', '--get-all', 'remote.origin.fetch'], root).trim(); } catch { /* 沒設定 */ }
+  // 已經抓下來的佇列分支一併刪掉(只刪參照;物件等 git 自己的 gc 回收)
+  try { git(['update-ref', '-d', 'refs/remotes/origin/fix-queue'], root); } catch { /* 本來就沒有 */ }
+  if (have === FETCH) return 'unchanged';
+  git(['config', '--local', '--replace-all', 'remote.origin.fetch', FETCH], root);
+  return 'set';
+}
+
+module.exports = { syncGitAuth, syncFetchScope, headerFor, KEY, FETCH };

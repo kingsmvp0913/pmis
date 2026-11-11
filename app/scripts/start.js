@@ -52,7 +52,9 @@ if (cfg.DATABASE_URL) process.env.DATABASE_URL = cfg.DATABASE_URL;
 if (cfg.GITHUB_TOKEN) process.env.PMIS_GITHUB_TOKEN = cfg.GITHUB_TOKEN;
 if (cfg.QUEUE_REPO) process.env.PMIS_QUEUE_REPO = cfg.QUEUE_REPO;
 try {
-  require('./git-auth').syncGitAuth(cfg.GITHUB_TOKEN || '', ROOT);
+  const gitAuth = require('./git-auth');
+  gitAuth.syncGitAuth(cfg.GITHUB_TOKEN || '', ROOT);
+  gitAuth.syncFetchScope(ROOT);
 } catch (err) {
   console.warn(`[更新] 設定 GitHub 權杖失敗:${err.message}`);
 }

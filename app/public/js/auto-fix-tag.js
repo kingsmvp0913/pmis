@@ -64,7 +64,9 @@ const AutoFixTag = (() => {
       return; // 查不到就維持上一次的標籤,不讓整個畫面掛掉
     }
     render();
-    if (!state.enabled && state.可啟用) promptActivate();
+    // 只對管理員跳(後端也只准管理員啟用)
+    const isAdmin = window.PmisApp && PmisApp.currentUser && PmisApp.currentUser.role === 'admin';
+    if (!state.enabled && state.可啟用 && isAdmin) promptActivate();
   }
 
   // 還沒啟用就跳窗請承辦人貼一次啟用碼(管理者用 LINE 傳來的那串)。

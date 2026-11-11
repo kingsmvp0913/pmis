@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { syncGitAuth, headerFor, KEY } = require('../scripts/git-auth');
+const { syncGitAuth, syncFetchScope, headerFor, KEY, FETCH } = require('../scripts/git-auth');
 
 const git = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 let dir;
@@ -42,4 +42,20 @@ test('ZIP 下載的資料夾沒有 .git 時略過,不報錯', () => {
   } finally {
     fs.rmSync(plain, { recursive: true, force: true });
   }
+});
+
+// 佇列分支裡是各校的施工日誌:使用者電腦 git pull 不可以順便把它抓下來
+test('只抓 main,已抓下來的佇列分支參照刪掉', () => {
+  git(['remote', 'add', 'origin', 'https://github.com/me/pmis.git'], dir);
+  git(['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-qm', 'x'], dir);
+  git(['update-ref', 'refs/remotes/origin/fix-queue', 'HEAD'], dir);
+  expect(git(['config', '--get', 'remote.origin.fetch'], dir).trim()).toBe('+refs/heads/*:refs/remotes/origin/*');
+  expect(syncFetchScope(dir)).toBe('set');
+  expect(git(['config', '--get-all', 'remote.origin.fetch'], dir).trim()).toBe(FETCH);
+  expect(() => git(['rev-parse', '--verify', 'refs/remotes/origin/fix-queue'], dir)).toThrow();
+  expect(syncFetchScope(dir)).toBe('unchanged');
+});
+
+test('沒有 origin(ZIP 下載)時略過', () => {
+  expect(syncFetchScope(dir)).toBe('skipped');
 });
