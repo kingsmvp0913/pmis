@@ -93,6 +93,9 @@ function astProblems(file, source, isTest) {
         if (!node.computed && node.property.type === 'Identifier' && DENY_PROP.has(node.property.name)) {
           report(node, `存取「.${node.property.name}」`);
         }
+        if (node.computed && node.property.type === 'StringLiteral' && DENY_PROP.has(node.property.value)) {
+          report(node, `存取「['${node.property.value}']」`);
+        }
         if (node.computed && (node.property.type === 'TemplateLiteral'
           || (node.property.type === 'BinaryExpression' && hasString(node.property)))) {
           report(node, `用拼湊的字串當屬性名`);
@@ -148,6 +151,12 @@ function check(dir, base, head = 'HEAD') {
     let before = '';
     try { before = git(dir, ['show', `${base}:${f}`]); } catch { /* 新檔 */ }
     const isTest = f.startsWith('app/tests/');
+    // 修改前就載入了系統模組的測試(git-auth、gate 本身…):改它時可以直接用已載入的 execFileSync,
+    // 不必新增 require 就繞過下面的比對,所以這類測試一律不准自動修改
+    if (isTest && before && /require\(\s*['"](child_process|vm|worker_threads|net|http|https)['"]\s*\)/.test(before)) {
+      problems.push(`改到載入系統模組的測試(只准人工修改):${f}`);
+      continue;
+    }
     // 既有程式本來就有的(驗證規則 require 專案內模組、測試 require supertest)不算;
     // 逐項比「哪種問題 + 出現在哪段程式」,修改後多出來的才擋。比的是語法樹,註解與拆字照樣抓得到。
     const kind = (p) => p.split('\t').slice(1).join('\t');

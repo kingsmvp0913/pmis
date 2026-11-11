@@ -111,6 +111,22 @@ test.each([
   expect(check(dir, base).join('\n')).toContain(label);
 });
 
+// 已經載入 child_process 的測試,改它時用既有的 execFileSync 就不必新增 require
+test('修改前就載入系統模組的測試不准自動修改', () => {
+  write('app/tests/git-auth.test.js', "const { execFileSync } = require('child_process');\n");
+  commit();
+  base = git('rev-parse', 'HEAD');
+  write('app/tests/git-auth.test.js', "const { execFileSync } = require('child_process');\nexecFileSync('curl', ['x']);\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain('只准人工修改');
+});
+
+test("讀取器用字串存取危險屬性 x['mainModule'] → 擋下", () => {
+  write(PARSER, "const x = 395;\nconst m = y['mainModule'];\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain("['mainModule']");
+});
+
 test('解析不了的檔案直接拒絕', () => {
   write(PARSER, 'const x = ;\n');
   commit();
