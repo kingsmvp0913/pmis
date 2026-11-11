@@ -17,6 +17,8 @@ function apiError(data, status) {
   // 是要重跑 OCR 的。
   if (Array.isArray(data.errors)) err.errors = data.errors;
   if (Array.isArray(data.warnings)) err.warnings = data.warnings;
+  // 沒有讀取器/整份讀不動:畫面可以提供「送去自動產生讀取器」
+  if (data.可送出讀取器) err.可送出讀取器 = true;
   return err;
 }
 

@@ -5,6 +5,7 @@
  *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
  *   POST /api/projects/:id/daily-logs/recognition-issues 問題清單 + 原始檔 → ZIP
  *   POST /api/projects/:id/daily-logs/recognition-issues/submit 同上,改推進自動修正佇列
+ *   POST /api/projects/:id/daily-logs/parser/submit   沒有讀取器/整份讀不動 → 推進佇列產生或修正讀取器
  *   POST /api/projects/:id/daily-logs/vendor-issues   廠商問題 → 原格式紅框標註 ZIP
  *   POST /api/projects/:id/daily-logs/confirm         無未放行硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
@@ -103,6 +104,7 @@ async function parseFiles(files, parser) {
   if (缺聯) {
     const e = new Error(缺聯);
     e.讀取失敗 = true;                                   // 承辦人補檔就好,不是伺服器壞掉
+    e.缺聯 = true;                                       // 不是讀取器的問題,不提供「送出產生讀取器」
     throw e;
   }
   return { ...mergeDays(lists), lists };
@@ -268,6 +270,8 @@ async function loadContext(projectId) {
     return {
       error: {
         status: 400,
+        // 自動修正可以替這家產生讀取器(名稱要與廠商主檔一字不差,安裝時才歸得了位)
+        缺讀取器: parserKey || null,
         message: parserKey !== vendorKey
           ? `「${vendorKey}」設定沿用「${parserKey}」的讀取器,但「${parserKey}」尚未安裝施工日誌讀取器,無法解析這份日誌`
           : vendorKey
@@ -816,7 +820,9 @@ function registerRoutes(app) {
         if (!files.length) return res.status(400).json({ error: '請上傳施工日誌' });
         if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
         const ctx = await loadContext(req.params.id);
-        if (ctx.error) return res.status(ctx.error.status).json({ error: ctx.error.message });
+        if (ctx.error) {
+          return res.status(ctx.error.status).json({ error: ctx.error.message, 可送出讀取器: !!ctx.error.缺讀取器 });
+        }
 
         const { days, conflicts } = await parseFiles(files, ctx.parser);
         const rows = flatten(days, ctx.contract);
@@ -843,7 +849,8 @@ function registerRoutes(app) {
           diff,
         });
       } catch (err) {
-        if (err && err.讀取失敗) return res.status(400).json({ error: err.message });
+        // 讀取器整份讀不動(版面改了、新格式):可以送去自動修正
+        if (err && err.讀取失敗) return res.status(400).json({ error: err.message, 可送出讀取器: !err.缺聯 });
         console.error('[daily-log] 施工日誌解析失敗:', err);
         res.status(500).json({ error: '施工日誌解析失敗,請稍後重試;若持續失敗請聯絡系統管理員' });
       }
@@ -918,6 +925,55 @@ function registerRoutes(app) {
         if (err && (err.讀取失敗 || err.status === 400)) return res.status(400).json({ error: err.message });
         console.error('[daily-log] 送出辨識問題失敗:', err);
         res.status(502).json({ error: `送出辨識問題失敗:${err.message}` });
+      }
+    });
+
+  // 找不到這家的讀取器,或讀取器整份讀不動(版面改了、新格式):原始檔送進同一條自動修正佇列,
+  // 由 Claude 照 gen-vendor-parser 產生或修正讀取器。條件由伺服器自己重判,不信前端;
+  // 讀得動的日誌一律走「送出辨識問題」。問題清單只有伺服器產生的那一句。
+  app.post('/api/projects/:id/daily-logs/parser/submit', verifyToken,
+    upload.array('daily_log'), async (req, res) => {
+      try {
+        if (!fixQueue.enabled()) return res.status(400).json({ error: '尚未啟用自動修正' });
+        if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+        const { rows } = await query('SELECT id, name FROM projects WHERE id = $1', [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌原始檔' });
+
+        const ctx = await loadContext(req.params.id);
+        let 類型;
+        let 說明;
+        let 讀取器;
+        if (ctx.error) {
+          if (!ctx.error.缺讀取器) return res.status(ctx.error.status).json({ error: ctx.error.message });
+          類型 = '新讀取器';
+          說明 = ctx.error.message;
+          讀取器 = ctx.error.缺讀取器;
+        } else {
+          try {
+            await parseFiles(files, ctx.parser);
+            return res.status(400).json({ error: '這份日誌讀得動;有問題請用「送出辨識問題」' });
+          } catch (err) {
+            if (!err || !err.讀取失敗 || err.缺聯) throw err;
+            類型 = '讀不動';
+            說明 = err.message;
+            讀取器 = ctx.parser.meta && ctx.parser.meta.vendorKey;
+          }
+        }
+        const problems = [{ 級別: '硬錯', code: 類型 === '新讀取器' ? '缺讀取器' : '讀取失敗', 日期: '', 項次: '', 訊息: 說明 }];
+        const entries = recognitionIssueEntries(files, problems, await systemDataFiles(req.params.id));
+        const note = typeof req.body.note === 'string' ? req.body.note.trim() : '';
+        if (note.length > 500) return res.status(400).json({ error: '補充說明請在 500 字以內' });
+        if (note) entries['承辦人說明.txt'] = note;
+        entries['系統資料/工程.json'] = JSON.stringify({
+          類型, 讀取器, project: ctx.project || { 工程名稱: rows[0].name, 承包廠商: 讀取器 },
+        }, null, 2);
+        res.json(await fixQueue.submitBatch(await nextBatchFolder(), entries, { 工程: rows[0].name, 工程id: rows[0].id }));
+      } catch (err) {
+        if (err && (err.讀取失敗 || err.status === 400)) return res.status(400).json({ error: err.message });
+        console.error('[daily-log] 送出讀取器問題失敗:', err);
+        res.status(502).json({ error: `送出失敗:${err.message}` });
       }
     });
 

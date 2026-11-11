@@ -1229,3 +1229,72 @@ test('寫日誌時把廠商填報的累計預定進度寫到實際進度核對�
   expect(ops).toContainEqual({ type: 'setCell', sheet: '每日施工紀錄', addr: 'A292', value: '廠商填報累計預定進度' });
   expect(i預定).toBeLessThan(ops.findIndex((o) => o.type === 'deleteRows'));
 });
+
+// 沒有讀取器、或讀取器整份讀不動時,承辦人可以把原始檔送去自動產生/修正讀取器
+describe('送出讀取器問題到自動修正佇列', () => {
+  const fixQueue = require('../server/fix-queue');
+  afterEach(() => jest.restoreAllMocks());
+  const send = (app, token, id, note) => {
+    const q = request(app).post(`/api/projects/${id}/daily-logs/parser/submit`)
+      .set('Authorization', `Bearer ${token}`)
+      .attach('daily_log', Buffer.from('new-vendor'), '新廠商日誌.pdf');
+    return note == null ? q : q.field('note', note);
+  };
+  const enable = () => {
+    jest.spyOn(fixQueue, 'enabled').mockReturnValue(true);
+    return jest.spyOn(fixQueue, 'submitBatch').mockResolvedValue({ 批號: 'X', 重複: false });
+  };
+
+  test('沒有這家的讀取器:parse 提示可送出,送出後佇列裡標明要產生哪一家的讀取器', async () => {
+    const { app, token, id } = await makeApp();
+    registry.getParser.mockReturnValue(null);
+    const parsed = await post(app, token, id, 'parse').expect(400);
+    expect(parsed.body.可送出讀取器).toBe(true);
+    const submit = enable();
+    await send(app, token, id, '這家兩聯分兩個檔').expect(200);
+    const entries = submit.mock.calls[0][1];
+    // 讀取器名稱要與廠商主檔一字不差,重開安裝時才歸得了位
+    expect(JSON.parse(entries['系統資料/工程.json'])).toMatchObject({ 類型: '新讀取器', 讀取器: '某某營造' });
+    expect(entries['原始檔案/新廠商日誌.pdf'].toString()).toBe('new-vendor');
+    expect(entries['承辦人說明.txt']).toBe('這家兩聯分兩個檔');
+    expect(entries['辨識問題列表.csv']).toContain('缺讀取器');
+  });
+
+  test('讀取器整份讀不動:送出標成「讀不動」,附讀取器自己的錯誤訊息', async () => {
+    const { app, token, id } = await makeApp();
+    registry.getParser.mockReturnValue({ meta: { vendorKey: '某某營造' }, parseAll: async () => { throw new Error('找不到第二聯表頭'); } });
+    const parsed = await post(app, token, id, 'parse').expect(400);
+    expect(parsed.body.可送出讀取器).toBe(true);
+    const submit = enable();
+    await send(app, token, id).expect(200);
+    const entries = submit.mock.calls[0][1];
+    expect(JSON.parse(entries['系統資料/工程.json']).類型).toBe('讀不動');
+    expect(entries['辨識問題列表.csv']).toContain('找不到第二聯表頭');
+  });
+
+  test('讀得動的日誌不能從這裡送(要走送出辨識問題)', async () => {
+    const { app, token, id } = await makeApp();
+    feed([day('2026-04-08', [r('1', 1)])]);
+    const submit = enable();
+    const res = await send(app, token, id).expect(400);
+    expect(res.body.error).toMatch(/送出辨識問題/);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  test('只少選一聯不是讀取器的問題,不提示送出', async () => {
+    const { app, token, id } = await makeApp();
+    const only = day('2026-04-08', [r('1', 1)]);
+    only.聯別 = '第一聯';
+    registry.getParser.mockReturnValue({ meta: { copies: ['第一聯', '第二聯'] }, parseAll: async () => [only] });
+    const parsed = await post(app, token, id, 'parse').expect(400);
+    expect(parsed.body.可送出讀取器).toBe(false);
+  });
+
+  test('沒有契約詳細價目表這類設定問題照舊擋下,不送', async () => {
+    const { app, token, id } = await makeApp();
+    await db.query('DELETE FROM contract_items WHERE project_id = $1', [id]);
+    const submit = enable();
+    await send(app, token, id).expect(400);
+    expect(submit).not.toHaveBeenCalled();
+  });
+});

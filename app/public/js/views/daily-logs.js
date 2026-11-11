@@ -142,6 +142,35 @@ const DailyLogs = (() => {
       class: 'btn btn-primary', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
     }, '送出辨識問題');
     const issueSubmitNote = el('div', { class: 'hint', style: 'display:none' });
+    // 沒有這家的讀取器、或讀取器整份讀不動時:原始檔送去自動產生/修正讀取器(後端會再判一次條件)
+    const parserText = el('textarea', {
+      class: 'form-control', rows: '2', maxlength: '500', style: 'width:100%',
+      placeholder: '補充說明(選填,500 字內):例如「新廠商,兩聯分兩個檔」「10 月起改交 PDF」',
+    });
+    const parserNote = el('div', { class: 'hint' });
+    const parserBtn = el('button', { class: 'btn btn-primary', type: 'button', style: 'margin-top:var(--space-2)' },
+      '送出,自動產生或修正讀取器');
+    const parserBox = el('div', { style: 'display:none;margin-top:var(--space-3)' }, [
+      el('div', { class: 'hint' }, '可以把這份日誌送去自動處理:沒有讀取器的會新做一支,讀不動的會修好。完成後右上角會提醒重新啟動。'),
+      parserText, parserBtn, parserNote,
+    ]);
+    parserBtn.addEventListener('click', async () => {
+      parserBtn.disabled = true;
+      parserNote.textContent = '';
+      try {
+        const form = fd();
+        form.append('note', parserText.value.trim());
+        const r = await Api.upload(`projects/${projectId}/daily-logs/parser/submit`, form);
+        parserNote.textContent = r.重複
+          ? `這份已經送過了(${r.批號}),處理進度看右上角`
+          : `已送出(${r.批號}),處理進度看右上角;完成後會提醒重新啟動`;
+        AutoFixTag.refresh();
+      } catch (e) {
+        showErr(e.message);
+      } finally {
+        parserBtn.disabled = false;
+      }
+    });
     // 承辦人補充說明(例:「這家 10 月起改交 PDF」)——光看檔案猜不到的事。後端限 500 字。
     const issueSubmitText = el('textarea', {
       class: 'form-control', rows: '2', maxlength: '500', style: 'display:none;margin-top:var(--space-2);width:100%',
@@ -490,6 +519,8 @@ const DailyLogs = (() => {
       issueSubmitBtn.style.display = 'none';
       issueSubmitText.style.display = 'none';
       issueSubmitNote.style.display = 'none';
+      parserBox.style.display = 'none';
+      parserNote.textContent = '';
       vendorDownloadBtn.style.display = 'none';
       if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
       files = [...fileI.files];
@@ -533,6 +564,7 @@ const DailyLogs = (() => {
         confirmBtn.style.display = FindingGroups.hasBlockingErrors(findingGroups) ? 'none' : '';
       } catch (e) {
         showErr(e.message);
+        if (e.可送出讀取器 && AutoFixTag.enabled()) parserBox.style.display = '';
       } finally {
         parseBtn.disabled = false;
         parseBtn.textContent = '處理施工日誌';
@@ -646,6 +678,7 @@ const DailyLogs = (() => {
       reportFileI,
       uploadBox,
       err,
+      parserBox,
       summary,
       skipBox,
       diffBox,
