@@ -172,12 +172,14 @@ function astProblems(file, source, isTest, tracked = null) {
       case 'ThisExpression':
         report(node, isTest ? '測試用了 this' : '用了 this');
         break;
-      // 物件字面量的屬性名:Object.assign(Error, { prepareStackTrace(e, s) {…} })
+      // 物件字面量與類別的屬性名:Object.assign(Error, { prepareStackTrace(e, s) {…} })、
+      // class X extends Error { static prepareStackTrace() {…} }
       case 'ObjectExpression':
-        for (const pp of node.properties) {
-          const k = (pp.type === 'ObjectProperty' || pp.type === 'ObjectMethod') && !pp.computed
+      case 'ClassBody':
+        for (const pp of node.type === 'ClassBody' ? node.body : node.properties) {
+          const k = !pp.computed && pp.key
             && (pp.key.type === 'Identifier' ? pp.key.name : pp.key.type === 'StringLiteral' ? pp.key.value : null);
-          if (k && DENY_PROP.has(k)) report(node, `物件屬性名「${k}」`);
+          if (k && DENY_PROP.has(k)) report(node, `屬性名「${k}」`);
         }
         break;
       // 解構出危險屬性(const { mainModule } = process、const { constructor: C } = x)

@@ -180,7 +180,8 @@ test.each([
   ['Error.prepareStackTrace = (e, s) => s[0].getThis();', '「.prepareStackTrace」'],
   ["const k = 'prepareStackTrace'; Error[k] = f;", '字串含'],
   ["Object.defineProperty(Error, 'prepareStackTrace', { value: f });", '字串含'],
-  ['Object.assign(Error, { prepareStackTrace: f });', '物件屬性名「prepareStackTrace」'],
+  ['Object.assign(Error, { prepareStackTrace: f });', '屬性名「prepareStackTrace」'],
+  ['class X extends Error { static prepareStackTrace() {} }', '屬性名「prepareStackTrace」'],
 ])('讀取器新增 %s → 擋下(%s)', (line, label) => {
   write(PARSER, `const x = 395;\n${line}\n`);
   commit();
