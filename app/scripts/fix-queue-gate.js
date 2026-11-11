@@ -42,7 +42,12 @@ const DENY_PROP_TEST = new Set([
   'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'copyFile', 'copyFileSync', 'cp', 'cpSync',
   'rename', 'renameSync', 'symlink', 'symlinkSync', 'link', 'linkSync', 'createWriteStream', 'mkdtemp', 'mkdtempSync',
 ]);
-const TEST_MODULES = /^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx|pdf-lib|jsonwebtoken|bcryptjs)$)/;
+// 寫檔的方法太多(open/write/truncate/fs.promises/改名解構…)禁止清單列不完:測試的 fs 改用允許清單,只准唯讀
+const FS_READ_ALLOW = new Set([
+  'readFileSync', 'readFile', 'existsSync', 'readdirSync', 'readdir', 'statSync', 'stat', 'lstatSync',
+  'accessSync', 'access', 'realpathSync', 'constants',
+]);
+const TEST_MODULES =/^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx|pdf-lib|jsonwebtoken|bcryptjs)$)/;
 // 原型鏈逃脫與字串拼湊:`x.constructor.constructor('…')()`、`x['con' + 'structor']`、String.fromCharCode
 const DENY_PROP = new Set([
   'constructor', '__proto__', 'prototype', '__defineGetter__', '__defineSetter__',
@@ -85,6 +90,17 @@ function astProblems(file, source, isTest, tracked = null) {
         if (!isKeyPosition(node, parent, key) && denyIdent.has(node.name)) {
           // 讀取器唯一需要的模組系統用法是 module.exports
           report(node, `用了「${node.name}」`);
+        }
+        // 測試的 fs 只准 fs.<唯讀方法>;轉存、當參數傳、計算屬性名都不准(那樣就追不到它被拿去做什麼)
+        if (isTest && node.name === 'fs' && !isKeyPosition(node, parent, key)) {
+          const asMember = (parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && key === 'object';
+          const asDecl = parent.type === 'VariableDeclarator' && key === 'id';
+          if (asMember) {
+            const prop = parent.computed ? null : parent.property.name;
+            if (!prop || !FS_READ_ALLOW.has(prop)) report(node, `測試的 fs 只准唯讀(用了 ${prop ? `.${prop}` : '[…]'})`);
+          } else if (!asDecl) {
+            report(node, '測試的 fs 不准轉存或傳出去');
+          }
         }
         // 解構出來再用(const { writeFileSync } = fs)也算
         if (isTest && DENY_PROP_TEST.has(node.name) && !isKeyPosition(node, parent, key)) report(node, `測試寫檔「${node.name}」`);
@@ -134,6 +150,16 @@ function astProblems(file, source, isTest, tracked = null) {
       case 'CallExpression':
         if (node.callee.type === 'Identifier' && node.callee.name === 'require' && isTest) {
           const arg = node.arguments[0];
+          // require('fs') 只准 const fs = require('fs')、只解構出唯讀方法,或直接 .唯讀方法
+          if (arg && arg.type === 'StringLiteral' && arg.value === 'fs') {
+            const named = parent.type === 'VariableDeclarator' && parent.id.type === 'Identifier' && parent.id.name === 'fs';
+            const readOnly = parent.type === 'VariableDeclarator' && parent.id.type === 'ObjectPattern'
+              && parent.id.properties.every((pp) => pp.type === 'ObjectProperty' && !pp.computed
+                && pp.key.type === 'Identifier' && FS_READ_ALLOW.has(pp.key.name));
+            const member = (parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && key === 'object'
+              && !parent.computed && FS_READ_ALLOW.has(parent.property.name);
+            if (!named && !readOnly && !member) report(node, '測試的 fs 只准唯讀(require 的用法)');
+          }
           if (!arg || arg.type !== 'StringLiteral') report(node, `require 的參數不是固定字串`);
           else if (DENY_MODULE.test(arg.value) || !TEST_MODULES.test(arg.value)) report(node, `require 了「${arg.value}」`);
           // fixtures 允許任何副檔名、而 gate 只解析 .js:從那裡 require 等於繞過檢查載入任意程式。
@@ -200,6 +226,12 @@ function check(dir, base, head = 'HEAD') {
     for (const p of before ? astProblems(f, before, isTest, isTest ? trackedBase : null) : []) {
       if (!p.includes('\t')) continue;
       had.set(kind(p), (had.get(kind(p)) || 0) + 1);
+    }
+    // 修改前就會寫檔的測試(既有測試建暫存目錄那類):改它時可以把既有的寫檔呼叫換個目標,
+    // 呼叫那一行的文字卻沒變,逐項比對抓不到——整支只准人工修改,自動修正要加測試就寫在新檔
+    if (isTest && [...had.keys()].some((k) => /測試寫檔|測試的 fs/.test(k))) {
+      problems.push(`改到會寫檔的既有測試(只准人工修改,新測試請寫在新檔):${f}`);
+      continue;
     }
     for (const p of astProblems(f, source, isTest, isTest ? tracked : null)) {
       if (!p.includes('\t')) { problems.push(p); continue; }   // 解析失敗

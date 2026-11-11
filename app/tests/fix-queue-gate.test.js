@@ -86,6 +86,42 @@ test.each([
   expect(check(dir, base).join('\n')).toContain(`測試寫檔「${label}`);
 });
 
+// 寫檔的方法列不完(open/write/truncate/promises/改名解構):fs 只准唯讀的允許清單
+test.each([
+  ["const fs = require('fs'); fs.openSync('x.js', 'w');", '.openSync'],
+  ["const fs = require('fs'); fs.promises.writeFile('x.js', c);", '.promises'],
+  ["const fs = require('fs'); fs.truncateSync('x.js');", '.truncateSync'],
+  ["const { writeFileSync: w } = require('fs'); w('x.js', c);", 'require 的用法'],
+  ["const f = require('fs');", 'require 的用法'],
+  ["const fs = require('fs'); const k = 'write' + 'FileSync'; fs[k]('x', c);", '[…]'],
+  ["const fs = require('fs'); helper(fs);", '轉存或傳出去'],
+])('測試 %s → 擋下(%s)', (line, label) => {
+  write('app/tests/parser-jiumu.test.js', `${line}\n`);
+  commit();
+  expect(check(dir, base).join('\n')).toContain(label);
+});
+
+test('測試只讀 fixture(fs.readFileSync / 解構唯讀方法)→ 通過', () => {
+  write('app/tests/parser-jiumu.test.js', [
+    "const fs = require('fs');",
+    "const { existsSync } = require('fs');",
+    "const buf = fs.readFileSync('x.pdf');",
+    "existsSync('y');",
+  ].join('\n') + '\n');
+  commit();
+  expect(check(dir, base)).toEqual([]);
+});
+
+// 改既有的寫檔呼叫的目標(那一行文字不變、變的是別處的變數)逐項比對抓不到
+test('修改前就會寫檔的測試整支不准自動修改', () => {
+  write('app/tests/parser-longsheng.test.js', "const fs = require('fs');\nconst d = fs.mkdtempSync('x');\n");
+  commit();
+  base = git('rev-parse', 'HEAD');
+  write('app/tests/parser-longsheng.test.js', "const fs = require('fs');\nconst d = fs.mkdtempSync('x');\ntest('x', () => {});\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain('會寫檔的既有測試');
+});
+
 test('只改讀取器與測試、沒有危險寫法 → 通過', () => {
   write(PARSER, 'const x = cumulativeQtyHeader ? cumulativeQtyHeader.x : 395;\nwhile ((m = re.exec(s))) n++;\n');
   write('app/tests/parser-jiumu.test.js', "const path = require('path');\nprocess.env.PMIS_DATA_DIR = 'x';\n");

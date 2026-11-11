@@ -25,8 +25,11 @@ description: 處理自動修正佇列(程式 repo fix-queue 分支的 待修正/
   - `require` 相對路徑要寫出**完整檔名與副檔名**,而且是 repo 裡有的檔案:
     `require('../server/parsers/filetypes/index.js')`、`require('../server/parsers/vendors/samples/x.pmisparser.js')`,
     不要寫 `require('../server/parsers/filetypes')`。既有測試裡省略副檔名的那幾行不用改。
-  - 新增的測試程式**不准寫檔**(`writeFileSync`、`copyFile`、`rename`、`symlink`、`createWriteStream`、`mkdtemp`…);
-    讀 fixture 就好。fixture 只准資料檔(pdf/xls/xlsx/xlsm/doc/docx/json/txt/csv/png/jpg)。
+  - 新增的測試程式 **`fs` 只准唯讀**:`const fs = require('fs')` 後只用 `fs.readFileSync`、`fs.existsSync`、
+    `fs.readdirSync`、`fs.statSync` 這類;不准寫檔、不准把 `fs` 存成別的名字或傳給函式。讀 fixture 就好。
+    fixture 只准資料檔(pdf/xls/xlsx/xlsm/doc/docx/json/txt/csv/png/jpg)。
+  - **原本就會寫檔的既有測試整支不能改**(例如 `daily-log-routes.test.js` 會建暫存目錄)。要加測試就**開新檔**,
+    例如 `app/tests/autofix-<批號>.test.js`。
   - 不准 `child_process`、`module`、`process.mainModule`、`eval`/`Function`;已經載入 `child_process` 的既有測試整支不准改。
 
 ## 先看是哪一種批次
