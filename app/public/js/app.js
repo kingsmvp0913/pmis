@@ -123,6 +123,7 @@ async function renderShell(activeHash) {
   const main = el('div', { class: 'main' }, [content]);
   root.appendChild(sidebar);
   root.appendChild(main);
+  AutoFixTag.mount(main);
   return content;
 }
 

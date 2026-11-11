@@ -15,6 +15,7 @@ const { registerRoutes: registerAttachmentRoutes } = require('./project-attachme
 const { registerRoutes: registerKickoffRoutes } = require('./kickoff-routes');
 const { registerRoutes: registerContractItemRoutes } = require('./contract-items-routes');
 const { registerRoutes: registerDailyLogRoutes } = require('./daily-log-routes');
+const { registerRoutes: registerFixQueueRoutes } = require('./fix-queue');
 
 const PORT = process.env.PORT || 4141;
 
@@ -37,6 +38,7 @@ function createApp() {
   registerKickoffRoutes(app);
   registerContractItemRoutes(app);
   registerDailyLogRoutes(app);
+  registerFixQueueRoutes(app);
 
   // 未匹配的 /api 路徑回 JSON 404(避免掉進 SPA fallback)
   app.use('/api/', (req, res) => res.status(404).json({ error: 'Not found' }));

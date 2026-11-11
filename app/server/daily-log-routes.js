@@ -4,6 +4,7 @@
  * 路由:
  *   POST /api/projects/:id/daily-logs/parse           上傳 → 42 條驗證 + 跨批次差異(唯讀)
  *   POST /api/projects/:id/daily-logs/recognition-issues 問題清單 + 原始檔 → ZIP
+ *   POST /api/projects/:id/daily-logs/recognition-issues/submit 同上,改推進自動修正佇列
  *   POST /api/projects/:id/daily-logs/vendor-issues   廠商問題 → 原格式紅框標註 ZIP
  *   POST /api/projects/:id/daily-logs/confirm         無未放行硬錯才寫入 .xlsm 並落庫
  *   POST /api/projects/:id/daily-logs/scan            掃描件 → OCR 預填(唯讀)
@@ -47,6 +48,7 @@ const {
 } = require('./daily-log-write');
 const { scanDaysWithItems, scanAll } = require('./daily-log-scan');
 const { nextBatchFolder } = require('./settings');
+const fixQueue = require('./fix-queue');
 const { itemsToOperations } = require('./contract-items');
 const { contractItemIndex, resolveContractItem } = require('./item-no');
 const { ensureWorkbook, itemRowCounts, progressBlock } = require('./report-workbook');
@@ -178,17 +180,23 @@ async function systemDataFiles(projectId) {
   };
 }
 
-async function recognitionIssuesZip(files, problems, systemData = {}) {
-  const { zip, top } = await batchZip();
-  const sys = top.folder('系統資料');
-  for (const [name, text] of Object.entries(systemData)) sys.file(name, text);
+// 辨識問題包的內容(相對路徑 → 內容)。下載 ZIP 與送進自動修正佇列共用,兩邊才不會漂開。
+function recognitionIssueEntries(files, problems, systemData = {}) {
+  const entries = {};
+  for (const [name, text] of Object.entries(systemData)) entries[`系統資料/${name}`] = text;
   const header = ['級別', '代碼', '日期', '項次', '說明'];
   const rows = problems.map((p) => [p.級別, p.code, p.日期, p.項次, p.訊息]);
-  top.file('辨識問題列表.csv', `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`);
-
-  const folder = top.folder('原始檔案');
+  entries['辨識問題列表.csv'] = `\uFEFF${[header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}`;
   const used = new Set();
-  for (const file of files) folder.file(uniqueZipName(realName(file), used), file.buffer);
+  for (const file of files) entries[`原始檔案/${uniqueZipName(realName(file), used)}`] = file.buffer;
+  return entries;
+}
+
+async function recognitionIssuesZip(files, problems, systemData = {}) {
+  const { zip, top } = await batchZip();
+  for (const [name, content] of Object.entries(recognitionIssueEntries(files, problems, systemData))) {
+    top.file(name, content);
+  }
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -836,6 +844,36 @@ function registerRoutes(app) {
       } catch (err) {
         console.error('[daily-log] 產生辨識問題下載包失敗:', err);
         res.status(500).json({ error: '產生辨識問題下載包失敗' });
+      }
+    });
+
+  // 同一份問題包改推進自動修正佇列(私人 GitHub repo),省掉下載 → 搬檔 → 通知的人工轉手。
+  // 只收承辦人歸為「辨識問題」的那幾筆(前端沿用同一份清單),廠商填錯的不送。
+  app.post('/api/projects/:id/daily-logs/recognition-issues/submit', verifyToken,
+    upload.array('daily_log'), async (req, res) => {
+      try {
+        if (!fixQueue.enabled()) return res.status(400).json({ error: '尚未設定自動修正佇列,請改用「下載辨識問題」' });
+        if (!isIdShape(req.params.id)) return res.status(404).json({ error: '找不到工程' });
+        const { rows } = await query('SELECT id, name FROM projects WHERE id = $1', [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: '找不到工程' });
+
+        const files = uploadedFiles(req).filter((f) => f && f.buffer && f.buffer.length);
+        if (!files.length) return res.status(400).json({ error: '請上傳施工日誌原始檔' });
+
+        let problems;
+        try { problems = JSON.parse(req.body.problems || 'null'); }
+        catch { return res.status(400).json({ error: '辨識問題列表格式不合法' }); }
+        if (!Array.isArray(problems) || !problems.length || problems.some((p) => !p || typeof p !== 'object')) {
+          return res.status(400).json({ error: '請至少選擇一項辨識問題' });
+        }
+
+        const entries = recognitionIssueEntries(files, problems, await systemDataFiles(req.params.id));
+        const result = await fixQueue.submitBatch(await nextBatchFolder(), entries,
+          { 工程: rows[0].name, 工程id: rows[0].id });
+        res.json(result);
+      } catch (err) {
+        console.error('[daily-log] 送出辨識問題失敗:', err);
+        res.status(502).json({ error: `送出辨識問題失敗:${err.message}` });
       }
     });
 

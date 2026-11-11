@@ -367,3 +367,14 @@ textarea.form-control { min-height: 160px; resize: vertical; font-family: inheri
   border-radius: var(--radius-sm); background: var(--surface); min-height: 38px; align-items: center; }
 .check-item { display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--fs-base); color: var(--text); cursor: pointer; white-space: nowrap; }
+
+/* 右上角自動修正標籤(auto-fix-tag.js):平常不顯示,有批次才浮在內容區右上 */
+.main { position: relative; }
+.autofix-host { position: absolute; top: var(--space-3); right: var(--space-4); z-index: 50; display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-2); max-width: 420px; }
+.autofix-tag { border: 1px solid var(--border-strong); border-radius: 999px; padding: var(--space-1) var(--space-3); font-size: var(--fs-base); font-weight: var(--fw-semibold); cursor: pointer; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.autofix-tag.autofix-alert { border-color: var(--warning); color: var(--text); }
+.autofix-tag.autofix-info { border-color: var(--info); }
+.autofix-panel { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); max-height: 60vh; overflow: auto; }
+.autofix-item { border-top: 1px solid var(--border); padding-top: var(--space-2); }
+.autofix-item:first-child { border-top: 0; padding-top: 0; }
+.autofix-item-title { font-weight: var(--fw-semibold); }

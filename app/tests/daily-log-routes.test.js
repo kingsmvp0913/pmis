@@ -222,6 +222,60 @@ describe('辨識問題下載包', () => {
   });
 });
 
+// 送出 = 同一份問題包改推進自動修正佇列(佇列本身由 fix-queue.test.js 驗)
+describe('送出辨識問題到自動修正佇列', () => {
+  const fixQueue = require('../server/fix-queue');
+  const problems = [{ 級別: '硬錯', code: 'F1', 日期: '2026-07-14', 項次: '7', 訊息: '累計完成數量從 100 掉到 99' }];
+  afterEach(() => jest.restoreAllMocks());
+
+  test('沒設定佇列時回 400 並請承辦人改用下載', async () => {
+    const { app, token, id } = await makeApp();
+    jest.spyOn(fixQueue, 'enabled').mockReturnValue(false);
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues/submit`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify(problems))
+      .attach('daily_log', Buffer.from('f'), '日誌.pdf')
+      .expect(400);
+    expect(res.body.error).toMatch(/下載辨識問題/);
+  });
+
+  test('送進佇列的內容與下載包相同(問題清單、原始檔、這一案的系統資料)', async () => {
+    const { app, token, id } = await makeApp();
+    jest.spyOn(fixQueue, 'enabled').mockReturnValue(true);
+    const submit = jest.spyOn(fixQueue, 'submitBatch').mockResolvedValue({ 批號: 'X', 重複: false });
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues/submit`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify(problems))
+      .attach('daily_log', Buffer.from('first-file'), '第一聯.pdf')
+      .expect(200);
+    expect(res.body).toEqual({ 批號: 'X', 重複: false });
+    const [batch, entries, meta] = submit.mock.calls[0];
+    expect(batch).toBe(`${今天()}-0001`);
+    expect(meta.工程id).toBe(id);
+    expect(entries['原始檔案/第一聯.pdf'].toString()).toBe('first-file');
+    expect(entries['辨識問題列表.csv']).toContain('"硬錯","F1","2026-07-14","7"');
+    expect(Object.keys(entries)).toEqual(expect.arrayContaining([
+      '系統資料/期初累計.csv', '系統資料/已寫入日誌.csv', '系統資料/契約項目.csv',
+    ]));
+  });
+
+  test('GitHub 失敗時回 502 並帶原因,不吞掉', async () => {
+    const { app, token, id } = await makeApp();
+    jest.spyOn(fixQueue, 'enabled').mockReturnValue(true);
+    jest.spyOn(fixQueue, 'submitBatch').mockRejectedValue(new Error('GitHub PATCH → 401 Bad credentials'));
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/projects/${id}/daily-logs/recognition-issues/submit`)
+      .set('Authorization', `Bearer ${token}`)
+      .field('problems', JSON.stringify(problems))
+      .attach('daily_log', Buffer.from('f'), '日誌.pdf')
+      .expect(502);
+    expect(res.body.error).toMatch(/Bad credentials/);
+  });
+});
+
 describe('廠商問題標註下載包', () => {
   test('未帶 token 回 401', async () => {
     const { app, id } = await makeApp();

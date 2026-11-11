@@ -48,6 +48,14 @@ const port = cfg.PORT || 4141;
 process.env.JWT_SECRET = cfg.JWT_SECRET;
 process.env.PORT = String(port);
 if (cfg.DATABASE_URL) process.env.DATABASE_URL = cfg.DATABASE_URL;
+// 自動修正佇列(私人 GitHub repo)與帶權杖更新;沒設定就維持原本的下載 ZIP
+if (cfg.GITHUB_TOKEN) process.env.PMIS_GITHUB_TOKEN = cfg.GITHUB_TOKEN;
+if (cfg.QUEUE_REPO) process.env.PMIS_QUEUE_REPO = cfg.QUEUE_REPO;
+try {
+  require('./git-auth').syncGitAuth(cfg.GITHUB_TOKEN || '', ROOT);
+} catch (err) {
+  console.warn(`[更新] 設定 GitHub 權杖失敗:${err.message}`);
+}
 
 // 舊的還開著就先關掉。必須排在開瀏覽器之前——否則瀏覽器連上的是舊進程,
 // 剛 pull 下來的新版沒生效,畫面上卻看不出任何異狀。

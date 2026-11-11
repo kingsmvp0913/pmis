@@ -137,6 +137,11 @@ const DailyLogs = (() => {
     const issueDownloadBtn = el('button', {
       class: 'btn btn-outline', type: 'button', style: 'display:none;margin-top:var(--space-3)',
     }, '下載辨識問題 ZIP');
+    // 設定了自動修正佇列才出現:同一份辨識問題直接推上去,不必下載再轉手(見 docs/自動修正流程.md)
+    const issueSubmitBtn = el('button', {
+      class: 'btn btn-primary', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
+    }, '送出辨識問題');
+    const issueSubmitNote = el('div', { class: 'hint', style: 'display:none' });
     const vendorDownloadBtn = el('button', {
       class: 'btn btn-outline', type: 'button', style: 'display:none;margin-top:var(--space-3);margin-left:var(--space-2)',
     }, '下載廠商問題標註');
@@ -153,6 +158,8 @@ const DailyLogs = (() => {
     function renderFindings(errors, warnings) {
       listBox.innerHTML = '';
       issueDownloadBtn.style.display = 'none';
+      issueSubmitBtn.style.display = 'none';
+      issueSubmitNote.style.display = 'none';
       vendorDownloadBtn.style.display = 'none';
       const all = FindingGroups.groupFindings(errors, warnings);
       findingGroups = all;
@@ -166,6 +173,8 @@ const DailyLogs = (() => {
         issueDownloadBtn.style.display = '';
         vendorDownloadBtn.style.display = '';
         issueDownloadBtn.disabled = !有辨識問題;
+        issueSubmitBtn.style.display = AutoFixTag.enabled() ? '' : 'none';
+        issueSubmitBtn.disabled = !有辨識問題;
         vendorDownloadBtn.disabled = !有廠商問題;
         issueDownloadBtn.textContent = 有辨識問題
           ? '下載辨識問題 ZIP'
@@ -232,6 +241,27 @@ const DailyLogs = (() => {
           const form = fd();
           form.append('problems', JSON.stringify(problems));
           await Api.uploadDownload(`projects/${projectId}/daily-logs/recognition-issues`, form);
+        } catch (e) {
+          showErr(e.message);
+        } finally {
+          updateDownload();
+        }
+      };
+
+      issueSubmitBtn.onclick = async () => {
+        const problems = FindingGroups.recognitionProblems(all);
+        if (!problems.length) return;
+        issueSubmitBtn.disabled = true;
+        issueSubmitNote.style.display = 'none';
+        try {
+          const form = fd();
+          form.append('problems', JSON.stringify(problems));
+          const r = await Api.upload(`projects/${projectId}/daily-logs/recognition-issues/submit`, form);
+          issueSubmitNote.textContent = r.重複
+            ? `這批問題已經送過了(${r.批號}),處理進度看右上角`
+            : `已送出(${r.批號}),處理進度看右上角;修好後會提醒重新啟動`;
+          issueSubmitNote.style.display = '';
+          AutoFixTag.refresh();
         } catch (e) {
           showErr(e.message);
         } finally {
@@ -449,6 +479,8 @@ const DailyLogs = (() => {
       skipBox.style.display = 'none';
       clearScan();
       issueDownloadBtn.style.display = 'none';
+      issueSubmitBtn.style.display = 'none';
+      issueSubmitNote.style.display = 'none';
       vendorDownloadBtn.style.display = 'none';
       if (!fileI.files.length) { showErr('請先選擇施工日誌'); return; }
       files = [...fileI.files];
@@ -611,7 +643,9 @@ const DailyLogs = (() => {
       scanBox,
       listBox,
       issueDownloadBtn,
+      issueSubmitBtn,
       vendorDownloadBtn,
+      issueSubmitNote,
       openingCard(projectId),
     ]);
   }
