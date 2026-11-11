@@ -36,6 +36,12 @@ const DENY_IDENT_CODE = new Set([
 ]);
 // 測試只在 CI(沒有權杖)與開發機跑,可以 require 專案內的檔案與少數模組,不准連網、跑外部程式、動態執行
 const DENY_IDENT_TEST = new Set(['eval', 'Function', 'Reflect', 'Proxy', 'fetch', 'XMLHttpRequest', 'WebSocket', 'Worker', 'WebAssembly']);
+// 測試在執行時改寫 repo 裡的檔案再 require,就繞過了上面的解析;讀取器測試只需要讀 fixture。
+// 只比「新增的」:既有測試寫暫存檔的那些不受影響(見 check() 的逐項比對)
+const DENY_PROP_TEST = new Set([
+  'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'copyFile', 'copyFileSync', 'cp', 'cpSync',
+  'rename', 'renameSync', 'symlink', 'symlinkSync', 'link', 'linkSync', 'createWriteStream', 'mkdtemp', 'mkdtempSync',
+]);
 const TEST_MODULES = /^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx|pdf-lib|jsonwebtoken|bcryptjs)$)/;
 // 原型鏈逃脫與字串拼湊:`x.constructor.constructor('…')()`、`x['con' + 'structor']`、String.fromCharCode
 const DENY_PROP = new Set([
@@ -80,6 +86,8 @@ function astProblems(file, source, isTest, tracked = null) {
           // 讀取器唯一需要的模組系統用法是 module.exports
           report(node, `用了「${node.name}」`);
         }
+        // 解構出來再用(const { writeFileSync } = fs)也算
+        if (isTest && DENY_PROP_TEST.has(node.name) && !isKeyPosition(node, parent, key)) report(node, `測試寫檔「${node.name}」`);
         // 測試:require 只准直接呼叫(不准轉存、.call、當參數傳),module 一律不准
         if (isTest && node.name === 'require' && !isKeyPosition(node, parent, key)
           && !(parent.type === 'CallExpression' && key === 'callee')) {
@@ -95,6 +103,12 @@ function astProblems(file, source, isTest, tracked = null) {
       case 'OptionalMemberExpression':
         if (!node.computed && node.property.type === 'Identifier' && DENY_PROP.has(node.property.name)) {
           report(node, `存取「.${node.property.name}」`);
+        }
+        if (isTest && !node.computed && node.property.type === 'Identifier' && DENY_PROP_TEST.has(node.property.name)) {
+          report(node, `測試寫檔「.${node.property.name}」`);
+        }
+        if (isTest && node.computed && node.property.type === 'StringLiteral' && DENY_PROP_TEST.has(node.property.value)) {
+          report(node, `測試寫檔「['${node.property.value}']」`);
         }
         if (node.computed && node.property.type === 'StringLiteral' && DENY_PROP.has(node.property.value)) {
           report(node, `存取「['${node.property.value}']」`);
@@ -128,10 +142,10 @@ function astProblems(file, source, isTest, tracked = null) {
             || /\.(?!js$|json$)[^./]+$/i.test(arg.value)) {
             report(node, `require 了檢查不到的檔案「${arg.value}」`);
           } else if (tracked && arg.value.startsWith('.')) {
+            // 要寫出完整檔名:省略副檔名時 Node 會先找 x.js,執行時才產生的 x.js 會蓋過 repo 裡的 x/index.js
             const p = require('path').posix.join(require('path').posix.dirname(file), arg.value);
-            if (![p, `${p}.js`, `${p}.json`, `${p}/index.js`].some((c) => tracked.has(c))) {
-              report(node, `require 了 repo 裡沒有的檔案「${arg.value}」`);
-            }
+            if (!/\.(js|json)$/.test(arg.value)) report(node, `require 要寫出完整檔名與副檔名「${arg.value}」`);
+            else if (!tracked.has(p)) report(node, `require 了 repo 裡沒有的檔案「${arg.value}」`);
           }
         }
         break;
@@ -164,7 +178,9 @@ function check(dir, base, head = 'HEAD') {
     const m = /^:\d+ (\d+) \S+ \S+ \S+\t(.+)$/.exec(line);
     if (m && (m[1] === '120000' || m[1] === '160000')) problems.push(`不准新增符號連結或子模組:${m[2]}`);
   }
-  const tracked = new Set(git(dir, ['ls-tree', '-r', '--name-only', head]).split('\n').filter(Boolean));
+  const tree = (rev) => new Set(git(dir, ['ls-tree', '-r', '--name-only', rev]).split('\n').filter(Boolean));
+  const tracked = tree(head);
+  const trackedBase = tree(base);   // 修改前那一版用它自己的樹,既有的 require 才抵銷得掉
   for (const f of changed.filter((n) => n.endsWith('.js') && ALLOWED.some((re) => re.test(n)))) {
     let source;
     try { source = git(dir, ['show', `${head}:${f}`]); } catch { continue; }   // 刪掉的檔案
@@ -181,7 +197,7 @@ function check(dir, base, head = 'HEAD') {
     // 逐項比「哪種問題 + 出現在哪段程式」,修改後多出來的才擋。比的是語法樹,註解與拆字照樣抓得到。
     const kind = (p) => p.split('\t').slice(1).join('\t');
     const had = new Map();
-    for (const p of before ? astProblems(f, before, isTest) : []) {
+    for (const p of before ? astProblems(f, before, isTest, isTest ? trackedBase : null) : []) {
       if (!p.includes('\t')) continue;
       had.set(kind(p), (had.get(kind(p)) || 0) + 1);
     }

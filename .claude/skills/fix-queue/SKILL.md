@@ -21,6 +21,13 @@ description: 處理自動修正佇列(程式 repo fix-queue 分支的 待修正/
 - 範圍外才修得好的問題(上傳流程、期初、報表寫入、前端):**不要改**,結果設為 `需要決定`,
   在 `需要決定` 裡寫清楚根因與建議修法,交給開發者處理。
 - 不要 push、不要碰 git remote、不要讀環境變數裡的權杖。
+- **測試的寫法限制**(workflow 會擋,違反就整批沒修成):
+  - `require` 相對路徑要寫出**完整檔名與副檔名**,而且是 repo 裡有的檔案:
+    `require('../server/parsers/filetypes/index.js')`、`require('../server/parsers/vendors/samples/x.pmisparser.js')`,
+    不要寫 `require('../server/parsers/filetypes')`。既有測試裡省略副檔名的那幾行不用改。
+  - 新增的測試程式**不准寫檔**(`writeFileSync`、`copyFile`、`rename`、`symlink`、`createWriteStream`、`mkdtemp`…);
+    讀 fixture 就好。fixture 只准資料檔(pdf/xls/xlsx/xlsm/doc/docx/json/txt/csv/png/jpg)。
+  - 不准 `child_process`、`module`、`process.mainModule`、`eval`/`Function`;已經載入 `child_process` 的既有測試整支不准改。
 
 ## 先看是哪一種批次
 

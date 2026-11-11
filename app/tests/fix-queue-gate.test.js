@@ -59,11 +59,31 @@ test('fixtures 只准放資料檔:沒列在允許清單的副檔名一律擋', (
 // 測試可以先 fs.writeFileSync 寫出一支程式再 require:只准 require repo 裡真的有的檔案
 test('測試 require 執行時才產生的檔案 → 擋下;require repo 裡有的 → 通過', () => {
   write('app/tests/helper.js', 'module.exports = 1;\n');
-  write('app/tests/parser-jiumu.test.js', "require('./helper');\nrequire('./made-at-runtime.js');\n");
+  write('app/tests/parser-jiumu.test.js', "require('./helper.js');\nrequire('./made-at-runtime.js');\n");
   commit();
   const p = check(dir, base).join('\n');
   expect(p).toContain("repo 裡沒有的檔案「./made-at-runtime.js」");
-  expect(p).not.toContain('./helper');
+  expect(p).not.toContain('./helper.js');
+});
+
+// 省略副檔名時 Node 先找 x.js:執行時才寫出的 x.js 會蓋過 repo 裡的 x/index.js
+test('測試 require 省略副檔名 → 擋下', () => {
+  write('app/tests/helper/index.js', 'module.exports = 1;\n');
+  write('app/tests/parser-jiumu.test.js', "require('./helper');\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain('完整檔名');
+});
+
+// 測試在執行時改寫 repo 裡的檔案再 require,就繞過了語法檢查
+test.each([
+  ["fs.writeFileSync('x.js', code);", '.writeFileSync'],
+  ["const { writeFileSync } = fs; writeFileSync('x.js', code);", 'writeFileSync'],
+  ["fs['copyFileSync']('a', 'b');", "['copyFileSync']"],
+  ["fs.renameSync('a', 'b');", '.renameSync'],
+])('測試新增寫檔 %s → 擋下', (line, label) => {
+  write('app/tests/parser-jiumu.test.js', `${line}\n`);
+  commit();
+  expect(check(dir, base).join('\n')).toContain(`測試寫檔「${label}`);
 });
 
 test('只改讀取器與測試、沒有危險寫法 → 通過', () => {
