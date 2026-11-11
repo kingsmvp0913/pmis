@@ -47,7 +47,13 @@ const FS_READ_ALLOW = new Set([
   'readFileSync', 'readFile', 'existsSync', 'readdirSync', 'readdir', 'statSync', 'stat', 'lstatSync',
   'accessSync', 'access', 'realpathSync', 'constants',
 ]);
-const TEST_MODULES =/^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx|pdf-lib|jsonwebtoken|bcryptjs)$)/;
+// jest、process 也一樣:解構、轉存、計算屬性名都能繞過「擋某幾個名字」,改成只准這些
+const JEST_ALLOW = new Set([
+  'fn', 'spyOn', 'restoreAllMocks', 'clearAllMocks', 'resetAllMocks',
+  'useFakeTimers', 'useRealTimers', 'advanceTimersByTime', 'runAllTimers', 'setSystemTime',
+]);
+const PROCESS_ALLOW = new Set(['env']);
+const TEST_MODULES = /^(\.{1,2}\/|(path|fs|os|jszip|express|supertest|pg-mem|xlsx|pdf-lib|jsonwebtoken|bcryptjs)$)/;
 // 原型鏈逃脫與字串拼湊:`x.constructor.constructor('…')()`、`x['con' + 'structor']`、String.fromCharCode
 const DENY_PROP = new Set([
   'constructor', '__proto__', 'prototype', '__defineGetter__', '__defineSetter__',
@@ -97,15 +103,19 @@ function astProblems(file, source, isTest, tracked = null) {
           // 讀取器唯一需要的模組系統用法是 module.exports
           report(node, `用了「${node.name}」`);
         }
-        // 測試的 fs 只准 fs.<唯讀方法>;轉存、當參數傳、計算屬性名都不准(那樣就追不到它被拿去做什麼)
-        if (isTest && node.name === 'fs' && !isKeyPosition(node, parent, key)) {
+        // 測試的 fs/jest/process 只准 x.<允許的成員>;轉存、當參數傳、解構、計算屬性名都不准
+        // (那樣就追不到它被拿去做什麼)
+        if (isTest && !isKeyPosition(node, parent, key)
+          && (node.name === 'fs' || node.name === 'jest' || node.name === 'process')) {
+          const allow = node.name === 'fs' ? FS_READ_ALLOW : node.name === 'jest' ? JEST_ALLOW : PROCESS_ALLOW;
+          const what = node.name === 'fs' ? '測試的 fs 只准唯讀' : `測試的 ${node.name} 只准常用功能`;
           const asMember = (parent.type === 'MemberExpression' || parent.type === 'OptionalMemberExpression') && key === 'object';
-          const asDecl = parent.type === 'VariableDeclarator' && key === 'id';
+          const asDecl = node.name === 'fs' && parent.type === 'VariableDeclarator' && key === 'id';
           if (asMember) {
             const prop = parent.computed ? null : parent.property.name;
-            if (!prop || !FS_READ_ALLOW.has(prop)) report(node, `測試的 fs 只准唯讀(用了 ${prop ? `.${prop}` : '[…]'})`);
+            if (!prop || !allow.has(prop)) report(node, `${what}(用了 ${prop ? `.${prop}` : '[…]'})`);
           } else if (!asDecl) {
-            report(node, '測試的 fs 不准轉存或傳出去');
+            report(node, `${what}:不准轉存、解構或傳出去`);
           }
         }
         // 解構出來再用(const { writeFileSync } = fs)也算
@@ -141,6 +151,17 @@ function astProblems(file, source, isTest, tracked = null) {
         if (node.computed && (node.property.type === 'TemplateLiteral'
           || (node.property.type === 'BinaryExpression' && hasString(node.property)))) {
           report(node, `用拼湊的字串當屬性名`);
+        }
+        break;
+      // 解構出危險屬性(const { mainModule } = process、const { constructor: C } = x)
+      case 'ObjectPattern':
+        for (const pp of node.properties) {
+          const k = pp.type === 'ObjectProperty' && (pp.key.type === 'Identifier' ? pp.key.name
+            : pp.key.type === 'StringLiteral' ? pp.key.value : null);
+          if (pp.type === 'ObjectProperty' && pp.computed) report(node, '解構時用計算屬性名');
+          else if (k && (DENY_PROP.has(k) || (isTest && (MODULE_LOADERS.has(k) || DENY_PROP_TEST.has(k))))) {
+            report(node, `解構出「${k}」`);
+          }
         }
         break;
       case 'StringLiteral':

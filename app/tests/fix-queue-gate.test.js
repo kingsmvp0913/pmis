@@ -94,11 +94,17 @@ test.each([
   ["const { writeFileSync: w } = require('fs'); w('x.js', c);", 'require 的用法'],
   ["const f = require('fs');", 'require 的用法'],
   ["const fs = require('fs'); const k = 'write' + 'FileSync'; fs[k]('x', c);", '[…]'],
-  ["const fs = require('fs'); helper(fs);", '轉存或傳出去'],
+  ["const fs = require('fs'); helper(fs);", '或傳出去'],
   // require 以外拿得到完整 fs 的路
   ["const f = jest.requireActual('fs');", 'require 以外的方式'],
   ["jest.mock('../server/x.js', () => require('child_process'));", 'require 以外的方式'],
   ["const f = process.getBuiltinModule('fs');", '.getBuiltinModule'],
+  // 解構、計算屬性名繞過名字清單
+  ["const { requireActual } = jest; requireActual('fs');", 'jest 只准常用功能'],
+  ["const k = 'require' + 'Actual'; jest[k]('fs');", 'jest 只准常用功能'],
+  ["const { getBuiltinModule: g } = process;", 'process 只准常用功能'],
+  ["const p = process; p.mainModule;", 'process 只准常用功能'],
+  ["const { mainModule } = obj;", '解構出「mainModule」'],
 ])('測試 %s → 擋下(%s)', (line, label) => {
   write('app/tests/parser-jiumu.test.js', `${line}\n`);
   commit();

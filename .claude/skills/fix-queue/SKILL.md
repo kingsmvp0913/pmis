@@ -31,6 +31,8 @@ description: 處理自動修正佇列(程式 repo fix-queue 分支的 待修正/
   - **原本就會寫檔的既有測試整支不能改**(例如 `daily-log-routes.test.js` 會建暫存目錄)。要加測試就**開新檔**,
     例如 `app/tests/autofix-<批號>.test.js`。
   - 不准 `child_process`、`module`、`process.mainModule`、`eval`/`Function`;已經載入 `child_process` 的既有測試整支不准改。
+  - `jest` 只用 `jest.fn`、`jest.spyOn`、`jest.restoreAllMocks` 這類;**新增的不准 `jest.mock`/`jest.requireActual`**。
+    `process` 只准 `process.env`。三者(`fs`/`jest`/`process`)都不准解構、轉存或傳給函式。
 
 ## 先看是哪一種批次
 
