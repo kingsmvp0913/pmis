@@ -369,7 +369,8 @@ const pdfUnit = (row) => {
   return null;
 };
 const pdfFirstNum = (v) => {
-  const m = String(v || '').match(/-?\d{1,3}(?:,\d{3})*(?:\.\d+)?/);
+  // 有千分位就照千分位,沒有就整串吃:只認「1~3 位 + ,ddd」會把 1560 截成 156(石龜本日數量)
+  const m = String(v || '').match(/-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?/);
   return m ? numOf(m[0]) : null;
 };
 
