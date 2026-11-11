@@ -17,8 +17,8 @@ const ALLOWED = [
   /^app\/server\/parsers\/vendors\/samples\/[^/]+\.pmisparser\.js$/,
   /^app\/server\/daily-log-validate\.js$/,
   /^app\/tests\/[^/]+\.test\.js$/,
-  // fixtures 不准放可執行的檔案:測試 require 得到它,gate 卻不會解析它
-  /^app\/tests\/fixtures\/[^/]+(?<!\.(js|cjs|mjs|node))$/i,
+  // fixtures 只准放資料檔(允許清單):可執行的檔案測試 require 得到,gate 卻不會解析它
+  /^app\/tests\/fixtures\/[^/]+\.(pdf|xls|xlsx|xlsm|doc|docx|json|txt|csv|png|jpe?g)$/i,
   /^docs\/來源資料缺陷\.md$/,
   /^\.claude\/skills\/gen-vendor-parser\/SKILL\.md$/,
 ];
@@ -46,7 +46,9 @@ const DENY_PROP = new Set([
 const DENY_WORD = /constructor|__proto__|prototype|__(define|lookup)[GS]etter__/;
 const DENY_MODULE = /^(child_process|node:|http|https|net|dgram|tls|dns|vm|worker_threads|cluster|module|inspector)/;
 
-function astProblems(file, source, isTest) {
+// tracked:該版本 git 裡有的檔案。測試 require 的相對路徑必須指到其中一個——
+// 否則測試可以先用 fs 寫出一支程式再 require 進來,完全繞過這裡的解析。
+function astProblems(file, source, isTest, tracked = null) {
   let ast;
   try {
     ast = parse(source, { sourceType: 'script', allowReturnOutsideFunction: true, errorRecovery: false });
@@ -125,6 +127,11 @@ function astProblems(file, source, isTest) {
           else if (arg.value.includes('\\') || /(^|\/)fixtures(\/|$)/i.test(require('path').posix.normalize(arg.value))
             || /\.(?!js$|json$)[^./]+$/i.test(arg.value)) {
             report(node, `require 了檢查不到的檔案「${arg.value}」`);
+          } else if (tracked && arg.value.startsWith('.')) {
+            const p = require('path').posix.join(require('path').posix.dirname(file), arg.value);
+            if (![p, `${p}.js`, `${p}.json`, `${p}/index.js`].some((c) => tracked.has(c))) {
+              report(node, `require 了 repo 裡沒有的檔案「${arg.value}」`);
+            }
           }
         }
         break;
@@ -152,6 +159,12 @@ function check(dir, base, head = 'HEAD') {
   for (const f of changed) {
     if (!ALLOWED.some((re) => re.test(f))) problems.push(`改到允許範圍外的檔案:${f}`);
   }
+  // 符號連結/子模組:git show 讀到的是連結本身,執行時拿到的卻是別的檔案
+  for (const line of git(dir, ['diff', '--raw', '--no-renames', `${base}..${head}`]).split('\n').filter(Boolean)) {
+    const m = /^:\d+ (\d+) \S+ \S+ \S+\t(.+)$/.exec(line);
+    if (m && (m[1] === '120000' || m[1] === '160000')) problems.push(`不准新增符號連結或子模組:${m[2]}`);
+  }
+  const tracked = new Set(git(dir, ['ls-tree', '-r', '--name-only', head]).split('\n').filter(Boolean));
   for (const f of changed.filter((n) => n.endsWith('.js') && ALLOWED.some((re) => re.test(n)))) {
     let source;
     try { source = git(dir, ['show', `${head}:${f}`]); } catch { continue; }   // 刪掉的檔案
@@ -172,7 +185,7 @@ function check(dir, base, head = 'HEAD') {
       if (!p.includes('\t')) continue;
       had.set(kind(p), (had.get(kind(p)) || 0) + 1);
     }
-    for (const p of astProblems(f, source, isTest)) {
+    for (const p of astProblems(f, source, isTest, isTest ? tracked : null)) {
       if (!p.includes('\t')) { problems.push(p); continue; }   // 解析失敗
       const n = had.get(kind(p)) || 0;
       if (n > 0) had.set(kind(p), n - 1);

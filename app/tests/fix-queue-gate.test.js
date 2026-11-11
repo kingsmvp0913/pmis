@@ -39,6 +39,33 @@ test('fixtures 裡放可執行的檔案(.js/.cjs/.node)→ 擋下', () => {
   expect(p).toContain('evil.node');
 });
 
+// git show 讀到的是連結本身(一個路徑字串),執行時拿到的卻是它指向的檔案
+test('新增符號連結 → 擋下', () => {
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: dir, input: '../../server/x.js' }).toString().trim();
+  git('update-index', '--add', '--cacheinfo', `120000,${blob},app/tests/fixtures/link.pdf`);
+  git('commit', '-qm', 'link');
+  expect(check(dir, base).join('\n')).toContain('符號連結');
+});
+
+test('fixtures 只准放資料檔:沒列在允許清單的副檔名一律擋', () => {
+  write('app/tests/fixtures/ok.pdf', '%PDF');
+  write('app/tests/fixtures/ok.xlsx', 'x');
+  write('app/tests/fixtures/odd.bin', 'x');
+  commit();
+  const p = check(dir, base);
+  expect(p).toEqual([expect.stringContaining('odd.bin')]);
+});
+
+// 測試可以先 fs.writeFileSync 寫出一支程式再 require:只准 require repo 裡真的有的檔案
+test('測試 require 執行時才產生的檔案 → 擋下;require repo 裡有的 → 通過', () => {
+  write('app/tests/helper.js', 'module.exports = 1;\n');
+  write('app/tests/parser-jiumu.test.js', "require('./helper');\nrequire('./made-at-runtime.js');\n");
+  commit();
+  const p = check(dir, base).join('\n');
+  expect(p).toContain("repo 裡沒有的檔案「./made-at-runtime.js」");
+  expect(p).not.toContain('./helper');
+});
+
 test('只改讀取器與測試、沒有危險寫法 → 通過', () => {
   write(PARSER, 'const x = cumulativeQtyHeader ? cumulativeQtyHeader.x : 395;\nwhile ((m = re.exec(s))) n++;\n');
   write('app/tests/parser-jiumu.test.js', "const path = require('path');\nprocess.env.PMIS_DATA_DIR = 'x';\n");
