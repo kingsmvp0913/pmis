@@ -58,6 +58,15 @@ test('Claude 說已修好但沒有實際推上去的 commit → 沒修成', () =
   expect(read('B1').原因).toMatch(/沒有推上去/);
 });
 
+test('結果檔的文字只收字串並限長度(會顯示在使用者畫面上)', () => {
+  put('結果/B1.json', { 狀態: '需要決定', 需要決定: [{ html: '<img>' }, 'x'.repeat(999), ...Array(20).fill('y')], 原因: 42 });
+  finalize(q, ['B1'], { commit: '-', tests: 'skip' }, now);
+  const s = read('B1');
+  expect(s.需要決定).toHaveLength(10);
+  expect(s.需要決定[0]).toHaveLength(300);
+  expect(s.原因).toBe('');
+});
+
 test('只需要裁決、沒有改程式 → 需要決定,沒有 commit', () => {
   put('結果/B1.json', { 狀態: '需要決定', 需要決定: ['E6 要放寬嗎'] });
   finalize(q, ['B1'], { commit: '-', tests: 'skip' }, now);

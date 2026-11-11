@@ -15,11 +15,14 @@
    - 填進使用者電腦的 `data/config.json`:`"GITHUB_TOKEN": "<權杖>", "QUEUE_REPO": "<帳號>/pmis-queue"`
 4. **權杖二:給 workflow 推修正用**(同上建一組):只選 `pmis`,Contents **Read and write**。
    放到 `pmis-queue` 的 Settings → Secrets and variables → Actions → **Secrets**,名稱 `PMIS_PUSH_TOKEN`。
-5. **Claude 憑證**:在有 Claude 訂閱的電腦執行 `claude setup-token`,把印出的權杖放到同一處 Secrets,
+   只有最後「推上程式 repo」那一步拿得到它。
+5. **權杖三:給 workflow 讀程式用**(同上建一組):只選 `pmis`,Contents **Read-only**。放到同一處,名稱 `PMIS_READ_TOKEN`。
+   Claude 所在的主機只用這組下載程式(而且不留在主機上),推不了任何東西。
+6. **Claude 憑證**:在有 Claude 訂閱的電腦執行 `claude setup-token`,把印出的權杖放到同一處 Secrets,
    名稱 `CLAUDE_CODE_OAUTH_TOKEN`。
-6. **程式 repo 名稱**:同一頁切到 **Variables**,新增 `PMIS_REPO` = `<帳號>/pmis`。
+7. **程式 repo 名稱**:同一頁切到 **Variables**,新增 `PMIS_REPO` = `<帳號>/pmis`。
 
 ## 外流時
 
 任一組權杖外流,到 GitHub 的 Fine-grained tokens(或 `claude setup-token` 重發)撤銷重建即可。
-使用者電腦那組只能讀程式、寫佇列;推修正那組只在 workflow 最後一步出現,Claude 拿不到。
+使用者電腦那組只能讀程式、寫佇列;推修正那組只在 workflow 最後一步出現;讀程式那組只能讀。Claude 一組都拿不到。

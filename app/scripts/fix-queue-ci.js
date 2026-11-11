@@ -40,11 +40,15 @@ function mark(queue, state, now = new Date()) {
   for (const b of batches(queue)) writeStatus(queue, b, { 狀態: state }, now);
 }
 
+// 結果檔是 Claude 寫的(它讀過廠商檔案),會顯示在使用者畫面上:只收字串、限筆數與長度
+const lines = (v) => (Array.isArray(v) ? v : []).filter((x) => typeof x === 'string').slice(0, 10).map((x) => x.slice(0, 300));
+const text = (v) => (typeof v === 'string' ? v.slice(0, 500) : '');
+
 function finalize(queue, list, { commit, tests, reason }, now = new Date()) {
   for (const b of list) {
     const r = readJson(path.join(queue, '結果', `${b}.json`), null);
     let 狀態 = r && FINAL.has(r.狀態) ? r.狀態 : '沒修成';
-    let 原因 = r ? (r.原因 || '') : 'Claude 沒有寫出處理結果(可能逾時或中途失敗)';
+    let 原因 = r ? text(r.原因) : 'Claude 沒有寫出處理結果(可能逾時或中途失敗)';
     const 改了程式 = commit && commit !== '-';
     if (改了程式 && tests !== 'pass') {
       狀態 = '沒修成';
@@ -56,9 +60,9 @@ function finalize(queue, list, { commit, tests, reason }, now = new Date()) {
     }
     writeStatus(queue, b, {
       狀態,
-      摘要: (r && r.摘要) || [],
-      需要決定: (r && r.需要決定) || [],
-      放寬規則: (r && r.放寬規則) || [],
+      摘要: lines(r && r.摘要),
+      需要決定: lines(r && r.需要決定),
+      放寬規則: lines(r && r.放寬規則),
       原因,
       commit: 改了程式 && tests === 'pass' ? commit : null,
     }, now);
