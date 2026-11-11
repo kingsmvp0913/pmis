@@ -489,6 +489,13 @@ function parsePdfItemRows(rows) {
   });
   const useSpelled = !quantityHeader && !combinedAmountHeader && !todayAmountHeader
     && spelled.every((x) => x != null);
+  // 115.10 石龜 PDF 的數量表頭拆成「本日完成數」「量」「累 計 完」「成」幾個 item,上面
+  // 兩種都比對不到;退回寫死的 395 會把靠右對齊的 2 位數本日數量(x=396)切進累計欄。
+  // 改取「累計完」那個 item 的 x 當欄界。
+  const todayQtyHeader = header.items.find((item) => squash(item.s).startsWith('本日完成數'));
+  const cumulativeQtyHeader = !quantityHeader && todayQtyHeader && header.items.find((item) => (
+    item.x > todayQtyHeader.x && item.x < amountFrom && squash(item.s).startsWith('累計完')
+  ));
   const columns = useSpelled ? {
     本日數量起: spelled[0],
     累計數量起: spelled[1],
@@ -496,7 +503,7 @@ function parsePdfItemRows(rows) {
     累計金額起: spelled[3],
   } : {
     本日數量起: quantityHeader ? quantityHeader.x : 367 + dx,
-    累計數量起: quantityMid,
+    累計數量起: cumulativeQtyHeader ? cumulativeQtyHeader.x : quantityMid,
     本日金額起: amountFrom,
     累計金額起: amountMid,
   };
